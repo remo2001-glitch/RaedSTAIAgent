@@ -118,16 +118,18 @@ class RiskEngine:
                 drawdown, confidence)
 
         # ── حساب الحجم بـ Kelly ────────────────────────────────
-        win_rate  = confidence
-        rr        = self.cfg["default_target_pct"] / self.cfg["default_stop_pct"]
-        kelly_f   = (win_rate - (1 - win_rate) / rr)
-        kelly_f   = max(0, min(kelly_f, 0.25))   # Half-Kelly cap
+        win_rate   = confidence
+        stop_cfg   = max(self.cfg["default_stop_pct"], 0.001)   # لا قسمة على صفر
+        target_cfg = max(self.cfg["default_target_pct"], 0.001)
+        rr         = target_cfg / stop_cfg
+        kelly_f    = (win_rate - (1 - win_rate) / max(rr, 0.001))
+        kelly_f    = max(0, min(kelly_f, 0.25))   # Half-Kelly cap
 
-        base_risk = self.cfg["max_risk_per_trade"] * portfolio
+        base_risk  = self.cfg["max_risk_per_trade"] * portfolio
         kelly_size = kelly_f * portfolio
 
         # الحجم الأساسي = أصغر القيمتين
-        raw_size = min(base_risk / self.cfg["default_stop_pct"], kelly_size)
+        raw_size = min(base_risk / stop_cfg, kelly_size)
 
         # ── فحص ٦: تعديل التقلب ───────────────────────────────
         vol_scale = 1.0
@@ -147,7 +149,8 @@ class RiskEngine:
         }.get(regime, 0.7)
 
         if regime_scale < 0.7:
-            warnings.append(f"الحجم مُخفَّض {1-regime_scale:.0%} بسبب Regime: {regime}")
+            regime_label = regime.replace("_", " ")
+            warnings.append(f"الحجم مُخفَّض {1-regime_scale:.0%} بسبب حالة السوق: {regime_label}")
 
         final_size = raw_size * vol_scale * regime_scale
 
@@ -215,7 +218,7 @@ class RiskEngine:
         return self._daily_pnl.get(_today_str(), 0)
 
     def _dynamic_stop(self, atr_pct: float) -> float:
-        base = self.cfg["default_stop_pct"]
+        base = max(self.cfg["default_stop_pct"], 0.001)
         if atr_pct > 0:
             return max(atr_pct / 100 * 1.5, base)
         return base

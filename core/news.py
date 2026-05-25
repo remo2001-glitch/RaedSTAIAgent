@@ -85,6 +85,8 @@ class NewsEngine:
     async def _fetch_rss(self, limit: int = 10) -> List[Dict]:
         import re
         results = []
+        if not self.session:
+            return results
         for source_name, url in RSS_SOURCES:
             try:
                 async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=6)) as r:
@@ -171,6 +173,16 @@ class NewsEngine:
 
         return self._rule_based_analysis(news_items)
 
+    def _safe_analyze(self, news_items: List[Dict],
+                       symbols: List[str] = None) -> Dict:
+        """wrapper آمن يُعيد neutral عند أي استثناء."""
+        try:
+            return self._rule_based_analysis(news_items or [])
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"_safe_analyze: {e}")
+            return self._neutral_analysis()
+
     def _rule_based_analysis(self, items: List[Dict]) -> Dict:
         """تحليل قائم على الكلمات المفتاحية عند غياب Gemini."""
         bullish_kw = ["rally", "surge", "adoption", "bullish", "breakout",
@@ -247,7 +259,7 @@ class NewsEngine:
         events = analysis.get("key_events", [])
         if events:
             lines += ["", "⚡ *الأحداث الرئيسية*"]
-            lines += [f"• {e}" for e in events[:4]]
+            lines += [f"• {str(e).replace('_',' ').replace('*','')[:100]}" for e in events[:4]]
 
         flags = analysis.get("risk_flags", [])
         if flags:
@@ -256,7 +268,8 @@ class NewsEngine:
 
         lines += ["", f"📡 *أحدث الأخبار ({len(items)})*"]
         for item in items[:5]:
-            lines.append(f"• {item['title'][:90]}")
+            title = str(item.get('title',''))[:90].replace('_',' ').replace('*','').replace('`','')
+            lines.append(f"• {title}")
 
         lines += ["", f"🔍 المصدر: {analysis.get('source','—')} | "
                       f"رائد التداول الذكي"]

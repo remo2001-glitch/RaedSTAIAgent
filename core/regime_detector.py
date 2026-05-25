@@ -264,7 +264,7 @@ class RegimeDetector:
             f"• السعر vs EMA50: {m.get('price_vs_ema50',0):+.1f}٪\n"
             f"• Fear & Greed: {m.get('fear_greed',50)} | هيمنة BTC: {m.get('btc_dominance',50):.0f}٪\n\n"
             f"🎯 *الاستراتيجية الموصى بها*\n"
-            f"• {' · '.join(result.strategies)}\n"
+            f"• {' · '.join(s.replace('_',' ') for s in result.strategies)}\n"
             f"• الإجراء: {_action_ar(result.action)}"
         )
 

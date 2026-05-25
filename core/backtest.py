@@ -348,7 +348,7 @@ class BacktestEngine:
         lines = [
             f"📊 *نتائج Backtest — {r.symbol}* {grade}",
             f"━━━━━━━━━━━━━━━━━━",
-            f"الفترة: {r.period_days} يوم | الاستراتيجية: {r.strategy_used}",
+            f"الفترة: {r.period_days} يوم | الاستراتيجية: {r.strategy_used.replace('_',' ')}",
             f"",
             f"📈 *الأداء*",
             f"• إجمالي الصفقات: {r.total_trades}",
@@ -372,7 +372,7 @@ class BacktestEngine:
             f"",
             f"🔬 *موثوقية النتائج: {r.confidence_score:.0%}*",
             f"",
-            f"💡 {r.summary_ar}",
+            f"💡 {r.summary_ar.replace('_',' ')}",
         ]
         return "\n".join(lines)
 
