@@ -94,21 +94,21 @@ async def cmd_about(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🏗️ *المعمارية — ١٠ طبقات مؤسسية*\n"
         "١. Data Layer — CoinGecko · Binance · DeFiLlama · CryptoPanic\n"
         "٢. Data Validation — جودة وتنظيف البيانات\n"
-        "٣. Signal Layer — On-Chain + تقني + ماكرو + أخبار + Backtest\n"
+        "٣. Signal Layer — On-Chain · تقني · ماكرو · أخبار · Backtest\n"
         "٤. Strategy Router — ٦ مدارس تداول\n"
-        "٥. Risk Engine — Position Sizing + Kelly + VaR\n"
+        "٥. Risk Engine — Position Sizing · Kelly · VaR\n"
         "٦. Human Override — موافقة بشرية للعمليات الحساسة\n"
-        "٧. Execution Quality — Slippage + Fill Rate + Latency\n"
+        "٧. Execution Quality — Slippage · Fill Rate · Latency\n"
         "٨. Kill Switch — إيقاف فوري عند الشذوذ\n"
         "٩. Monitoring & Audit — سجل كامل لكل قرار\n"
         "١٠. Capital Allocation — توزيع ذكي بالتقلب والارتباط\n\n"
-        "🛡️ *طبقات إضافية*\n"
+        "🛡️ *طبقات الحماية الإضافية*\n"
         "• Microstructure / Liquidity Layer\n"
         "• Event Risk Filter — FOMC · CPI · NFP\n"
         "• Market Regime Detector\n"
         "• Model Drift Monitor\n\n"
         "💰 تكلفة تشغيل = صفر\n"
-        "🤖 مبني بـ Python + python-telegram-bot",
+        "🤖 مبني بـ Python · python-telegram-bot",
         parse_mode=ParseMode.MARKDOWN
     )
 
