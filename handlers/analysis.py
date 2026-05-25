@@ -118,7 +118,10 @@ async def cmd_regime(update: Update, context: ContextTypes.DEFAULT_TYPE):
         fear    = await engine.data_layer.get_fear_greed()
 
         if len(candles) < 30:
-            await msg.edit_text(f"⚠️ بيانات غير كافية لـ {symbol}")
+            await msg.edit_text(
+            f"⚠️ لم أتمكن من جلب بيانات {symbol}\n"
+            f"تأكد من صحة الرمز أو حاول مرة أخرى بعد لحظة"
+        )
             return
 
         result = engine.regime_detector.detect(
@@ -159,7 +162,10 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         news_an  = await engine.news_engine.analyze(news_raw, [symbol])
 
         if len(candles) < 50:
-            await msg.edit_text(f"⚠️ بيانات غير كافية لـ {symbol}")
+            await msg.edit_text(
+                f"⚠️ لم أتمكن من جلب بيانات كافية لـ {symbol}\n"
+                f"جاري المحاولة مع CoinGecko — أعد المحاولة بعد ١٠ ثواني"
+            )
             return
 
         # Regime
