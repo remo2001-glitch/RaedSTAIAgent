@@ -198,7 +198,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for sym in symbols:
             try:
                 # نستخدم 1d بدلاً من 4h — CoinGecko لا يدعم 4h
-                candles = await engine.data_layer.get_ohlcv(sym, "1d", 100) or []
+                candles = await engine.data_layer.get_ohlcv(sym, "1d", 60) or []
                 if len(candles) < 20:
                     lines.append(f"⚠️ {sym}: بيانات غير كافية")
                     lines.append("")
@@ -280,14 +280,14 @@ async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         ev_mult, _ = engine.event_risk.get_exposure_multiplier()
         candidates = []
-        top_coins  = await engine.data_layer.get_top_coins(limit=15) or []
+        top_coins  = await engine.data_layer.get_top_coins(limit=8) or []
 
-        for coin in top_coins[:8]:
+        for coin in top_coins[:5]:  # حد ٥ لتجنب timeout
             sym = (coin.get("symbol") or "").upper()
             if not sym:
                 continue
             try:
-                candles = await engine.data_layer.get_ohlcv(sym, "1d", 100) or []
+                candles = await engine.data_layer.get_ohlcv(sym, "1d", 60) or []
                 if len(candles) < 30:
                     continue
                 news_r  = await engine.data_layer.get_news(currencies=sym, limit=3) or []
@@ -326,8 +326,11 @@ async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text(text, parse_mode=ParseMode.MARKDOWN)
 
     except Exception as e:
-        logger.error(f"cmd_portfolio: {e}")
-        await msg.edit_text(f"❌ خطأ في تحليل المحفظة: {str(e)[:100]}")
+        logger.error(f"cmd_portfolio: {e}", exc_info=True)
+        try:
+            await msg.edit_text(f"❌ خطأ في تحليل المحفظة: {str(e)[:100]}")
+        except Exception:
+            await update.message.reply_text("❌ خطأ في تحليل المحفظة — أعد المحاولة")
 
 
 # ════════════════════════════════════════════════════════════════
