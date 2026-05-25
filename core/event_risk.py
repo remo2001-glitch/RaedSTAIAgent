@@ -222,22 +222,34 @@ class EventRiskFilter:
     # ═══════════════════════════════════════════════════════════
     def ingest_news_events(self, news_items: List[Dict]):
         """
-        يُحلل الأخبار ويكشف إذا كانت تشير لحدث قادم مهم.
+        يُحلل الأخبار ويكشف الأحداث الماكرو الحقيقية فقط.
+        الأخبار العادية (مهما كانت) لا تُوقف التداول.
+        فقط الأحداث الحرجة الحقيقية (اختراق، حظر، انهيار) تؤثر.
         """
-        keywords_critical = ["sec", "ban", "hack", "exploit", "shutdown", "arrest"]
-        keywords_high     = ["fomc", "cpi", "inflation", "rate hike", "regulation",
-                              "etf", "halving", "fork"]
-        keywords_medium   = ["earnings", "gdp", "jobs", "payroll", "nfp"]
+        # CRITICAL فقط: أحداث تُهدد السوق فعلاً
+        keywords_critical = [
+            "exchange hack", "exchange hacked", "massive hack",
+            "trading suspended", "exchange shutdown", "crypto ban",
+            "sec lawsuit", "doj arrest", "market crash",
+            "flash crash", "rug pull",
+        ]
+        # HIGH: أحداث ماكرو مُثبَّتة بكلمات سياق واضحة
+        keywords_high = [
+            "fomc meeting today", "fed rate decision",
+            "cpi data today", "inflation report",
+            "bitcoin etf approval", "btc etf rejected",
+        ]
+        # لا نُصنِّف الأخبار العادية — ETF loss, price drop, etc. = معلومات عادية
 
         new_events = []
         for item in news_items:
             title = item.get("title", "").lower()
             sev   = None
+
+            # نتحقق من الكلمات الحرجة كاملةً (لا كلمة واحدة منقطعة)
             if any(k in title for k in keywords_critical):
-                sev = EventSeverity.CRITICAL
+                sev = EventSeverity.HIGH   # أقصى ما نسمح به من الأخبار = HIGH
             elif any(k in title for k in keywords_high):
-                sev = EventSeverity.HIGH
-            elif any(k in title for k in keywords_medium):
                 sev = EventSeverity.MEDIUM
 
             if sev:
@@ -245,15 +257,18 @@ class EventRiskFilter:
                     name=item.get("title", "News Event")[:80],
                     name_ar=item.get("title", "خبر مهم")[:80],
                     severity=sev,
-                    event_time=time.time(),   # الحدث الآن
+                    event_time=time.time(),
                     hours_before=0,
-                    hours_after=2,
-                    crypto_impact=0.75,
+                    hours_after=1,   # ساعة واحدة فقط
+                    crypto_impact=0.6,
                     source="news_auto",
                 )
                 new_events.append(event)
 
+        # لا نُفعِّل الحدث إلا إذا وجدنا أحداثاً حقيقية
         self._news_events = new_events
+        if new_events:
+            logger.info(f"📰 أحداث من الأخبار: {len(new_events)}")
 
     # ═══════════════════════════════════════════════════════════
     # 5. قائمة الأحداث القادمة

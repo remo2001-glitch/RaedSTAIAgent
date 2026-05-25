@@ -266,10 +266,25 @@ class NewsEngine:
             lines += ["", "⚠️ *تحذيرات*"]
             lines += [f"• {f}" for f in flags]
 
-        lines += ["", f"📡 *أحدث الأخبار ({len(items)})*"]
-        for item in items[:5]:
-            title = str(item.get('title',''))[:90].replace('_',' ').replace('*','').replace('`','')
-            lines.append(f"• {title}")
+        # عرض الأخبار الإضافية فقط (غير المذكورة في key_events)
+        shown_titles = set()
+        events_list  = analysis.get("key_events", [])
+        for e in events_list:
+            shown_titles.add(str(e)[:50].lower())
+
+        extra_items = []
+        for item in items:
+            t = str(item.get("title",""))
+            if t[:50].lower() not in shown_titles:
+                extra_items.append(t)
+            if len(extra_items) >= 4:
+                break
+
+        if extra_items:
+            lines += ["", f"📡 *أخبار إضافية*"]
+            for t in extra_items:
+                title = t[:90].replace('_',' ').replace('*','').replace('`','')
+                lines.append(f"• {title}")
 
         lines += ["", f"🔍 المصدر: {analysis.get('source','—')} | "
                       f"رائد التداول الذكي"]
