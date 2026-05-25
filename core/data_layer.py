@@ -148,7 +148,43 @@ class DataLayer:
                     _store(key, candles)
                     return candles
         except Exception as e:
-            logger.error(f"OHLCV fail ({symbol}): {e}")
+            logger.error(f"OHLCV fail Binance ({symbol}): {e}")
+
+        # ── CoinGecko fallback للـ OHLCV ──────────────────────
+        try:
+            cg_id     = _symbol_to_coingecko(symbol)
+            # CoinGecko: days=limit يُعيد بيانات يومية
+            cg_days   = min(limit, 365)
+            url = (f"https://api.coingecko.com/api/v3/coins/{cg_id}/market_chart"
+                   f"?vs_currency=usd&days={cg_days}&interval=daily")
+            async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as r:
+                if r.status == 200:
+                    d      = await r.json()
+                    prices = d.get("prices", [])
+                    vols   = d.get("total_volumes", [])
+                    candles = []
+                    for i, (ts, price) in enumerate(prices):
+                        if i == 0:
+                            continue  # نحتاج prev للـ open
+                        prev_price = prices[i-1][1]
+                        candle = {
+                            "timestamp": ts / 1000,
+                            "open":   prev_price,
+                            "high":   max(price, prev_price) * 1.005,
+                            "low":    min(price, prev_price) * 0.995,
+                            "close":  price,
+                            "volume": vols[i][1] if i < len(vols) else 0,
+                        }
+                        res = validator.validate_ohlcv(candle)
+                        if res.is_usable:
+                            candles.append(res.cleaned)
+                    if candles:
+                        logger.info(f"OHLCV CoinGecko fallback ({symbol}): {len(candles)} شمعة")
+                        _store(key, candles)
+                        return candles
+        except Exception as e:
+            logger.error(f"OHLCV fail CoinGecko ({symbol}): {e}")
+
         return []
 
     # ═══════════════════════════════════════════════════════════
