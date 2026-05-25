@@ -176,7 +176,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                          "🔴 بيع" if signal.direction == "short" else "⚪ انتظار"
 
                 lines += [
-                    f"💎 *{sym}* — ${price:,.4f}",
+                    f"💎 *{sym}* — ${price:,.2f}",
                     f"  الإشارة: {dir_ar} | الثقة: {signal.confidence:.0%}",
                     f"  الاستراتيجية: {strategy.value}",
                     "",
@@ -195,7 +195,21 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🤖 رائد التداول الذكي",
         ]
 
-        await msg.edit_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+        # تنظيف كامل — استبدال _ بمسافة في السطور غير الـ Markdown headers
+        clean_lines = []
+        for line in lines:
+            if not (line.startswith("*") and line.endswith("*")):
+                # نحافظ على bold لكن ننظف باقي الـ _
+                parts = line.split("*")
+                cleaned_parts = []
+                for j, part in enumerate(parts):
+                    if j % 2 == 0:  # خارج bold
+                        part = part.replace("_", " ")
+                    cleaned_parts.append(part)
+                line = "*".join(cleaned_parts)
+            clean_lines.append(line)
+        final_text = "\n".join(clean_lines)
+        await msg.edit_text(final_text, parse_mode=ParseMode.MARKDOWN)
 
     except Exception as e:
         logger.error(f"cmd_plan_week error: {e}")
@@ -368,6 +382,15 @@ async def cmd_reject(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ── Helpers ───────────────────────────────────────────────────
+def _safe(text: str) -> str:
+    """يُنظّف النص من رموز Markdown الخاصة لتجنب أخطاء التنسيق."""
+    if not text:
+        return ""
+    for ch in ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']:
+        text = text.replace(ch, '\\' + ch)
+    return text
+
+
 def _calc_atr_pct(candles, period=14):
     if len(candles) < period + 1:
         return 3.0
