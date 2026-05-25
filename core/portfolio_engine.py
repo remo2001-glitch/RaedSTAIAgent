@@ -293,7 +293,21 @@ class CapitalAllocationEngine:
     # ═══════════════════════════════════════════════════════════
     def format_ar(self, state: PortfolioState, regime: RegimeResult) -> str:
         if not state.positions:
-            return "⚠️ لا توجد أصول مؤهلة للتوزيع في الوقت الحالي"
+            from core.regime_detector import Regime
+            reason = ""
+            if regime.regime in (Regime.BEAR_TREND, Regime.DISTRIBUTION):
+                reason = (
+                    f"\n\n📋 *توصية رائد في السوق الهابط*\n"
+                    f"• الاحتفاظ بالسيولة {state.cash_reserve:,.0f}$ نقداً\n"
+                    f"• انتظار إشارة انعكاس (RSI < 25 أو Fear & Greed < 20)\n"
+                    f"• مراقبة {' و '.join(['BTC','ETH'])} لأول إشارة تعافٍ\n"
+                    f"• الاستراتيجية الحالية: {' · '.join(regime.strategies).replace('_',' ')}"
+                )
+            return (
+                f"⚠️ لا توجد أصول مؤهلة للتوزيع حالياً\n"
+                f"السبب: ثقة السوق منخفضة في {regime.description_ar}"
+                + reason
+            )
 
         lines = [
             f"💼 *توزيع المحفظة — رائد*",
