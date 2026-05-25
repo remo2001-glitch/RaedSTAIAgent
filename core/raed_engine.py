@@ -88,8 +88,15 @@ class RaedEngine:
     # ═══════════════════════════════════════════════════════════
     async def start(self, send_fn=None):
         self._session = aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=30),
-            headers={"User-Agent": "RaedTradingAgent/2.0"},
+            timeout=aiohttp.ClientTimeout(total=45),
+            headers={
+                "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept":          "application/json, text/plain, */*",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Connection":      "keep-alive",
+                "Cache-Control":   "no-cache",
+            },
         )
 
         # تمرير الـ session للطبقات التي تحتاجه
