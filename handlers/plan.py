@@ -70,9 +70,11 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     args    = context.args or DEFAULT_SYMBOLS
     symbols = [a.upper() for a in args[:3]]  # حد ٣ لتجنب timeout
+    sym_str = ", ".join(symbols)
     msg = await update.message.reply_text(
-        f"📋 جاري بناء الخطة الشهرية لـ {', '.join(symbols)}...\n"
-        f"قد يستغرق ٣٠-٦٠ ثانية")
+        f"📋 جاري بناء الخطة الشهرية لـ {sym_str}...\n"
+        "⏳ قد يستغرق ٣٠-٦٠ ثانية — يُرجى عدم تكرار الأمر"
+    )
 
     try:
         fear       = await engine.data_layer.get_fear_greed() or {"value": 50, "label_ar": "محايد"}
@@ -171,8 +173,11 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     args    = context.args or DEFAULT_SYMBOLS[:3]
     symbols = [a.upper() for a in args[:4]]
+    sym_str2 = ", ".join(symbols)
     msg = await update.message.reply_text(
-        f"📅 جاري بناء الخطة الأسبوعية لـ {', '.join(symbols)}...")
+        f"📅 جاري بناء الخطة الأسبوعية لـ {sym_str2}...\n"
+        "⏳ قد يستغرق ١٥-٣٠ ثانية — يُرجى الانتظار"
+    )
 
     try:
         fear     = await engine.data_layer.get_fear_greed() or {"value": 50, "label_ar": "محايد"}
@@ -264,7 +269,10 @@ async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not engine:
         await update.message.reply_text("⚠️ النظام لم يُهيَّأ بعد"); return
 
-    msg = await update.message.reply_text("💼 جاري تحليل المحفظة...")
+    msg = await update.message.reply_text(
+        "💼 جاري تحليل المحفظة...\n"
+        "⏳ قد يستغرق ٢٠-٤٠ ثانية — يُرجى الانتظار"
+    )
     try:
         fear     = await engine.data_layer.get_fear_greed() or {"value": 50}
         btc_c    = await engine.data_layer.get_ohlcv("BTC", "1d", 200) or []

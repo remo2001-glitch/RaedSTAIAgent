@@ -64,10 +64,13 @@ async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ النظام لم يُهيَّأ بعد")
         return
 
-    args    = context.args or []
-    symbols = [a.upper() for a in args] or ["BTC", "ETH", "BNB"]
+    args     = context.args or []
+    symbols  = [a.upper() for a in args] or ["BTC", "ETH", "BNB"]
+    sym_str  = ", ".join(symbols)
     msg = await update.message.reply_text(
-        f"📰 جاري تحليل الأخبار لـ {', '.join(symbols)}...")
+        f"📰 جاري جلب وتحليل الأخبار لـ {sym_str}...\n"
+        "⏳ قد يستغرق ١٠-٢٠ ثانية — يُرجى الانتظار"
+    )
 
     try:
         items = await engine.data_layer.get_news(
@@ -182,7 +185,9 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args   = context.args or ["BTC"]
     symbol = args[0].upper()
     msg = await update.message.reply_text(
-        f"📡 جاري تحليل {symbol} عبر ٥ مصادر...")
+        f"📡 جاري تحليل {symbol} عبر ٥ مصادر...\n"
+        "⏳ قد يستغرق ١٠-٢٠ ثانية — يُرجى الانتظار"
+    )
 
     try:
         candles  = await engine.data_layer.get_ohlcv(symbol, "1d", 250)
@@ -222,7 +227,6 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             atr_pct=atr_pct, regime=regime.regime.value,
         )
 
-        # تجميع الأجزاء مع تنظيف كل جزء
         parts = [
             _clean_md(engine.signal_layer.format_ar(signal)),
             _clean_md(engine.regime_detector.format_ar(regime)),
@@ -236,9 +240,6 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text(f"❌ خطأ في تحليل {symbol}: {str(e)[:100]}")
 
 
-# ════════════════════════════════════════════════════════════════
-# /backtest
-# ════════════════════════════════════════════════════════════════
 async def cmd_backtest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine = _eng(context)
     if not engine:
@@ -258,7 +259,8 @@ async def cmd_backtest(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = await update.message.reply_text(
         f"⏳ جاري Backtest لـ {symbol} — ٣ سنوات بيانات حقيقية\n"
-        f"قد يستغرق ٣٠-٦٠ ثانية...")
+        "🔬 قد يستغرق ٣٠-٦٠ ثانية — يُرجى عدم تكرار الأمر"
+    )
 
     try:
         price_data = await engine.data_layer.get_historical_prices(symbol, days=1095)
@@ -283,9 +285,6 @@ async def cmd_backtest(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text(f"❌ خطأ في Backtest: {str(e)[:100]}")
 
 
-# ════════════════════════════════════════════════════════════════
-# /liquidity
-# ════════════════════════════════════════════════════════════════
 async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine = _eng(context)
     if not engine:
