@@ -69,7 +69,7 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ النظام لم يُهيَّأ بعد"); return
 
     args    = context.args or DEFAULT_SYMBOLS
-    symbols = [a.upper() for a in args[:6]]
+    symbols = [a.upper() for a in args[:3]]  # حد ٣ لتجنب timeout
     msg = await update.message.reply_text(
         f"📋 جاري بناء الخطة الشهرية لـ {', '.join(symbols)}...\n"
         f"قد يستغرق ٣٠-٦٠ ثانية")
@@ -154,8 +154,11 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text(final, parse_mode=ParseMode.MARKDOWN)
 
     except Exception as e:
-        logger.error(f"cmd_plan_month: {e}")
-        await msg.edit_text(f"❌ خطأ في بناء الخطة: {str(e)[:100]}")
+        logger.error(f"cmd_plan_month: {e}", exc_info=True)
+        try:
+            await msg.edit_text(f"❌ خطأ في بناء الخطة: {str(e)[:100]}")
+        except Exception:
+            await update.message.reply_text(f"❌ خطأ في بناء الخطة الشهرية")
 
 
 # ════════════════════════════════════════════════════════════════

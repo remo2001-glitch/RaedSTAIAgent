@@ -19,14 +19,19 @@ logger = logging.getLogger(__name__)
 def _eng(context): return context.bot_data.get("raed_engine")
 
 def _clean(text: str) -> str:
-    if not text: return ""
-    parts = text.split("*")
-    result = []
-    for i, part in enumerate(parts):
-        if i % 2 == 0:
-            part = part.replace("_", " ").replace("`", "'")
-        result.append(part)
-    return "*".join(result)
+    if not text:
+        return ""
+    lines = text.split("\n")
+    clean = []
+    for line in lines:
+        parts = line.split("*")
+        result = []
+        for i, part in enumerate(parts):
+            if i % 2 == 0:
+                part = part.replace("_", " ").replace("`", "'")
+            result.append(part)
+        clean.append("*".join(result))
+    return "\n".join(clean)
 
 
 # ════════════════════════════════════════════════════════════════
@@ -239,7 +244,8 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "⚠️ محفظة افتراضية — لا تداول حقيقي",
             "لربط محفظة حقيقية أضف Binance API Key",
         ]
-        await msg.edit_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+        final = _clean("\n".join(lines))
+        await msg.edit_text(final, parse_mode=ParseMode.MARKDOWN)
 
     except Exception as e:
         logger.error(f"cmd_execute: {e}")
