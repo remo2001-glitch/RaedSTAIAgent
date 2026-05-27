@@ -22,6 +22,8 @@ from core.news            import NewsEngine
 from core.backtest        import BacktestEngine
 from core.drift_monitor   import DriftMonitor
 from core.scheduler       import Scheduler
+from core.exchange        import create_exchange, BaseExchange
+from core.order_manager   import OrderManager
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +89,31 @@ class RaedEngine:
         self._user_portfolios: dict = {}   # {user_id: portfolio_size}
         self._user_prefs:      dict = {}   # {user_id: {symbol_filter, ...}}
 
+        # ── Exchange للتداول الحقيقي ────────────────────────────
+        self.exchange:       Optional[BaseExchange] = None
+        self.order_manager:  Optional[OrderManager] = None
+        self._exchange_name: str  = config.get("EXCHANGE", "bybit")
+        self._exchange_key:  str  = config.get("EXCHANGE_API_KEY", "")
+        self._exchange_sec:  str  = config.get("EXCHANGE_API_SECRET", "")
+        self._exchange_test: bool = config.get("EXCHANGE_TESTNET", False)
+        self.live_trading:   bool = bool(self._exchange_key and self._exchange_sec)
+        if self.live_trading:
+            try:
+                self.exchange = create_exchange(
+                    self._exchange_name,
+                    self._exchange_key,
+                    self._exchange_sec,
+                    self._exchange_test,
+                )
+                self.order_manager = OrderManager(self.exchange)
+                logger.info(
+                    f"✅ Live Trading: {self._exchange_name.upper()} "
+                    f"({'Testnet' if self._exchange_test else 'Live'})"
+                )
+            except Exception as e:
+                logger.error(f"Exchange init error: {e}")
+                self.live_trading = False
+
     # ═══════════════════════════════════════════════════════════
     # تهيئة الـ Session (يُستدعى عند بدء البوت)
     # ═══════════════════════════════════════════════════════════
@@ -119,6 +146,11 @@ class RaedEngine:
             self.scheduler.register_monthly(self._generate_monthly_report)
             self.scheduler.register_scan(self._run_4h_scan)
             self.scheduler.start()
+
+        # تشغيل Order Monitor إذا Live Trading مفعّل
+        if self.live_trading and self.order_manager:
+            self.order_manager.start_monitoring()
+            logger.info("✅ Order Monitor started")
 
             self.human_override.set_notify_fn(
                 lambda msg, pid: send_fn(msg))
@@ -184,6 +216,8 @@ class RaedEngine:
     async def stop(self):
         if self.scheduler:
             self.scheduler.stop()
+        if self.order_manager:
+            self.order_manager.stop_monitoring()
         if self._session:
             await self._session.close()
         logger.info("🛑 RaedEngine stopped")
