@@ -32,7 +32,11 @@ logger = logging.getLogger(__name__)
 # ── متغيرات البيئة ────────────────────────────────────────────
 BOT_CONFIG = {
     "BOT_TOKEN":          os.getenv("BOT_TOKEN", ""),
-    "GROQ_API_KEY":       os.getenv("GROQ_API_KEY", ""),
+    "GROQ_API_KEY":         os.getenv("GROQ_API_KEY", ""),
+    "EXCHANGE":             os.getenv("EXCHANGE", "bybit"),
+    "EXCHANGE_API_KEY":     os.getenv("EXCHANGE_API_KEY", ""),
+    "EXCHANGE_API_SECRET":  os.getenv("EXCHANGE_API_SECRET", ""),
+    "EXCHANGE_TESTNET":     os.getenv("EXCHANGE_TESTNET", "false").lower() == "true",
     "CRYPTOPANIC_KEY":    os.getenv("CRYPTOPANIC_KEY", ""),
     "ETHERSCAN_KEY":      os.getenv("ETHERSCAN_KEY", ""),
     "OWNER_CHAT_ID":      os.getenv("OWNER_CHAT_ID", ""),
@@ -70,7 +74,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "⚡ *التنفيذ*\n"
         "/autotrade on|off — تداول تلقائي\n"
-        "/execute — تنفيذ فوري\n"
+        "/execute — تنفيذ افتراضي\n"
+        "/live — التداول الحقيقي (Bybit/Binance)\n"
+        "/trades — صفقاتي الحقيقية\n"
         "/setportfolio — ضبط حجم محفظتك\n\n"
         "📈 *المراقبة*\n"
         "/stats — إحصائيات فورية شاملة\n"
@@ -178,6 +184,8 @@ async def post_init(app: Application):
         BotCommand("killswitch",  "Kill Switch"),
         BotCommand("about",          "عن رائد"),
         BotCommand("setportfolio",   "ضبط حجم محفظتك"),
+        BotCommand("live",           "التداول الحقيقي"),
+        BotCommand("trades",         "صفقاتي الحقيقية"),
     ])
 
     logger.info("✅ RaedEngine initialized and connected to Telegram")
