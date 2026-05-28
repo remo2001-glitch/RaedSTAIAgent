@@ -18,6 +18,18 @@ from core.middleware    import require_tier
 
 logger = logging.getLogger(__name__)
 
+# منصات محجوبة من Railway بسبب قيود IP
+BLOCKED_FROM_RAILWAY = {"binance"}
+BLOCKED_MSG = (
+    "⚠️ *{ex} محجوب من خادم Railway*\n\n"
+    "Binance يحجب طلبات API من عناوين IP معينة.\n\n"
+    "البدائل المتاحة:\n"
+    "• /live connect okx KEY SECRET PASSPHRASE\n"
+    "• /live connect bybit KEY SECRET\n"
+    "• /live connect bitget KEY SECRET PASSPHRASE\n\n"
+    "أو Testnet: /live connect binance KEY SECRET testnet"
+)
+
 
 def _fmt_price(price: float) -> str:
     """تنسيق السعر حسب حجمه — يعرض الأرقام المهمة دائماً."""
@@ -115,28 +127,56 @@ async def cmd_live(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 futures_ok = um.can_use_futures(user_id)
                 margin_ok  = um.can_use_margin(user_id)
 
+                # إذا Spot صفر — نجرب Futures
+                futures_balance = None
+                if balance.total == 0 and futures_ok:
+                    try:
+                        futures_balance = await info["exchange"].get_balance(
+                            "USDT", account_type="futures")
+                    except Exception:
+                        pass
+
                 lines = [
                     f"🏦 *التداول الحقيقي — {ex_name}*",
                     "━━━━━━━━━━━━━━━━━━",
                     f"{'🔴 Testnet' if testnet else '🟢 Live'} | اتصال: ✅",
                     f"الباقة: {'💎 مدفوع' if profile.is_premium else '🆓 مجاني'}",
                     "",
-                    "💰 *الرصيد*",
-                    f"• USDT متاح: ${balance.free:,.2f}",
+                    "💰 *رصيد Spot*",
+                    f"• USDT متاح:  ${balance.free:,.2f}",
                     f"• USDT مُجمَّد: ${balance.locked:,.2f}",
-                    f"• الإجمالي: ${balance.total:,.2f}",
+                    f"• الإجمالي:   ${balance.total:,.2f}",
+                ]
+
+                if futures_balance and futures_balance.total > 0:
+                    lines += [
+                        "",
+                        "⚡ *رصيد Futures*",
+                        f"• USDT متاح:  ${futures_balance.free:,.2f}",
+                        f"• الإجمالي:   ${futures_balance.total:,.2f}",
+                    ]
+
+                if balance.total == 0 and (not futures_balance or futures_balance.total == 0):
+                    lines += [
+                        "",
+                        "⚠️ *الرصيد صفر — أسباب محتملة:*",
+                        "• الرصيد في حساب Futures — فعّل: /live futures on",
+                        "• API Key لا يملك صلاحية Read",
+                        "• Passphrase خاطئ (Bitget/OKX)",
+                        "• الرصيد بعملة غير USDT",
+                    ]
+
+                lines += [
                     "",
                     f"📊 صفقات مفتوحة: {len(trades)}",
                     f"💹 إجمالي PnL: ${pnl:+,.2f}",
                     f"🎯 حجم المحفظة: ${port_v:,.0f}",
                     "",
-                    "⚡ *نوع التداول المُفعَّل*",
+                    "⚡ *نوع التداول*",
                     f"• Spot: ✅",
                     f"• Futures: {'✅' if futures_ok else '❌ /live futures on'}",
                     f"• Margin: {'✅' if margin_ok else '❌ /live margin on'}",
                 ]
-                if balance.total == 0:
-                    lines.insert(9, "⚠️ الرصيد صفر — أضف USDT لحساب Spot")
                 lines.append("\nللفصل: /live off")
             else:
                 # عرض تفاصيل المحفظة الافتراضية
@@ -196,11 +236,19 @@ async def cmd_live(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     passphrase = args[i]
 
             # فحص: هل المستخدم مسموح له؟
+            # تحذير Binance محجوب من Railway (إلا Testnet)
+            if ex_name == "binance" and not testnet:
+                await msg.edit_text(
+                    BLOCKED_MSG.format(ex="BINANCE"),
+                    parse_mode="Markdown")
+                return
+
             if not um.can_use_exchange(user_id, ex_name):
                 await msg.edit_text(
                     f"🔒 *{ex_name.upper()} متاح للباقة المدفوعة فقط*\n\n"
-                    f"المنصات المتاحة لك: {', '.join(profile.allowed_exchanges).upper()}\n\n"
-                    "للترقية: /premium")
+                    "المنصات المتاحة حسب باقتك\n\n"
+                    "للترقية: /premium",
+                    parse_mode="Markdown")
                 return
 
             await msg.edit_text(
@@ -213,11 +261,32 @@ async def cmd_live(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if ok:
                 info    = engine.get_user_exchange(user_id)
                 balance = await info["exchange"].get_balance("USDT")
+
+                # تشخيص الرصيد
+                balance_lines = []
+                if balance.total > 0:
+                    balance_lines = [
+                        f"💰 USDT متاح:  ${balance.free:,.2f}",
+                        f"💰 USDT مُجمَّد: ${balance.locked:,.2f}",
+                        f"💰 الإجمالي:   ${balance.total:,.2f}",
+                    ]
+                else:
+                    balance_lines = [
+                        "💰 USDT متاح: $0.00",
+                        "💰 الإجمالي: $0.00",
+                        "",
+                        "⚠️ الرصيد صفر — تحقق من:",
+                        "• صلاحية Read في API Key",
+                        "• صحة الـ Passphrase",
+                        "• الرصيد في Spot وليس Futures",
+                        "• /live futures on إذا رصيدك في Futures",
+                    ]
+
+                bal_text = "\n".join(balance_lines)
                 await msg.edit_text(
                     f"✅ *تم الربط — {ex_name.upper()}*\n"
                     f"{'🔴 Testnet' if testnet else '🟢 Live'}\n\n"
-                    f"💰 USDT متاح: ${balance.free:,.2f}\n"
-                    f"💰 الإجمالي: ${balance.total:,.2f}\n\n"
+                    f"{bal_text}\n\n"
                     f"📌 التنفيذ على {ex_name.upper()} فقط\n"
                     f"للتنفيذ: /execute [عملة] buy|sell [مبلغ]\n"
                     f"مثال: /execute BTC buy 100",
