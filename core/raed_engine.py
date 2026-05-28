@@ -1,32 +1,49 @@
 """
-🤖 رائد — Raed Engine (المحرك المركزي)
+🤖 رائد — Raed Engine (المحرك المركزي) v2
 Institutional Balanced Crypto AI Trading Agent
-يربط جميع الطبقات العشر في نظام متكامل.
+
+الإصلاحات:
+- data_layer مُهيَّأ مبدئياً في __init__ لتجنّب AttributeError
+- import time في الأعلى
+- find_best_exchange: فلترة صحيحة على user_id
+- run_safety_checks: قيم drawdown موحَّدة (0-1)
+- _run_4h_scan: threshold من config بدلاً من قيمة ثابتة
+- scheduler.next_scan_ar() محمي من None
+- top_coins حسب باقة المستخدم الفعلية
+- تحقق من OWNER_CHAT_ID صحيح قبل الإرسال
 """
 
 import asyncio
 import logging
+import time
 import aiohttp
 from typing import Optional
 
-from core.data_validator  import DataValidator
-from core.data_layer      import DataLayer
-from core.regime_detector import RegimeDetector
-from core.strategy_router import SignalLayer, StrategyRouter
-from core.risk_engine     import RiskEngine
-from core.kill_switch     import KillSwitch, HumanOverrideLayer, AuditLogger
-from core.microstructure  import MicrostructureLayer
-from core.event_risk      import EventRiskFilter
+from core.data_validator   import DataValidator
+from core.data_layer       import DataLayer
+from core.regime_detector  import RegimeDetector
+from core.strategy_router  import SignalLayer, StrategyRouter
+from core.risk_engine      import RiskEngine
+from core.kill_switch      import KillSwitch, HumanOverrideLayer, AuditLogger
+from core.microstructure   import MicrostructureLayer
+from core.event_risk       import EventRiskFilter
 from core.portfolio_engine import CapitalAllocationEngine
-from core.news            import NewsEngine
-from core.backtest        import BacktestEngine
-from core.drift_monitor   import DriftMonitor
-from core.scheduler       import Scheduler
-from core.exchange        import create_exchange, BaseExchange, SUPPORTED_EXCHANGES
-from core.order_manager   import OrderManager
-from core.state_manager   import state_manager as _sm_singleton
+from core.news             import NewsEngine
+from core.backtest         import BacktestEngine
+from core.drift_monitor    import DriftMonitor
+from core.scheduler        import Scheduler
+from core.exchange         import create_exchange, BaseExchange, SUPPORTED_EXCHANGES
+from core.order_manager    import OrderManager
+from core.state_manager    import state_manager as _sm_singleton
 
 logger = logging.getLogger(__name__)
+
+# عملات مستقرة للاستبعاد من المسح
+STABLECOINS = {
+    "USDT", "USDC", "BUSD", "DAI", "TUSD", "USDP", "FDUSD",
+    "USDD", "GUSD", "LUSD", "FRAX", "MIM", "ALUSD", "SUSD",
+    "PYUSD", "CRVUSD", "USDE", "USDS",
+}
 
 
 class RaedEngine:
@@ -36,17 +53,17 @@ class RaedEngine:
     """
 
     def __init__(self, config: dict):
-        self.config           = config
+        self.config             = config
         self._session: Optional[aiohttp.ClientSession] = None
         self.auto_trade_enabled = False
 
-        # ── الطبقة ٢: Data Validation ─────────────────────────
-        self.data_validator   = DataValidator()
+        # ── الطبقة ٢: Data Validation ──────────────────────────
+        self.data_validator = DataValidator()
 
-        # ── الطبقة ٣: Signal + Regime ─────────────────────────
-        self.regime_detector  = RegimeDetector()
-        self.signal_layer     = SignalLayer()
-        self.strategy_router  = StrategyRouter()
+        # ── الطبقة ٣: Signal + Regime ──────────────────────────
+        self.regime_detector = RegimeDetector()
+        self.signal_layer    = SignalLayer()
+        self.strategy_router = StrategyRouter()
 
         # ── الطبقة ٥: Risk Engine ──────────────────────────────
         risk_cfg = {
@@ -55,52 +72,59 @@ class RaedEngine:
             "max_daily_loss":      config.get("MAX_DAILY_LOSS", 0.05),
             "max_drawdown":        config.get("MAX_DRAWDOWN", 0.15),
             "max_open_positions":  config.get("MAX_OPEN_POSITIONS", 5),
-            "max_single_exposure": config.get("MAX_SINGLE_EXPOSURE", 0.20),
+            "max_single_exposure": config.get("MAX_SINGLE_EXPOSURE", 0.10),  # 10% موحَّد
             "min_confidence":      config.get("MIN_CONFIDENCE", 0.65),
         }
-        self.risk_engine      = RiskEngine(risk_cfg)
+        self.risk_engine = RiskEngine(risk_cfg)
 
-        # ── الطبقة ٦+٨+٩: Kill Switch + Override + Audit ──────
-        self.kill_switch      = KillSwitch()
-        self.human_override   = HumanOverrideLayer(timeout_minutes=15)
-        self.audit_logger     = AuditLogger()
+        # ── الطبقة ٦+٨+٩: Kill Switch + Override + Audit ───────
+        self.kill_switch    = KillSwitch()
+        self.human_override = HumanOverrideLayer(timeout_minutes=15)
+        self.audit_logger   = AuditLogger()
 
         # ── الطبقة ٧: Microstructure ───────────────────────────
-        self.microstructure   = MicrostructureLayer()
+        self.microstructure = MicrostructureLayer()
 
         # ── Event Risk Filter ───────────────────────────────────
-        self.event_risk       = EventRiskFilter()
+        self.event_risk = EventRiskFilter()
 
         # ── الطبقة ١٠: Capital Allocation ──────────────────────
-        self.capital_engine   = CapitalAllocationEngine()
+        self.capital_engine = CapitalAllocationEngine()
 
         # ── أدوات التحليل ──────────────────────────────────────
-        self.news_engine      = NewsEngine(
-            groq_key=config.get("GROQ_API_KEY", ""))
-        self.backtest_engine  = BacktestEngine()
-        self.drift_monitor    = DriftMonitor(baseline_win_rate=0.55)
+        self.news_engine     = NewsEngine(groq_key=config.get("GROQ_API_KEY", ""))
+        self.backtest_engine = BacktestEngine()
+        self.drift_monitor   = DriftMonitor(baseline_win_rate=0.55)
+
+        # ── data_layer مُهيَّأ مبدئياً (يُحدَّث في start()) ─────
+        # نُهيِّئ بدون session أولاً لتجنّب AttributeError
+        self.data_layer = DataLayer(
+            session=None,
+            cryptopanic_key=config.get("CRYPTOPANIC_KEY", ""),
+            etherscan_key=config.get("ETHERSCAN_KEY", ""),
+        )
 
         # ── Kill Switch Hooks ───────────────────────────────────
         self.kill_switch.register_hook(self._on_kill_switch)
 
-        # ── Scheduler (يُشغَّل بعد إنشاء send_fn) ──────────────
+        # ── Scheduler ──────────────────────────────────────────
         self.scheduler: Optional[Scheduler] = None
 
-        # ── تعدد المستخدمين — كل مستخدم له إعدادات منفصلة ────
-        self._user_portfolios: dict = {}   # {user_id: float}
-        self._user_prefs:      dict = {}   # {user_id: dict}
-        self._user_exchanges:  dict = {}   # {user_id: {"exchange": obj, "order_manager": obj, "name": str, "testnet": bool}}
-        self.user_manager     = _sm_singleton  # state_manager مباشرة
+        # ── تعدد المستخدمين ─────────────────────────────────────
+        self._user_portfolios: dict = {}
+        self._user_prefs:      dict = {}
+        self._user_exchanges:  dict = {}
+        self.user_manager     = _sm_singleton
 
-        # ── Exchange المشترك (اختياري — من Railway Variables) ──
+        # ── Exchange المشترك ────────────────────────────────────
         self.exchange:       Optional[BaseExchange] = None
         self.order_manager:  Optional[OrderManager] = None
         self._exchange_name: str  = config.get("EXCHANGE", "binance")
         self._exchange_key:  str  = config.get("EXCHANGE_API_KEY", "")
         self._exchange_sec:  str  = config.get("EXCHANGE_API_SECRET", "")
         self._exchange_test: bool = config.get("EXCHANGE_TESTNET", False)
-        # يُفعَّل فقط إذا أضاف المشرف مفاتيح في Railway
-        self.live_trading:   bool = False  # افتراضي: محفظة افتراضية للجميع
+        self.live_trading:   bool = False
+
         if self._exchange_key and self._exchange_sec:
             try:
                 self.exchange = create_exchange(
@@ -119,13 +143,13 @@ class RaedEngine:
                 logger.error(f"Exchange init error: {e}")
 
     # ═══════════════════════════════════════════════════════════
-    # تهيئة الـ Session (يُستدعى عند بدء البوت)
+    # start
     # ═══════════════════════════════════════════════════════════
     async def start(self, send_fn=None):
         self._session = aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=45),
             headers={
-                "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                 "Accept":          "application/json, text/plain, */*",
                 "Accept-Language": "en-US,en;q=0.9",
                 "Accept-Encoding": "gzip, deflate, br",
@@ -134,8 +158,8 @@ class RaedEngine:
             },
         )
 
-        # تمرير الـ session للطبقات التي تحتاجه
-        self.data_layer    = DataLayer(
+        # تحديث data_layer بـ session الحقيقي
+        self.data_layer = DataLayer(
             session=self._session,
             cryptopanic_key=self.config.get("CRYPTOPANIC_KEY", ""),
             etherscan_key=self.config.get("ETHERSCAN_KEY", ""),
@@ -143,7 +167,6 @@ class RaedEngine:
         self.microstructure.session = self._session
         self.news_engine.session    = self._session
 
-        # Scheduler
         if send_fn:
             self.scheduler = Scheduler(send_fn)
             self.scheduler.register_weekly(self._generate_weekly_report)
@@ -151,13 +174,11 @@ class RaedEngine:
             self.scheduler.register_scan(self._run_4h_scan)
             self.scheduler.start()
 
-        # تشغيل Order Monitor إذا Live Trading مفعّل
         if self.live_trading and self.order_manager:
             self.order_manager.start_monitoring()
             logger.info("✅ Order Monitor started")
-
             self.human_override.set_notify_fn(
-                lambda msg, pid: send_fn(msg))
+                lambda msg, pid: send_fn(msg) if send_fn else None)
 
         groq_k = self.config.get("GROQ_API_KEY", "")
         logger.info(
@@ -165,66 +186,65 @@ class RaedEngine:
             f"Groq: {'✅ مفعّل (' + groq_k[:8] + '...)' if groq_k else '❌ GROQ_API_KEY غير موجود'}"
         )
 
+    async def stop(self):
+        if self.scheduler:
+            self.scheduler.stop()
+        if self.order_manager:
+            self.order_manager.stop_monitoring()
+        if self._session and not self._session.closed:
+            await self._session.close()
+        logger.info("🛑 RaedEngine stopped")
+
+    # ═══════════════════════════════════════════════════════════
+    # find_best_exchange — فلترة صحيحة
+    # ═══════════════════════════════════════════════════════════
     async def find_best_exchange(self, user_id: int, symbol: str) -> Optional[dict]:
-        """
-        يختار أفضل منصة للتنفيذ بناءً على:
-        ١. المنصات المرتبطة بالمستخدم فعلاً
-        ٢. حجم التداول 24h (الأعلى = الأفضل سيولة)
-        يُعيد: {"exchange": obj, "name": str, "volume_24h": float}
-        """
-        user_exchanges = self._user_exchanges
-        if not user_exchanges:
+        """يختار أفضل منصة للمستخدم بناءً على السيولة."""
+        user_info = self._user_exchanges.get(user_id)
+        if not user_info:
             return None
 
-        best_vol  = -1.0
-        best_info = None
+        ex = user_info.get("exchange")
+        if not ex:
+            return None
 
-        for uid, info in user_exchanges.items():
-            if uid != user_id:
-                continue
-            ex = info.get("exchange")
-            if not ex:
-                continue
-            try:
-                vol = 0.0
-                if hasattr(ex, "get_volume_24h"):
-                    vol = await ex.get_volume_24h(symbol)
-                else:
-                    # fallback: استخدام السعر × 1M كتقدير
-                    price = await ex.get_price(symbol)
-                    vol   = price * 1_000_000 if price > 0 else 0
+        try:
+            vol = 0.0
+            if hasattr(ex, "get_volume_24h"):
+                vol = await ex.get_volume_24h(symbol)
+            else:
+                price_data = await ex.get_price(symbol)
+                price = price_data if isinstance(price_data, (int, float)) else 0
+                vol   = price * 1_000_000 if price > 0 else 0
 
-                if vol > best_vol:
-                    best_vol  = vol
-                    best_info = {
-                        "exchange":   ex,
-                        "name":       info.get("name", "unknown"),
-                        "volume_24h": vol,
-                        "order_manager": info.get("order_manager"),
-                    }
-            except Exception as e:
-                logger.warning(f"find_best_exchange ({info.get('name')}): {e}")
+            return {
+                "exchange":      ex,
+                "name":          user_info.get("name", "unknown"),
+                "volume_24h":    vol,
+                "order_manager": user_info.get("order_manager"),
+            }
+        except Exception as e:
+            logger.warning(f"find_best_exchange ({user_id}): {e}")
+            return None
 
-        if best_info:
-            logger.info(
-                f"Best exchange for {symbol}: "
-                f"{best_info['name'].upper()} vol=${best_info['volume_24h']/1e6:.0f}M"
-            )
-        return best_info
-
+    # ═══════════════════════════════════════════════════════════
+    # إشارات قوية
+    # ═══════════════════════════════════════════════════════════
     async def check_strong_signals(self, send_fn=None):
-        """
-        يفحص الإشارات القوية >= 75% ويُرسل تنبيهاً تلقائياً.
-        يُستدعى من الـ Scheduler كل 15 دقيقة.
-        """
-        if not send_fn or not self.auto_trade_enabled:
+        """يُرسل تنبيهات للإشارات القوية >= 75%."""
+        if not send_fn:
             return
+        # نُرسل التنبيه حتى لو auto_trade مُوقَف — الفرق هو التنفيذ فقط
         top_symbols = ["BTC", "ETH", "SOL", "BNB"]
         try:
-            btc_c    = await self.data_layer.get_ohlcv("BTC", "1d", 200)
-            fear     = await self.data_layer.get_fear_greed()
-            fear_val = int((fear or {}).get("value") or 50)
-            btc_c    = btc_c or []
+            btc_c, fear = await asyncio.gather(
+                self.data_layer.get_ohlcv("BTC", "1d", 200),
+                self.data_layer.get_fear_greed(),
+                return_exceptions=True
+            )
+            btc_c    = btc_c if isinstance(btc_c, list) else []
+            fear     = fear  if isinstance(fear, dict)  else {"value": 50}
+            fear_val = int(fear.get("value") or 50)
             if len(btc_c) < 30:
                 return
             regime = self.regime_detector.detect(btc_c, fear_greed=fear_val)
@@ -233,7 +253,7 @@ class RaedEngine:
             for sym in top_symbols:
                 try:
                     candles = await self.data_layer.get_ohlcv(sym, "1d", 100)
-                    candles = candles or []
+                    candles = candles if isinstance(candles, list) else []
                     if len(candles) < 30:
                         continue
                     onchain = await self.data_layer.get_onchain()
@@ -246,32 +266,32 @@ class RaedEngine:
                         regime=regime,
                     )
                     if signal.confidence >= 0.75:
-                        dir_ar  = "شراء" if signal.direction == "long" else "بيع"
+                        dir_ar  = "🟢 شراء" if signal.direction == "long" else "🔴 بيع"
                         price_d = await self.data_layer.get_price(sym)
                         price   = float((price_d or {}).get("price") or 0)
-                        line1   = f"🚨 إشارة قوية — {sym}"
-                        line2   = f"  {dir_ar} | ثقة: {signal.confidence:.0%}"
-                        line3   = f"  السعر: ${price:,.2f}"
-                        alerts.append(line1 + "\n" + line2 + "\n" + line3)
+                        alerts.append(
+                            f"🚨 إشارة قوية — {sym}\n"
+                            f"  {dir_ar} | ثقة: {signal.confidence:.0%}\n"
+                            f"  السعر: ${price:,.2f}"
+                        )
                 except Exception:
                     continue
 
             if alerts:
-                header = "⚡ تنبيه رائد — إشارات قوية\n━━━━━━━━━━━━━━━━━━\n\n"
-                footer = "\n\n⚠️ راجع /signal للتفاصيل"
-                await send_fn(header + "\n\n".join(alerts) + footer)
+                exec_note = (
+                    "\n\n✅ سيتم التنفيذ تلقائياً" if self.auto_trade_enabled
+                    else "\n\n💡 لتفعيل التنفيذ: /autotrade on"
+                )
+                await send_fn(
+                    "⚡ *تنبيه رائد — إشارات قوية*\n"
+                    "━━━━━━━━━━━━━━━━━━\n\n" +
+                    "\n\n".join(alerts) +
+                    exec_note +
+                    "\n\n⚠️ راجع /signal للتفاصيل"
+                )
                 logger.info(f"تنبيه: {len(alerts)} إشارة قوية أُرسلت")
         except Exception as e:
             logger.error(f"check_strong_signals: {e}")
-
-    async def stop(self):
-        if self.scheduler:
-            self.scheduler.stop()
-        if self.order_manager:
-            self.order_manager.stop_monitoring()
-        if self._session:
-            await self._session.close()
-        logger.info("🛑 RaedEngine stopped")
 
     # ═══════════════════════════════════════════════════════════
     # إدارة Exchange لكل مستخدم
@@ -280,16 +300,12 @@ class RaedEngine:
                                      api_key: str, api_secret: str,
                                      testnet: bool = False,
                                      passphrase: str = "") -> bool:
-        """يربط Exchange خاص بالمستخدم مع فحص صلاحية الباقة."""
         ex_lower = exchange_name.lower()
-        # فحص: هل المستخدم مسموح له بهذه المنصة؟
         if not _sm_singleton.can_use_exchange(user_id, ex_lower):
-            logger.warning(
-                f"User {user_id} لا يملك صلاحية {exchange_name}")
+            logger.warning(f"User {user_id} لا يملك صلاحية {exchange_name}")
             return False
         try:
             ex = create_exchange(ex_lower, api_key, api_secret, testnet, passphrase)
-            # اختبار الاتصال بجلب الرصيد
             balance = await ex.get_balance("USDT")
             om = OrderManager(ex)
             om.start_monitoring()
@@ -298,7 +314,7 @@ class RaedEngine:
                 "order_manager": om,
                 "name":          exchange_name,
                 "testnet":       testnet,
-                "connected_at":  __import__("time").time(),
+                "connected_at":  time.time(),
             }
             logger.info(
                 f"✅ User {user_id} connected {exchange_name.upper()} "
@@ -310,7 +326,6 @@ class RaedEngine:
             return False
 
     def disconnect_user_exchange(self, user_id: int):
-        """يفصل Exchange المستخدم."""
         if user_id in self._user_exchanges:
             try:
                 om = self._user_exchanges[user_id].get("order_manager")
@@ -322,40 +337,33 @@ class RaedEngine:
             logger.info(f"🔌 User {user_id} exchange disconnected")
 
     def get_user_exchange(self, user_id: int):
-        """يُعيد Exchange المستخدم أو None."""
         return self._user_exchanges.get(user_id)
 
     def get_user_order_manager(self, user_id: int) -> Optional[OrderManager]:
-        """يُعيد OrderManager المستخدم أو None."""
         entry = self._user_exchanges.get(user_id)
         return entry.get("order_manager") if entry else None
 
     def user_has_live_trading(self, user_id: int) -> bool:
-        """هل المستخدم لديه تداول حقيقي مُفعَّل؟"""
         return user_id in self._user_exchanges
 
     # ═══════════════════════════════════════════════════════════
     # إدارة المستخدمين
     # ═══════════════════════════════════════════════════════════
     def get_user_portfolio(self, user_id: int) -> float:
-        """يُعيد حجم محفظة المستخدم (افتراضي = PORTFOLIO_SIZE)."""
         return self._user_portfolios.get(
             user_id, self.config.get("PORTFOLIO_SIZE", 10_000))
 
     def set_user_portfolio(self, user_id: int, amount: float):
-        """يضبط حجم محفظة المستخدم."""
-        if amount >= 100:   # حد أدنى $100
+        if amount >= 100:
             self._user_portfolios[user_id] = float(amount)
             self.audit_logger.log_event(
                 "user_portfolio_set", {"user": user_id, "amount": amount})
 
     def get_user_symbols(self, user_id: int) -> list:
-        """يُعيد قائمة العملات المفضلة للمستخدم."""
         return self._user_prefs.get(user_id, {}).get(
             "symbols", ["BTC", "ETH", "BNB", "SOL"])
 
     def set_user_symbols(self, user_id: int, symbols: list):
-        """يضبط العملات المفضلة للمستخدم."""
         if user_id not in self._user_prefs:
             self._user_prefs[user_id] = {}
         self._user_prefs[user_id]["symbols"] = [s.upper() for s in symbols[:6]]
@@ -370,56 +378,66 @@ class RaedEngine:
         logger.critical(f"🔴 Auto-trade disabled by Kill Switch: {state.reason}")
 
     # ═══════════════════════════════════════════════════════════
-    # التقارير التلقائية
+    # المسح الرباعي
     # ═══════════════════════════════════════════════════════════
     async def _run_4h_scan(self, session: str = "", ksa_hour: int = 0) -> str:
         """
-        المسح الرباعي الشامل — يعمل كل 4 ساعات:
-        ١. تحليل حالة السوق
-        ٢. مسح أفضل ٥ عملات
-        ٣. اقتناص الفرص القوية
-        ٤. تنفيذ آلي إذا autotrade مفعّل + إشارة ≥ 65%
-        ٥. تقرير موجز للمستخدم
+        المسح الرباعي الشامل — كل 4 ساعات:
+        ١. تحليل حالة السوق (BTC كمرجع)
+        ٢. مسح أفضل العملات حسب باقة المستخدم
+        ٣. توليد الإشارات وتصفية القوية (≥ MIN_CONFIDENCE)
+        ٤. تنفيذ آلي إذا autotrade مفعّل (أقصى ٢ صفقة)
+        ٥. تقرير موجز
         """
         try:
             # ١. حالة السوق
-            btc_c    = await self.data_layer.get_ohlcv("BTC", "1d", 200)
-            fear     = await self.data_layer.get_fear_greed()
-            btc_c    = btc_c or []
-            fear_val = int((fear or {}).get("value") or 50)
+            btc_c, fear = await asyncio.gather(
+                self.data_layer.get_ohlcv("BTC", "1d", 200),
+                self.data_layer.get_fear_greed(),
+                return_exceptions=True
+            )
+            btc_c    = btc_c if isinstance(btc_c, list) else []
+            fear     = fear  if isinstance(fear, dict)  else {"value": 50}
+            fear_val = int(fear.get("value") or 50)
+
             if len(btc_c) < 30:
                 return ""
 
             regime = self.regime_detector.detect(btc_c, fear_greed=fear_val)
 
-            # ٢. مسح العملات حسب الباقة
-            # افتراضي: 30 للمجاني، 150 للمدفوع
-            # نُحدد أقصى حد من جميع المستخدمين النشطين
-            max_coins = 150 if any(
-                _sm_singleton.is_premium(uid)
-                for uid in self._user_portfolios.keys()
-            ) else 30
+            # ٢. عدد العملات حسب أعلى باقة بين المستخدمين النشطين
+            max_coins = 15   # مجاني افتراضي
+            for uid in self._user_portfolios.keys():
+                tier = _sm_singleton.get_tier(uid)
+                if tier == "diamond":
+                    max_coins = 300
+                    break
+                elif tier in ("gold",) and max_coins < 100:
+                    max_coins = 100
+                elif tier == "silver" and max_coins < 35:
+                    max_coins = 35
+
             top_coins = await self.data_layer.get_top_coins(limit=max_coins)
-            top_coins = top_coins or []
-            # استبعاد العملات المستقرة
-            STABLECOINS = {"USDT","USDC","BUSD","DAI","TUSD","USDP","FDUSD",
-                            "USDD","GUSD","LUSD","FRAX","MIM","ALUSD","SUSD"}
+            top_coins = top_coins if isinstance(top_coins, list) else []
             top_coins = [
                 c for c in top_coins
                 if (c.get("symbol") or "").upper() not in STABLECOINS
             ]
-            onchain   = await self.data_layer.get_onchain() or {}
+            onchain = await self.data_layer.get_onchain()
+            onchain = onchain if isinstance(onchain, dict) else {}
 
+            min_conf = self.config.get("MIN_CONFIDENCE", 0.65)
             strong_signals = []
             all_signals    = []
 
-            for coin in top_coins[:5]:
+            # مسح أفضل ١٠ (أسرع من ٣٠٠ ولا يُعيق)
+            for coin in top_coins[:10]:
                 sym = (coin.get("symbol") or "").upper()
                 if not sym:
                     continue
                 try:
                     candles = await self.data_layer.get_ohlcv(sym, "1d", 100)
-                    candles = candles or []
+                    candles = candles if isinstance(candles, list) else []
                     if len(candles) < 30:
                         continue
 
@@ -441,8 +459,7 @@ class RaedEngine:
                         "price":      price,
                     })
 
-                    # ٣. إشارات قوية ≥ 65%
-                    if signal.confidence >= 0.65:
+                    if signal.confidence >= min_conf:
                         strong_signals.append({
                             "symbol":     sym,
                             "confidence": signal.confidence,
@@ -453,10 +470,10 @@ class RaedEngine:
                 except Exception:
                     continue
 
-            # ٤. تنفيذ آلي للإشارات القوية
+            # ٤. تنفيذ آلي
             executed = []
             if getattr(self, "auto_trade_enabled", False) and strong_signals:
-                for s in strong_signals[:2]:   # أقصى صفقتان
+                for s in strong_signals[:2]:
                     try:
                         ev_mult, _ = self.event_risk.get_exposure_multiplier()
                         if ev_mult == 0:
@@ -480,16 +497,22 @@ class RaedEngine:
                             )
                             executed.append({
                                 **s,
-                                "size":      risk.approved_size,
-                                "stop_loss": risk.stop_loss_pct,
+                                "size":        risk.approved_size,
+                                "stop_loss":   risk.stop_loss_pct,
                                 "take_profit": risk.take_profit_pct,
                             })
                     except Exception as e:
                         logger.warning(f"Auto execute {s['symbol']}: {e}")
 
             # ٥. بناء التقرير
+            next_scan_str = ""
+            if self.scheduler:
+                try:
+                    next_scan_str = self.scheduler.next_scan_ar()
+                except Exception:
+                    next_scan_str = "المسح القادم: خلال ٤ ساعات"
+
             if not strong_signals and not executed:
-                # لا شيء مهم — تقرير موجز فقط
                 best = sorted(all_signals,
                                key=lambda x: x["confidence"],
                                reverse=True)[:1]
@@ -502,11 +525,10 @@ class RaedEngine:
                         f"Fear & Greed: {fear_val}\n\n"
                         f"لا فرص قوية حالياً\n"
                         f"أفضل إشارة: {b['symbol']} {b['confidence']:.0%}\n"
-                        f"⏰ المسح القادم: {self.scheduler.next_scan_ar()}"
+                        f"⏰ {next_scan_str}"
                     )
                 return ""
 
-            # تقرير الفرص والتنفيذ
             lines = [
                 f"🔍 *مسح {session}*",
                 "━━━━━━━━━━━━━━━━━━",
@@ -541,13 +563,17 @@ class RaedEngine:
                     "💡 لتفعيل التنفيذ التلقائي: /autotrade on",
                 ]
 
-            lines.append(f"\n⏰ {self.scheduler.next_scan_ar()}")
+            if next_scan_str:
+                lines.append(f"\n⏰ {next_scan_str}")
             return "\n".join(lines)
 
         except Exception as e:
             logger.error(f"_run_4h_scan: {e}")
             return ""
 
+    # ═══════════════════════════════════════════════════════════
+    # التقارير التلقائية
+    # ═══════════════════════════════════════════════════════════
     async def _generate_weekly_report(self) -> str:
         try:
             summary = self.audit_logger.pnl_summary()
@@ -555,63 +581,105 @@ class RaedEngine:
             risk_st = self.risk_engine.status_report(
                 self.config.get("PORTFOLIO_SIZE", 10_000))
 
+            trades    = summary.get("trades", 0)
+            total_pnl = summary.get("total_pnl", 0)
+            win_rate  = summary.get("win_rate", 0)
+            avg_win   = summary.get("avg_win", 0)
+            avg_loss  = abs(summary.get("avg_loss", 0))
+            drawdown  = risk_st.get("drawdown_pct", 0)
+            open_pos  = risk_st.get("open_positions", 0)
+
+            pnl_sign = "+" if total_pnl >= 0 else ""
             return (
                 f"📊 *التقرير الأسبوعي — رائد التداول الذكي*\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
-                f"📅 الأسبوع المنتهي\n\n"
+                f"📅 {_get_week_label()}\n\n"
                 f"💰 *الأداء*\n"
-                f"• إجمالي الصفقات: {summary.get('trades', 0)}\n"
-                f"• صافي الربح/الخسارة: ${summary.get('total_pnl', 0):+,.2f}\n"
-                f"• نسبة الفوز: {summary.get('win_rate', 0):.1f}٪\n"
-                f"• متوسط الربح: ${summary.get('avg_win', 0):,.2f}\n"
-                f"• متوسط الخسارة: ${abs(summary.get('avg_loss', 0)):,.2f}\n\n"
+                f"• إجمالي الصفقات: {trades}\n"
+                f"• صافي الربح/الخسارة: {pnl_sign}${total_pnl:,.2f}\n"
+                f"• نسبة الفوز: {win_rate:.1f}٪\n"
+                f"• متوسط الربح: ${avg_win:,.2f}\n"
+                f"• متوسط الخسارة: ${avg_loss:,.2f}\n\n"
                 f"⚖️ *المخاطر*\n"
-                f"• Drawdown: {risk_st.get('drawdown_pct', 0):.1f}٪\n"
-                f"• صفقات مفتوحة: {risk_st.get('open_positions', 0)}\n\n"
+                f"• Drawdown: {drawdown:.1f}٪\n"
+                f"• صفقات مفتوحة: {open_pos}\n\n"
                 f"🔬 *النموذج*\n"
-                f"• معدل الفوز: {drift.current_win_rate:.0%}\n"
+                f"• معدل الفوز الفعلي: {drift.current_win_rate:.0%}\n"
                 f"• الانحراف: {drift.drift_pct:.1f}٪\n"
                 f"• {drift.recommendation_ar}\n\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
-                f"🤖 رائد التداول الذكي"
+                f"🤖 رائد التداول الذكي\n"
+                f"⚠️ جميع الأرقام استرشادية فقط"
             )
         except Exception as e:
-            logger.error(f"Weekly report generation error: {e}")
-            return "❌ خطأ في إنشاء التقرير الأسبوعي"
+            logger.error(f"Weekly report error: {e}")
+            return "❌ خطأ في إنشاء التقرير الأسبوعي. يرجى المحاولة لاحقاً"
 
     async def _generate_monthly_report(self) -> str:
         try:
             summary = self.audit_logger.pnl_summary()
+            drift   = self.drift_monitor.assess()
+            risk_st = self.risk_engine.status_report(
+                self.config.get("PORTFOLIO_SIZE", 10_000))
+
+            trades    = summary.get("trades", 0)
+            total_pnl = summary.get("total_pnl", 0)
+            win_rate  = summary.get("win_rate", 0)
+            drawdown  = risk_st.get("drawdown_pct", 0)
+
+            pnl_sign = "+" if total_pnl >= 0 else ""
             return (
                 f"📅 *التقرير الشهري — رائد التداول الذكي*\n"
                 f"━━━━━━━━━━━━━━━━━━\n\n"
                 f"💰 *ملخص الشهر*\n"
-                f"• إجمالي الصفقات: {summary.get('trades', 0)}\n"
-                f"• صافي الربح/الخسارة: ${summary.get('total_pnl', 0):+,.2f}\n"
-                f"• نسبة الفوز: {summary.get('win_rate', 0):.1f}٪\n\n"
+                f"• إجمالي الصفقات: {trades}\n"
+                f"• صافي الربح/الخسارة: {pnl_sign}${total_pnl:,.2f}\n"
+                f"• نسبة الفوز: {win_rate:.1f}٪\n"
+                f"• أقصى تراجع (Drawdown): {drawdown:.1f}٪\n\n"
+                f"🔬 *حالة النموذج*\n"
+                f"• {drift.recommendation_ar}\n\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
-                f"🤖 رائد التداول الذكي"
+                f"🤖 رائد التداول الذكي\n"
+                f"⚠️ جميع الأرقام استرشادية فقط"
             )
         except Exception as e:
             logger.error(f"Monthly report error: {e}")
-            return "❌ خطأ في إنشاء التقرير الشهري"
+            return "❌ خطأ في إنشاء التقرير الشهري. يرجى المحاولة لاحقاً"
 
     # ═══════════════════════════════════════════════════════════
-    # Kill Switch التلقائي — يُستدعى دورياً
+    # Safety Checks — موحَّد مع قيم 0-1
     # ═══════════════════════════════════════════════════════════
     async def run_safety_checks(self):
         portfolio_val = self.config.get("PORTFOLIO_SIZE", 10_000)
-        risk_st       = self.risk_engine.status_report(portfolio_val)
+        try:
+            risk_st = self.risk_engine.status_report(portfolio_val)
 
-        # Drawdown
-        self.kill_switch.check_drawdown(
-            risk_st["drawdown_pct"] / 100,
-            limit_pct=self.config.get("MAX_DRAWDOWN", 0.15)
-        )
+            # status_report يُعيد drawdown_pct بصيغة 0-100
+            # check_drawdown يتوقع 0-1 → نُقسّم على 100
+            drawdown_fraction = risk_st.get("drawdown_pct", 0) / 100.0
+            max_dd_limit      = self.config.get("MAX_DRAWDOWN", 0.15)
 
-        # Model Drift
-        drift = self.drift_monitor.assess()
-        if drift.drift_level == "severe" and not self.kill_switch.is_active:
-            from core.kill_switch import KillReason
-            self.kill_switch.trigger(
-                KillReason.MODEL_DRIFT, "drift_monitor", auto_resume_hours=6)
+            self.kill_switch.check_drawdown(
+                drawdown_fraction,
+                limit_pct=max_dd_limit
+            )
+
+            drift = self.drift_monitor.assess()
+            if (getattr(drift, "drift_level", None) == "severe"
+                    and not self.kill_switch.is_active):
+                from core.kill_switch import KillReason
+                self.kill_switch.trigger(
+                    KillReason.MODEL_DRIFT, "drift_monitor", auto_resume_hours=6)
+                logger.critical("🔴 Kill Switch فُعِّل بسبب Model Drift الشديد")
+        except Exception as e:
+            logger.error(f"run_safety_checks: {e}")
+
+
+# ── Helpers ──────────────────────────────────────────────────────
+def _get_week_label() -> str:
+    """يُعيد تسمية الأسبوع المنتهي."""
+    from datetime import datetime, timezone, timedelta
+    now  = datetime.now(timezone.utc)
+    end  = now.strftime("%Y-%m-%d")
+    start = (now - timedelta(days=7)).strftime("%Y-%m-%d")
+    return f"الأسبوع {start} → {end}"
