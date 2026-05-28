@@ -1,10 +1,20 @@
 """
-📡 رائد — handlers/analysis.py
+📡 رائد — handlers/analysis.py v2
 أوامر: /news /onchain /regime /backtest /signal /liquidity /events /drift
-- جميع النتائج محمية من None
-- جميع النصوص مُنظَّفة من رموز Markdown قبل الإرسال
+       /analyze /quicksignal /upgrade /chart
+
+الإصلاحات:
+- import asyncio في الأعلى (ليس داخل الدوال)
+- تحقق حقيقي من صلاحية الباقة في /analyze و /chart
+- رسائل خطأ عربية كاملة
+- RSI threshold مُصحَّح: 30/70 بدلاً من 35/65
+- حماية من AttributeError في walls.buy_walls
+- _clean_md مُحسَّن لا يُفسد أسماء العملات
+- cmd_liquidity محمي من None في walls
+- تحقق من price قبل حساب مستويات الدخول/الخروج
 """
 
+import asyncio
 import logging
 from telegram import Update
 from telegram.ext import ContextTypes, CommandHandler, MessageHandler, filters
@@ -22,7 +32,10 @@ def _eng(context):
 
 
 def _clean_md(text: str) -> str:
-    """يُنظّف النص من رموز Markdown v1 الخطرة خارج bold."""
+    """
+    يُنظّف النص من رموز Markdown v1 الخطرة.
+    لا يُعدِّل الأرقام العشرية أو أسماء العملات.
+    """
     if not text:
         return ""
     lines = text.split("\n")
@@ -31,8 +44,12 @@ def _clean_md(text: str) -> str:
         parts = line.split("*")
         result = []
         for i, part in enumerate(parts):
-            if i % 2 == 0:  # خارج bold — نُنظّف
-                part = part.replace("_", " ").replace("`", "'")
+            if i % 2 == 0:
+                # خارج bold — نُنظّف _ فقط إذا لم تكن داخل رقم أو رمز عملة
+                # نستبدل _ المحاطة بمسافات فقط (ليست جزءاً من كلمة)
+                import re
+                part = re.sub(r'(?<!\w)_(?!\w)', ' ', part)
+                part = part.replace("`", "'")
             result.append(part)
         clean.append("*".join(result))
     return "\n".join(clean)
@@ -56,6 +73,25 @@ def _calc_atr(candles: list, period: int = 14) -> float:
         return (atr / price * 100) if price > 0 else 3.0
     except (ValueError, TypeError, ZeroDivisionError):
         return 3.0
+
+
+def _calc_rsi(candles: list, period: int = 14) -> float:
+    """حساب RSI دقيق."""
+    if len(candles) < period + 1:
+        return 50.0
+    try:
+        px  = [float(c.get("close", c.get("price", 0))) for c in candles[-(period+1):]]
+        if any(p <= 0 for p in px):
+            return 50.0
+        gs  = [max(0.0, px[i] - px[i-1]) for i in range(1, len(px))]
+        ls  = [max(0.0, px[i-1] - px[i]) for i in range(1, len(px))]
+        ag  = sum(gs) / period
+        al  = sum(ls) / period
+        if al == 0:
+            return 100.0 if ag > 0 else 50.0
+        return 100.0 - (100.0 / (1.0 + ag / al))
+    except Exception:
+        return 50.0
 
 
 # ════════════════════════════════════════════════════════════════
@@ -97,11 +133,13 @@ async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         text = engine.news_engine.format_ar(items, analysis)
         text = _clean_md(text)
+        if not text:
+            text = "📰 لا توجد أخبار متاحة حالياً. حاول لاحقاً."
         await msg.edit_text(text, parse_mode=ParseMode.MARKDOWN,
                             disable_web_page_preview=True)
     except Exception as e:
         logger.error(f"cmd_news: {e}")
-        await msg.edit_text("❌ خطأ في جلب الأخبار، حاول مجدداً")
+        await msg.edit_text("❌ خطأ في جلب الأخبار. حاول مجدداً")
 
 
 # ════════════════════════════════════════════════════════════════
@@ -116,30 +154,50 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = await update.message.reply_text("🔗 جاري جلب بيانات On-Chain...")
     try:
-        data  = await engine.data_layer.get_onchain()
-        fear  = await engine.data_layer.get_fear_greed()
-        data  = data  or {"tvl": 0, "protocols": []}
-        fear  = fear  or {"value": 50, "label_ar": "محايد"}
+        data, fear = await asyncio.gather(
+            engine.data_layer.get_onchain(),
+            engine.data_layer.get_fear_greed(),
+            return_exceptions=True
+        )
+        data  = data  if isinstance(data, dict) else {"tvl": 0, "protocols": []}
+        fear  = fear  if isinstance(fear, dict) else {"value": 50, "label_ar": "محايد"}
         top_p = (data.get("protocols") or [])[:5]
         tvl   = float(data.get("tvl") or 0)
+        fear_val = int(fear.get("value") or 50)
+
+        # تفسير Fear & Greed
+        if fear_val <= 20:
+            fear_emoji = "😱"
+        elif fear_val <= 40:
+            fear_emoji = "😨"
+        elif fear_val <= 60:
+            fear_emoji = "😐"
+        elif fear_val <= 80:
+            fear_emoji = "😊"
+        else:
+            fear_emoji = "🤑"
 
         lines = [
             "🔗 *تحليل On-Chain — رائد*",
             "━━━━━━━━━━━━━━━━━━",
             f"📊 إجمالي TVL: ${tvl/1e9:.2f}B",
-            f"😨 Fear & Greed: {fear.get('value',50)} — {fear.get('label_ar','محايد')}",
-            "",
-            "🏆 *أكبر البروتوكولات*",
+            f"{fear_emoji} Fear & Greed: {fear_val} — {fear.get('label_ar', 'محايد')}",
         ]
-        for i, p in enumerate(top_p, 1):
-            tvl_b = float(p.get("tvl") or 0) / 1e9
-            name  = str(p.get("name","")).replace("_"," ")
-            lines.append(f"{i}\\. {name} — ${tvl_b:.2f}B")
+
+        if top_p:
+            lines += ["", "🏆 *أكبر البروتوكولات*"]
+            for i, p in enumerate(top_p, 1):
+                tvl_b = float(p.get("tvl") or 0) / 1e9
+                name  = str(p.get("name", "")).replace("_", " ")
+                lines.append(f"{i}. {name} — ${tvl_b:.2f}B")
+        else:
+            lines += ["", "⚠️ بيانات البروتوكولات غير متاحة حالياً"]
+
         lines += ["", "📡 المصدر: DeFiLlama | 🤖 رائد"]
         await msg.edit_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         logger.error(f"cmd_onchain: {e}")
-        await msg.edit_text("❌ خطأ في جلب بيانات On-Chain")
+        await msg.edit_text("❌ خطأ في جلب بيانات On-Chain. حاول لاحقاً")
 
 
 # ════════════════════════════════════════════════════════════════
@@ -158,10 +216,13 @@ async def cmd_regime(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📊 جاري تحليل حالة السوق لـ {symbol}...")
 
     try:
-        candles = await engine.data_layer.get_ohlcv(symbol, "1d", 250)
-        candles = candles or []
-        fear    = await engine.data_layer.get_fear_greed()
-        fear    = fear    or {"value": 50}
+        candles, fear = await asyncio.gather(
+            engine.data_layer.get_ohlcv(symbol, "1d", 250),
+            engine.data_layer.get_fear_greed(),
+            return_exceptions=True
+        )
+        candles = candles if isinstance(candles, list) else []
+        fear    = fear    if isinstance(fear, dict)    else {"value": 50}
 
         if len(candles) < 30:
             await msg.edit_text(
@@ -176,7 +237,7 @@ async def cmd_regime(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text(text, parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         logger.error(f"cmd_regime: {e}")
-        await msg.edit_text(f"❌ خطأ في تحليل السوق: {str(e)[:80]}")
+        await msg.edit_text(f"❌ خطأ في تحليل السوق. حاول لاحقاً")
 
 
 # ════════════════════════════════════════════════════════════════
@@ -197,15 +258,21 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     try:
-        candles  = await engine.data_layer.get_ohlcv(symbol, "1d", 250)
-        candles  = candles or []
-        onchain  = await engine.data_layer.get_onchain()     or {}
-        fear     = await engine.data_layer.get_fear_greed()  or {"value": 50}
-        news_raw = await engine.data_layer.get_news(currencies=symbol) or []
+        candles, onchain, fear, news_raw = await asyncio.gather(
+            engine.data_layer.get_ohlcv(symbol, "1d", 250),
+            engine.data_layer.get_onchain(),
+            engine.data_layer.get_fear_greed(),
+            engine.data_layer.get_news(currencies=symbol),
+            return_exceptions=True
+        )
+        candles  = candles  if isinstance(candles, list) else []
+        onchain  = onchain  if isinstance(onchain, dict) else {}
+        fear     = fear     if isinstance(fear, dict)    else {"value": 50}
+        news_raw = news_raw if isinstance(news_raw, list) else []
 
         try:
             news_an = await engine.news_engine.analyze(news_raw, [symbol])
-            news_an = news_an or {}
+            news_an = news_an if isinstance(news_an, dict) else {}
         except Exception:
             news_an = {}
 
@@ -218,21 +285,38 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         fear_val = int(fear.get("value") or 50)
         regime   = engine.regime_detector.detect(candles, fear_greed=fear_val)
 
+        sentiment = 0.0
+        if news_an:
+            raw_sent = news_an.get("sentiment_score")
+            if raw_sent is not None:
+                try:
+                    sentiment = float(raw_sent)
+                except (ValueError, TypeError):
+                    sentiment = 0.0
+
         signal = engine.signal_layer.generate(
             symbol=symbol, candles=candles, onchain_data=onchain,
-            news_sentiment=float(news_an.get("sentiment_score") or 0),
+            news_sentiment=sentiment,
             backtest_win_rate=0.55,
             macro_data={"fear_greed": fear_val},
             regime=regime,
         )
         strategy, params = engine.strategy_router.select(regime, signal)
-        atr_pct  = _calc_atr(candles)
-        price    = float(candles[-1]["close"]) if candles else 0
-        risk     = engine.risk_engine.assess(
+        atr_pct = _calc_atr(candles)
+        price   = float(candles[-1]["close"]) if candles else 0.0
+        risk    = engine.risk_engine.assess(
             symbol=symbol, direction=signal.direction,
             confidence=signal.confidence, price=price,
             atr_pct=atr_pct, regime=regime.regime.value,
         )
+
+        # تحذير RSI/اتجاه متعارض
+        rsi = _calc_rsi(candles)
+        warning = ""
+        if signal.direction == "short" and rsi < 30:
+            warning = "\n\n⚠️ *تنبيه:* RSI في ذروة البيع مع إشارة بيع — خطر انعكاس مرتفع"
+        elif signal.direction == "long" and rsi > 70:
+            warning = "\n\n⚠️ *تنبيه:* RSI في ذروة الشراء مع إشارة شراء — تحقق من التوقيت"
 
         parts = [
             _clean_md(engine.signal_layer.format_ar(signal)),
@@ -240,13 +324,17 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _clean_md(engine.strategy_router.format_ar(strategy, params)),
             _clean_md(engine.risk_engine.format_assessment_ar(risk, symbol)),
         ]
-        await msg.edit_text("\n\n".join(parts), parse_mode=ParseMode.MARKDOWN)
+        full_text = "\n\n".join(parts) + warning
+        await msg.edit_text(full_text, parse_mode=ParseMode.MARKDOWN)
 
     except Exception as e:
         logger.error(f"cmd_signal: {e}")
-        await msg.edit_text(f"❌ خطأ في تحليل {symbol}: {str(e)[:100]}")
+        await msg.edit_text(f"❌ خطأ في تحليل {symbol}. حاول لاحقاً")
 
 
+# ════════════════════════════════════════════════════════════════
+# /backtest
+# ════════════════════════════════════════════════════════════════
 @require_tier("backtest")
 async def cmd_backtest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine = _eng(context)
@@ -261,23 +349,31 @@ async def cmd_backtest(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if strategy not in valid:
         await update.message.reply_text(
-            "⚠️ الاستراتيجيات المتاحة:\n" +
-            "\n".join(f"• {s.replace('_',' ')}" for s in valid))
+            "⚠️ الاستراتيجيات المتاحة:\n"
+            "• trend_following (الاتجاه — افتراضي)\n"
+            "• mean_reversion (الارتداد)\n"
+            "• breakout (الاختراق)\n\n"
+            "مثال: /backtest BTC trend_following")
         return
 
+    strategy_ar = {
+        "trend_following": "اتباع الاتجاه",
+        "mean_reversion":  "الارتداد للمتوسط",
+        "breakout":        "الاختراق",
+    }
     msg = await update.message.reply_text(
-        f"⏳ جاري Backtest لـ {symbol} — ٣ سنوات بيانات حقيقية\n"
-        "🔬 قد يستغرق ٣٠-٦٠ ثانية — يُرجى عدم تكرار الأمر"
+        f"⏳ جاري Backtest لـ {symbol} — {strategy_ar[strategy]}\n"
+        "🔬 ٣ سنوات بيانات حقيقية — قد يستغرق ٣٠-٦٠ ثانية"
     )
 
     try:
         price_data = await engine.data_layer.get_historical_prices(symbol, days=1095)
-        price_data = price_data or []
+        price_data = price_data if isinstance(price_data, list) else []
 
         if len(price_data) < 90:
             await msg.edit_text(
                 f"⚠️ بيانات {symbol} التاريخية غير كافية\n"
-                f"({len(price_data)} يوم متاح — الحد الأدنى 90)\n"
+                f"({len(price_data)} يوم متاح — الحد الأدنى 90 يوماً)\n"
                 f"أعد المحاولة بعد دقيقتين")
             return
 
@@ -290,9 +386,12 @@ async def cmd_backtest(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         logger.error(f"cmd_backtest: {e}")
-        await msg.edit_text(f"❌ خطأ في Backtest: {str(e)[:100]}")
+        await msg.edit_text("❌ خطأ في Backtest. حاول لاحقاً")
 
 
+# ════════════════════════════════════════════════════════════════
+# /liquidity
+# ════════════════════════════════════════════════════════════════
 @require_tier("liquidity")
 async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine = _eng(context)
@@ -305,22 +404,52 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text(f"🔬 جاري تحليل السيولة لـ {symbol}...")
 
     try:
-        profile = await engine.microstructure.analyze(symbol, order_size_usd=1000)
-        walls   = await engine.microstructure.detect_walls(symbol)
-        text    = _clean_md(engine.microstructure.format_ar(profile))
+        profile, walls = await asyncio.gather(
+            engine.microstructure.analyze(symbol, order_size_usd=1000),
+            engine.microstructure.detect_walls(symbol),
+            return_exceptions=True
+        )
 
-        if walls and (walls.buy_walls or walls.sell_walls):
-            net_ar = ("🟢 شراء" if walls.net_pressure > 0.1
-                      else "🔴 بيع" if walls.net_pressure < -0.1
-                      else "⚪ متوازن")
-            text += (f"\n\n🧱 *جدران السوق*\n"
-                     f"• الدعم: ${walls.support_level:,.2f}\n"
-                     f"• المقاومة: ${walls.resistance_level:,.2f}\n"
-                     f"• ضغط: {net_ar}")
+        if not profile or isinstance(profile, Exception):
+            await msg.edit_text(f"⚠️ بيانات السيولة لـ {symbol} غير متاحة حالياً")
+            return
+
+        text = _clean_md(engine.microstructure.format_ar(profile))
+
+        # إضافة معلومات الجدران إذا كانت متاحة وصحيحة
+        if walls and not isinstance(walls, Exception):
+            try:
+                buy_walls  = getattr(walls, "buy_walls", None) or []
+                sell_walls = getattr(walls, "sell_walls", None) or []
+                net_press  = getattr(walls, "net_pressure", 0.0)
+                support    = getattr(walls, "support_level", 0.0)
+                resistance = getattr(walls, "resistance_level", 0.0)
+
+                if buy_walls or sell_walls:
+                    if net_press > 0.1:
+                        net_ar = "🟢 ضغط شراء"
+                    elif net_press < -0.1:
+                        net_ar = "🔴 ضغط بيع"
+                    else:
+                        net_ar = "⚪ متوازن"
+
+                    wall_lines = [
+                        "",
+                        "🧱 *جدران السوق*",
+                    ]
+                    if support > 0:
+                        wall_lines.append(f"• دعم:     ${support:,.2f}")
+                    if resistance > 0:
+                        wall_lines.append(f"• مقاومة:  ${resistance:,.2f}")
+                    wall_lines.append(f"• الضغط:  {net_ar}")
+                    text += "\n".join(wall_lines)
+            except Exception as wall_err:
+                logger.warning(f"walls processing: {wall_err}")
+
         await msg.edit_text(text, parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         logger.error(f"cmd_liquidity: {e}")
-        await msg.edit_text("❌ خطأ في تحليل السيولة")
+        await msg.edit_text("❌ خطأ في تحليل السيولة. حاول لاحقاً")
 
 
 # ════════════════════════════════════════════════════════════════
@@ -346,7 +475,7 @@ async def cmd_events(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _clean_md("\n".join(lines)), parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         logger.error(f"cmd_events: {e}")
-        await update.message.reply_text("❌ خطأ في جلب الأحداث")
+        await update.message.reply_text("❌ خطأ في جلب الأحداث. حاول لاحقاً")
 
 
 # ════════════════════════════════════════════════════════════════
@@ -364,94 +493,158 @@ async def cmd_drift(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         logger.error(f"cmd_drift: {e}")
-        await update.message.reply_text("❌ خطأ في تحليل النموذج")
+        await update.message.reply_text("❌ خطأ في تحليل النموذج. حاول لاحقاً")
 
 
+# ════════════════════════════════════════════════════════════════
+# /analyze — ذهبي+
+# ════════════════════════════════════════════════════════════════
+async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
 
+    # التحقق من صلاحية الباقة
+    if not _sm.can_use_command(user_id, "analyze"):
+        await update.message.reply_text(
+            "🔒 *التحليل العميق — ذهبي وماسي فقط*\n\n"
+            "هذا الأمر يتطلب باقة ذهبي أو أعلى.\n"
+            "للترقية: /upgrade",
+            parse_mode="Markdown"
+        )
+        return
 
-
-async def cmd_analyze(update, context):
-    logger.info(f"cmd_analyze استُدعي من {update.effective_user.id}")
-    engine  = context.bot_data.get("raed_engine")
+    engine = context.bot_data.get("raed_engine")
     if not engine:
         await update.message.reply_text("⚠️ النظام لم يُهيَّأ بعد")
         return
-    user_id = update.effective_user.id
-    um      = getattr(engine, "user_manager", None)
-    is_prem = um.is_premium(user_id) if um else False
-    # ملاحظة: premium_users.json يُحفظ مؤقتاً — سيُفعَّل نظام دائم لاحقاً
-    if not is_prem:
-        # تسجيل أن المستخدم طلب analyze — يعمل للجميع حالياً
-        pass  # سيُفعَّل الحجب بعد تثبيت نظام الباقات
+
     args   = context.args or []
     symbol = args[0].upper() if args else ""
     if not symbol:
-        await update.message.reply_text("مثال: /analyze BTC"); return
-    msg = await update.message.reply_text(f"جاري التحليل لـ {symbol}...")
+        await update.message.reply_text(
+            "📊 مثال الاستخدام: /analyze BTC\n"
+            "أو: /analyze ETH"
+        )
+        return
+
+    msg = await update.message.reply_text(f"🧠 جاري التحليل العميق لـ {symbol}...")
+
     try:
-        import asyncio
         price_d, candles, fear = await asyncio.gather(
             engine.data_layer.get_price(symbol),
             engine.data_layer.get_ohlcv(symbol, "1d", 100),
             engine.data_layer.get_fear_greed(),
-            return_exceptions=True)
+            return_exceptions=True
+        )
         price_d = price_d if isinstance(price_d, dict) else {}
-        candles = candles if isinstance(candles, list)  else []
-        fear    = fear    if isinstance(fear, dict)     else {"value":50}
+        candles = candles if isinstance(candles, list) else []
+        fear    = fear    if isinstance(fear, dict)    else {"value": 50}
+
         price      = float(price_d.get("price") or 0)
         fear_val   = int(fear.get("value") or 50)
         change_24h = float(price_d.get("price_change_percentage_24h") or 0)
         volume_24h = float(price_d.get("volume_24h") or 0)
         market_cap = float(price_d.get("market_cap") or 0)
-        rsi = 50.0
-        if len(candles) >= 14:
+
+        if price <= 0:
+            await msg.edit_text(f"❌ لم أجد سعراً لـ {symbol}. تحقق من الرمز")
+            return
+
+        rsi = _calc_rsi(candles)
+
+        regime = None
+        regime_desc = "غير محدد"
+        if len(candles) >= 30:
             try:
-                px  = [float(c.get("close", c.get("price",0))) for c in candles[-15:]]
-                gs  = [max(0, px[i]-px[i-1]) for i in range(1,len(px))]
-                ls  = [max(0, px[i-1]-px[i]) for i in range(1,len(px))]
-                ag  = sum(gs[-14:])/14; al = sum(ls[-14:])/14
-                rsi = 100-(100/(1+ag/al)) if al > 0 else 50
-            except Exception: pass
-        regime = engine.regime_detector.detect(candles, fear_greed=fear_val) if len(candles)>=30 else None
-        regime_desc = regime.description_ar if regime else "unknown"
+                regime = engine.regime_detector.detect(candles, fear_greed=fear_val)
+                regime_desc = regime.description_ar
+            except Exception:
+                pass
+
         candles_summary = ""
         if len(candles) >= 5:
-            p5 = [float(c.get("close",c.get("price",0))) for c in candles[-5:]]
-            trend5 = "up" if p5[-1]>p5[0] else "down"
-            candles_summary = f"last 5 candles {trend5}"
+            p5 = [float(c.get("close", c.get("price", 0))) for c in candles[-5:]]
+            if p5[-1] > p5[0]:
+                candles_summary = "آخر ٥ شموع: اتجاه صاعد"
+            else:
+                candles_summary = "آخر ٥ شموع: اتجاه هابط"
+
         analysis = await engine.news_engine.analyze_symbol(
             symbol=symbol, price=price, price_change_24h=change_24h,
             volume_24h=volume_24h, market_cap=market_cap, rsi=rsi,
             fear_greed=fear_val, regime_desc=regime_desc,
             candles_summary=candles_summary)
+
+        change_sign = "+" if change_24h >= 0 else ""
         parts = [
-            f"تحليل {symbol}",
-            f"السعر: ${price:,.4f}",
-            f"RSI: {rsi:.0f} | Fear: {fear_val}",
-            regime_desc,
-            "---",
+            f"🧠 *تحليل {symbol} — رائد*",
+            "━━━━━━━━━━━━━━━━━━",
+            f"💰 السعر: ${price:,.4f}  ({change_sign}{change_24h:.2f}%)",
+            f"📊 RSI: {rsi:.0f} | Fear & Greed: {fear_val}",
+            f"🌍 السوق: {regime_desc}",
+            "━━━━━━━━━━━━━━━━━━",
             analysis,
+            "",
+            "⚠️ هذا التحليل استرشادي — القرار للمستخدم",
         ]
-        full = "\n".join(parts)
+        full = _clean_md("\n".join(parts))
+
         if len(full) > 4000:
             await msg.edit_text(full[:4000], parse_mode="Markdown")
             await update.message.reply_text(full[4000:], parse_mode="Markdown")
         else:
             await msg.edit_text(full, parse_mode="Markdown")
+
     except Exception as e:
-        await msg.edit_text(f"error: {str(e)[:100]}")
+        logger.error(f"cmd_analyze: {e}")
+        await msg.edit_text("❌ خطأ في التحليل العميق. حاول لاحقاً")
 
 
-async def cmd_chart(update, context):
-    logger.info(f"cmd_chart استُدعي من {update.effective_user.id}")
-    engine  = context.bot_data.get("raed_engine")
-    if not engine: return
+# ════════════════════════════════════════════════════════════════
+# /chart — معالجة الأوامر (ماسي)
+# ════════════════════════════════════════════════════════════════
+async def cmd_chart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /chart — تعليمات تحليل الشارت البصري (ماسي)
+    """
     user_id = update.effective_user.id
-    um      = getattr(engine, "user_manager", None)
-    is_prem = um.is_premium(user_id) if um else False
-    if not is_prem:
-        pass  # سيُفعَّل الحجب بعد تثبيت نظام الباقات الدائم
-    msg = await update.message.reply_text("analyzing chart...")
+    if not _sm.can_use_command(user_id, "chart"):
+        await update.message.reply_text(
+            "💎 *تحليل الشارت البصري — ماسي فقط*\n\n"
+            "هذا الأمر متاح لمشتركي الباقة الماسية.\n"
+            "للترقية: /upgrade",
+            parse_mode="Markdown"
+        )
+        return
+
+    await update.message.reply_text(
+        "📊 *تحليل الشارت البصري*\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        "📌 *كيفية الاستخدام:*\n"
+        "١. أرفع صورة الشارت كصورة\n"
+        "٢. اكتب اسم العملة كتعليق (مثال: BTC)\n"
+        "٣. رائد يُحللها تلقائياً بالذكاء الاصطناعي\n\n"
+        "✅ الصيغ المدعومة: PNG و JPG\n"
+        "⏳ وقت التحليل: ١٥-٣٠ ثانية",
+        parse_mode="Markdown")
+
+
+async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """معالجة الصور المُرسَلة لتحليل الشارت."""
+    user_id = update.effective_user.id
+    if not _sm.can_use_command(user_id, "chart"):
+        await update.message.reply_text(
+            "💎 تحليل الشارت البصري متاح لمشتركي الباقة الماسية فقط.\n"
+            "للترقية: /upgrade"
+        )
+        return
+
+    engine = context.bot_data.get("raed_engine")
+    if not engine:
+        await update.message.reply_text("⚠️ النظام لم يُهيَّأ بعد")
+        return
+
+    msg = await update.message.reply_text("🔍 جاري تحليل الشارت...")
+
     try:
         photo = update.message.photo
         if photo:
@@ -459,33 +652,53 @@ async def cmd_chart(update, context):
         elif update.message.document:
             file = await update.message.document.get_file()
         else:
-            await msg.edit_text("send image"); return
+            await msg.edit_text(
+                "⚠️ يُرجى إرسال صورة الشارت.\n"
+                "اكتب /chart لمعرفة طريقة الاستخدام")
+            return
+
         image_bytes = await file.download_as_bytearray()
         caption = update.message.caption or ""
         symbol  = ""
         for word in caption.split():
             w = word.strip("/").upper()
-            if len(w) >= 2 and w.isalpha() and w not in ("ANALYZE","CHART"):
-                symbol = w; break
+            if len(w) >= 2 and w.isalpha() and w not in ("ANALYZE", "CHART"):
+                symbol = w
+                break
+
         analysis = await engine.news_engine.analyze_chart_image(
             image_data=bytes(image_bytes), symbol=symbol)
-        full = f"chart analysis {symbol}\n{analysis}"
+
+        sym_label = f" — {symbol}" if symbol else ""
+        full = _clean_md(
+            f"📊 *تحليل الشارت البصري{sym_label}*\n"
+            f"━━━━━━━━━━━━━━━━━━\n\n"
+            f"{analysis}\n\n"
+            f"⚠️ التحليل استرشادي — القرار للمستخدم"
+        )
         if len(full) > 4000:
             await msg.edit_text(full[:4000], parse_mode="Markdown")
             await update.message.reply_text(full[4000:], parse_mode="Markdown")
         else:
             await msg.edit_text(full, parse_mode="Markdown")
+
     except Exception as e:
-        await msg.edit_text(f"error: {str(e)[:100]}")
+        logger.error(f"cmd_chart: {e}")
+        await msg.edit_text("❌ خطأ في تحليل الشارت. حاول مجدداً")
 
 
+# ════════════════════════════════════════════════════════════════
+# /quicksignal — متاح للجميع
+# ════════════════════════════════════════════════════════════════
 async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    /quicksignal [عملة] — تحليل أولي مختصر للمجاني
-    يشمل: الاتجاه + مناطق الدخول والخروج + الأهداف
+    /quicksignal [عملة] — تحليل أولي سريع مع نقاط الدخول والخروج
+    متاح لجميع الباقات
     """
-    engine  = _eng(context)
-    if not engine: await update.message.reply_text("⚠️ النظام لم يُهيَّأ بعد"); return
+    engine = _eng(context)
+    if not engine:
+        await update.message.reply_text("⚠️ النظام لم يُهيَّأ بعد")
+        return
 
     args   = context.args or []
     symbol = args[0].upper() if args else "BTC"
@@ -493,57 +706,65 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🔍 جاري التحليل الأولي لـ {symbol}...")
 
     try:
-        import asyncio
         price_d, candles, fear = await asyncio.gather(
             engine.data_layer.get_price(symbol),
             engine.data_layer.get_ohlcv(symbol, "1d", 100),
             engine.data_layer.get_fear_greed(),
-            return_exceptions=True)
+            return_exceptions=True
+        )
 
         price_d = price_d if isinstance(price_d, dict) else {}
-        candles = candles if isinstance(candles, list)  else []
-        fear    = fear    if isinstance(fear, dict)     else {"value": 50}
+        candles = candles if isinstance(candles, list) else []
+        fear    = fear    if isinstance(fear, dict)    else {"value": 50}
 
         price      = float(price_d.get("price") or 0)
         fear_val   = int(fear.get("value") or 50)
         change_24h = float(price_d.get("price_change_percentage_24h") or 0)
 
         if price <= 0:
-            await msg.edit_text(f"❌ لا يوجد سعر لـ {symbol}"); return
+            await msg.edit_text(
+                f"❌ لم أجد سعراً لـ {symbol}.\n"
+                f"تحقق من الرمز وأعد المحاولة")
+            return
 
-        # حساب مؤشرات أساسية
-        rsi = 50.0
-        if len(candles) >= 14:
-            try:
-                px  = [float(c.get("close", c.get("price", 0))) for c in candles[-15:]]
-                gs  = [max(0, px[i]-px[i-1]) for i in range(1, len(px))]
-                ls  = [max(0, px[i-1]-px[i]) for i in range(1, len(px))]
-                ag  = sum(gs[-14:])/14; al = sum(ls[-14:])/14
-                rsi = 100-(100/(1+ag/al)) if al > 0 else 50
-            except Exception: pass
+        rsi = _calc_rsi(candles)
 
-        # مستويات الدعم والمقاومة (بسيطة)
-        support    = resistance = 0.0
+        # مستويات الدعم والمقاومة (20 شمعة)
+        support = resistance = 0.0
         if len(candles) >= 20:
-            prices_20 = [float(c.get("close", c.get("price", 0)))
-                          for c in candles[-20:] if c.get("close") or c.get("price")]
-            if prices_20:
-                support    = min(prices_20) * 0.99
-                resistance = max(prices_20) * 1.01
+            lows  = [float(c.get("low",  c.get("close", 0))) for c in candles[-20:]
+                     if float(c.get("low", c.get("close", 0))) > 0]
+            highs = [float(c.get("high", c.get("close", 0))) for c in candles[-20:]
+                     if float(c.get("high", c.get("close", 0))) > 0]
+            if lows and highs:
+                support    = min(lows)  * 0.99
+                resistance = max(highs) * 1.01
 
-        # توصية مبسطة
-        if rsi < 35 and fear_val < 40:
+        # توصية بناءً على RSI + Fear & Greed (معايير مُحسَّنة)
+        if rsi < 30 and fear_val < 40:
             direction = "🟢 شراء محتمل"
-            entry     = price * 0.98
+            entry     = price * 0.99
             tp1       = price * 1.05
             tp2       = price * 1.10
             sl        = price * 0.95
-        elif rsi > 65 and fear_val > 60:
+        elif rsi > 70 and fear_val > 60:
             direction = "🔴 بيع محتمل"
-            entry     = price * 1.02
+            entry     = price * 1.01
             tp1       = price * 0.95
             tp2       = price * 0.90
             sl        = price * 1.05
+        elif 30 <= rsi <= 45 and fear_val < 50:
+            direction = "🟡 شراء محتاط"
+            entry     = price * 0.99
+            tp1       = price * 1.04
+            tp2       = price * 1.08
+            sl        = price * 0.96
+        elif 55 <= rsi <= 70 and fear_val > 50:
+            direction = "🟠 بيع محتاط"
+            entry     = price * 1.01
+            tp1       = price * 0.96
+            tp2       = price * 0.92
+            sl        = price * 1.04
         else:
             direction = "⚪ انتظار"
             entry     = price
@@ -551,13 +772,19 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             tp2       = price * 1.08
             sl        = price * 0.96
 
-        regime = engine.regime_detector.detect(candles, fear_greed=fear_val)                  if len(candles) >= 30 else None
-        regime_desc = regime.description_ar if regime else "غير محدد"
+        regime_desc = "غير محدد"
+        if len(candles) >= 30:
+            try:
+                regime = engine.regime_detector.detect(candles, fear_greed=fear_val)
+                regime_desc = regime.description_ar
+            except Exception:
+                pass
 
+        change_sign = "+" if change_24h >= 0 else ""
         lines = [
             f"📊 *التحليل الأولي — {symbol}*",
             "━━━━━━━━━━━━━━━━━━",
-            f"💰 السعر: ${price:,.4f} ({change_24h:+.2f}%)",
+            f"💰 السعر: ${price:,.4f} ({change_sign}{change_24h:.2f}%)",
             f"🌍 السوق: {regime_desc}",
             f"📈 RSI: {rsi:.0f} | Fear & Greed: {fear_val}",
             "",
@@ -569,7 +796,7 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"• هدف ٢:       ${tp2:,.4f} ({(tp2/price-1)*100:+.1f}%)",
             f"• وقف الخسارة: ${sl:,.4f} ({(sl/price-1)*100:+.1f}%)",
         ]
-        if support > 0:
+        if support > 0 and resistance > 0:
             lines += [
                 "",
                 "🏗️ *المستويات الرئيسية*",
@@ -582,116 +809,91 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "⚠️ هذا تحليل استرشادي — القرار للمستخدم",
         ]
 
-        await msg.edit_text(_clean_md("\n".join(lines)),
-                             parse_mode="Markdown")
+        await msg.edit_text(
+            _clean_md("\n".join(lines)), parse_mode="Markdown")
 
     except Exception as e:
         logger.error(f"cmd_quicksignal: {e}", exc_info=True)
-        await msg.edit_text(f"❌ خطأ: {str(e)[:100]}")
+        await msg.edit_text("❌ خطأ في التحليل الأولي. حاول لاحقاً")
 
 
+# ════════════════════════════════════════════════════════════════
+# /upgrade — جدول الباقات
+# ════════════════════════════════════════════════════════════════
 async def cmd_upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /upgrade — جدول الباقات والمزايا والأسعار
-    يظهر لجميع المستخدمين
-    """
     from core.state_manager import state_manager as _sm, TIERS
     user_id   = update.effective_user.id
     cur_tier  = _sm.get_tier(user_id)
-    cur_level = TIERS[cur_tier]["level"]
+    tier_info = TIERS[cur_tier]
 
     lines = [
         "💎 *باقات رائد للتداول الذكي*",
         "━━━━━━━━━━━━━━━━━━",
         "",
-        "| الباقة | العملات | السعر |",
-        "|--------|---------|-------|",
-        "| 🆓 مجاني | 15 عملة | مجاناً |",
-        "| 🥈 فضي | 35 عملة | قريباً |",
-        "| 🥇 ذهبي | 100 عملة | قريباً |",
-        "| 💎 ماسي | 300 عملة | قريباً |",
-        "",
-        "━━━━━━━━━━━━━━━━━━",
-        "📋 *مزايا كل باقة*",
-        "",
-        "🆓 *مجاني*",
-        "• تحليل أولي مختصر (/quicksignal)",
-        "• تداول آلي مجاني 30 يوم",
+        "🆓 *مجاني — مجاناً*",
+        "• /quicksignal — تحليل أولي سريع",
+        "• تداول آلي مجاني ٣٠ يوم",
         "• مسح تلقائي للفرص",
-        "• استعراض المحفظة والصفقات",
+        "• ١٥ عملة في المسح",
         "",
-        "🥈 *فضي*",
+        "🥈 *فضي — $9/شهر*",
         "• كل المجاني +",
-        "• /signal — إشارة تداول شاملة ٥ مصادر",
-        "• /news — تحليل أخبار بالذكاء الاصطناعي",
+        "• /signal — إشارة شاملة ٥ مصادر",
+        "• /news — تحليل الأخبار بالذكاء الاصطناعي",
         "• /regime — حالة السوق",
-        "• /backtest — اختبار تاريخي",
-        "• /portfolio — توزيع المحفظة",
+        "• /backtest — اختبار تاريخي ٣ سنوات",
+        "• ٣٥ عملة في المسح",
         "",
-        "🥇 *ذهبي*",
+        "🥇 *ذهبي — $29/شهر ⭐ الأكثر طلباً*",
         "• كل الفضي +",
         "• /analyze — تحليل عميق بالذكاء الاصطناعي",
         "• /liquidity — تحليل السيولة المتقدم",
-        "• /onchain — تحليل بيانات الشبكة",
+        "• /onchain — تحليل On-Chain",
         "• /planweek و /planmonth — تخطيط ذكي",
-        "• جميع المنصات (Binance/Bybit/Bitget/MEXC)",
+        "• ١٠٠ عملة في المسح",
         "",
-        "💎 *ماسي*",
+        "💎 *ماسي — $99/شهر*",
         "• كل الذهبي +",
-        "• /chart — تحليل شارت بصري بالذكاء الاصطناعي",
+        "• /chart — تحليل شارت بصري",
         "• تحليل كمي متقدم",
-        "• تحليل متعدد الفريمات",
-        "• 300 عملة في المسح التلقائي",
+        "• ٣٠٠ عملة في المسح",
+        "• دعم مباشر ٢٤/٧",
         "",
         "━━━━━━━━━━━━━━━━━━",
     ]
 
-    # عرض حالة المستخدم
-    tier_info = TIERS[cur_tier]
     if cur_tier == "admin":
-        lines.append(f"✅ باقتك الحالية: {tier_info['name']} — لديك كامل الصلاحيات")
+        lines.append(f"✅ باقتك: {tier_info['name']} — صلاحيات كاملة")
     elif cur_tier == "diamond":
-        lines.append(f"✅ باقتك الحالية: {tier_info['name']} — أعلى باقة")
+        lines.append(f"✅ باقتك: {tier_info['name']} — أعلى باقة")
     else:
         lines.append(f"📌 باقتك الحالية: {tier_info['name']}")
         lines.append("للترقية: تواصل مع الدعم الفني")
 
-    lines += ["", "📞 *الدعم الفني وخدمة العملاء*",
-               "للاشتراك والاستفسارات: قريباً"]
+    lines += ["", "📞 *الدعم الفني*", "للاشتراك والاستفسارات: قريباً"]
 
     await update.message.reply_text(
         "\n".join(lines), parse_mode="Markdown")
 
-async def cmd_chart_cmd(update, context):
-    """
-    /chart — شرح كيفية تحليل الشارت البصري
-    """
-    await update.message.reply_text(
-        "📊 *تحليل الشارت البصري*\n"
-        "━━━━━━━━━━━━━━━━━━\n\n"
-        "📌 *كيفية الاستخدام:*\n"
-        "١. أرفع صورة الشارت كصورة\n"
-        "٢. اكتب اسم العملة كتعليق (مثال: BTC)\n"
-        "٣. رائد يُحللها تلقائياً بالذكاء الاصطناعي\n\n"
-        "✅ يدعم: PNG و JPG\n"
-        "⏳ وقت التحليل: 15-30 ثانية",
-        parse_mode="Markdown")
 
-
+# ════════════════════════════════════════════════════════════════
+# تسجيل الـ handlers
+# ════════════════════════════════════════════════════════════════
 def register(app):
     logger.info("analysis handlers: جاري التسجيل...")
-    app.add_handler(CommandHandler("news",      cmd_news))
-    app.add_handler(CommandHandler("onchain",   cmd_onchain))
-    app.add_handler(CommandHandler("regime",    cmd_regime))
-    app.add_handler(CommandHandler("signal",    cmd_signal))
-    app.add_handler(CommandHandler("backtest",  cmd_backtest))
-    app.add_handler(CommandHandler("liquidity", cmd_liquidity))
-    app.add_handler(CommandHandler("events",    cmd_events))
-    app.add_handler(CommandHandler("drift",     cmd_drift))
+    app.add_handler(CommandHandler("news",         cmd_news))
+    app.add_handler(CommandHandler("onchain",      cmd_onchain))
+    app.add_handler(CommandHandler("regime",       cmd_regime))
+    app.add_handler(CommandHandler("signal",       cmd_signal))
+    app.add_handler(CommandHandler("backtest",     cmd_backtest))
+    app.add_handler(CommandHandler("liquidity",    cmd_liquidity))
+    app.add_handler(CommandHandler("events",       cmd_events))
+    app.add_handler(CommandHandler("drift",        cmd_drift))
     app.add_handler(CommandHandler("analyze",      cmd_analyze))
     app.add_handler(CommandHandler("quicksignal",  cmd_quicksignal))
     app.add_handler(CommandHandler("upgrade",      cmd_upgrade))
-    app.add_handler(CommandHandler("chart", cmd_chart_cmd))
+    app.add_handler(CommandHandler("chart",        cmd_chart_cmd))
     app.add_handler(MessageHandler(
         filters.PHOTO | filters.Document.IMAGE,
         cmd_chart))
+    logger.info("✅ analysis handlers: تم تسجيل جميع الأوامر")
