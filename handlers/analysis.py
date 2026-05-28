@@ -24,6 +24,16 @@ from core.user_manager import user_manager as _um
 from telegram.constants import ParseMode
 
 logger = logging.getLogger(__name__)
+
+
+def _fmt_price(price: float) -> str:
+    """تنسيق السعر حسب حجمه — يعرض الأرقام المهمة دائماً."""
+    if price <= 0:      return "$0"
+    elif price >= 1000: return f"${price:,.2f}"
+    elif price >= 1:    return f"${price:,.4f}"
+    elif price >= 0.001:return f"${price:.6f}"
+    elif price >= 1e-6: return f"${price:.8f}"
+    else:               return f"${price:.10f}"
 DEFAULT_SYMBOLS = ["BTC", "ETH", "BNB", "SOL"]
 
 
@@ -216,11 +226,13 @@ async def cmd_regime(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📊 جاري تحليل حالة السوق لـ {symbol}...")
 
     try:
-        candles, fear = await asyncio.gather(
+        candles, fear, btc_dom = await asyncio.gather(
             engine.data_layer.get_ohlcv(symbol, "1d", 250),
             engine.data_layer.get_fear_greed(),
+            engine.data_layer.get_btc_dominance(),
             return_exceptions=True
         )
+        btc_dom = btc_dom if isinstance(btc_dom, float) else 50.0
         candles = candles if isinstance(candles, list) else []
         fear    = fear    if isinstance(fear, dict)    else {"value": 50}
 
@@ -231,7 +243,7 @@ async def cmd_regime(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         result = engine.regime_detector.detect(
-            candles, btc_dominance=50.0,
+            candles, btc_dominance=btc_dom,
             fear_greed=int(fear.get("value") or 50))
         text = _clean_md(engine.regime_detector.format_ar(result))
         await msg.edit_text(text, parse_mode=ParseMode.MARKDOWN)
@@ -435,6 +447,8 @@ async def cmd_events(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         state   = engine.event_risk.assess()
         text_ev = engine.event_risk.format_upcoming_ar(hours=72)
+        import re as _re
+        text_ev = _re.sub(r'(بعد\s*)(\d+)(ساعة)', r'بعد \2 ساعة', text_ev)
         lines   = [
             "📅 *فلتر مخاطر الأحداث — رائد*",
             "━━━━━━━━━━━━━━━━━━",
@@ -512,7 +526,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         price      = float(price_d.get("price") or 0)
         fear_val   = int(fear.get("value") or 50)
-        change_24h = float(price_d.get("price_change_percentage_24h") or 0)
+        change_24h = float(price_d.get("change_24h") or price_d.get("price_change_percentage_24h") or 0)
         volume_24h = float(price_d.get("volume_24h") or 0)
         market_cap = float(price_d.get("market_cap") or 0)
 
@@ -549,7 +563,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parts = [
             f"🧠 *تحليل {symbol} — رائد*",
             "━━━━━━━━━━━━━━━━━━",
-            f"💰 السعر: ${price:,.4f}  ({change_sign}{change_24h:.2f}%)",
+            f"💰 السعر: {_fmt_price(price)} ({change_sign}{change_24h:.2f}%)",
             f"📊 RSI: {rsi:.0f} | Fear & Greed: {fear_val}",
             f"🌍 السوق: {regime_desc}",
             "━━━━━━━━━━━━━━━━━━",
@@ -690,7 +704,7 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         price      = float(price_d.get("price") or 0)
         fear_val   = int(fear.get("value") or 50)
-        change_24h = float(price_d.get("price_change_percentage_24h") or 0)
+        change_24h = float(price_d.get("change_24h") or price_d.get("price_change_percentage_24h") or 0)
 
         if price <= 0:
             await msg.edit_text(
@@ -751,29 +765,39 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 pass
 
+        # تحذيرات متعددة
+        bear_buy_warning = ""
+        if direction.startswith("🟢") and regime_desc and "هابط" in regime_desc:
+            bear_buy_warning = "\n⚠️ *تنبيه:* إشارة شراء في سوق هابط — تحقق من تأكيد الاتجاه قبل الدخول"
+        if abs(change_24h) > 15:
+            sign_ar = "ارتفاع" if change_24h > 0 else "انخفاض"
+            bear_buy_warning += f"\n🚨 *تحذير:* {sign_ar} حاد {abs(change_24h):.1f}٪ في 24 ساعة — خطر الدخول مرتفع"
+
         change_sign = "+" if change_24h >= 0 else ""
         lines = [
             f"📊 *التحليل الأولي — {symbol}*",
             "━━━━━━━━━━━━━━━━━━",
-            f"💰 السعر: ${price:,.4f} ({change_sign}{change_24h:.2f}%)",
+            f"💰 السعر: {_fmt_price(price)} ({change_sign}{change_24h:.2f}%)",
             f"🌍 السوق: {regime_desc}",
             f"📈 RSI: {rsi:.0f} | Fear & Greed: {fear_val}",
             "",
             f"🎯 *التوصية: {direction}*",
             "",
             "📍 *مناطق الدخول والخروج*",
-            f"• نقطة الدخول: ${entry:,.4f}",
-            f"• هدف ١:       ${tp1:,.4f} ({(tp1/price-1)*100:+.1f}%)",
-            f"• هدف ٢:       ${tp2:,.4f} ({(tp2/price-1)*100:+.1f}%)",
-            f"• وقف الخسارة: ${sl:,.4f} ({(sl/price-1)*100:+.1f}%)",
+            f"• نقطة الدخول: {_fmt_price(entry)}",
+            f"• هدف ١:       {_fmt_price(tp1)} ({(tp1/price-1)*100:+.1f}%)",
+            f"• هدف ٢:       {_fmt_price(tp2)} ({(tp2/price-1)*100:+.1f}%)",
+            f"• وقف الخسارة: {_fmt_price(sl)} ({(sl/price-1)*100:+.1f}%)",
         ]
         if support > 0 and resistance > 0:
             lines += [
                 "",
                 "🏗️ *المستويات الرئيسية*",
-                f"• دعم:    ${support:,.4f}",
-                f"• مقاومة: ${resistance:,.4f}",
+                f"• دعم:    {_fmt_price(support)}",
+                f"• مقاومة: {_fmt_price(resistance)}",
             ]
+        if bear_buy_warning:
+            lines.append(bear_buy_warning)
         lines += [
             "",
             "💡 للتحليل العميق الكامل: /analyze (ذهبي+)",

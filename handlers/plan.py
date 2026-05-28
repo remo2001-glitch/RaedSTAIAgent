@@ -8,6 +8,15 @@
 import asyncio
 import logging
 import re
+
+
+def _fmt_price(price: float) -> str:
+    if price <= 0:       return "$0"
+    elif price >= 1000:  return f"${price:,.2f}"
+    elif price >= 1:     return f"${price:,.4f}"
+    elif price >= 0.001: return f"${price:.6f}"
+    elif price >= 1e-6:  return f"${price:.8f}"
+    else:                return f"${price:.10f}"
 import uuid
 from telegram import Update
 from telegram.ext import ContextTypes, CommandHandler
@@ -141,12 +150,20 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                          "diamond": 300, "admin": 300}.get(tier, 15)
             top_coins = await engine.data_layer.get_top_coins(limit=coin_lim)
             top_coins = top_coins if isinstance(top_coins, list) else []
-            STABLES   = {"USDT","USDC","BUSD","DAI","TUSD","USDP","FRAX"}
+            STABLES   = {
+                "USDT","USDC","BUSD","DAI","TUSD","USDP","FRAX",
+                "USDS","FDUSD","USDE","USDD","GUSD","LUSD","PYUSD",
+                "CRVUSD","ALUSD","SUSD","MIM","USDB",
+            }
             symbols   = [
                 (c.get("symbol") or "").upper()
                 for c in top_coins[:coin_lim]
-                if (c.get("symbol") or "").upper() not in STABLES
-            ][:10]   # أقصى 10 في المسح لتجنب timeout
+                if (
+                    (c.get("symbol") or "").upper() not in STABLES
+                    and len((c.get("symbol") or "")) >= 2
+                    and (c.get("symbol") or "").replace("_","").isalnum()
+                )
+            ][:10]   # أقصى 10 لتجنب timeout   # أقصى 10 في المسح لتجنب timeout
 
             # جلب OHLCV للعملات المُحدَّدة من المسح
             ohlcv_all = await asyncio.gather(
@@ -154,6 +171,7 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return_exceptions=True,
             )
 
+        MIN_CONFIDENCE_SCAN = 0.40  # فلترة في scan_mode
         candidates = []
         for i, sym in enumerate(symbols):
             candles = ohlcv_all[i] if isinstance(ohlcv_all[i], list) else []
@@ -390,7 +408,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         ]
 
                 lines += [
-                    f"💎 *{sym}*" + (f" — ${price:,.4f}{change_str}" if price > 0 else ""),
+                    f"💎 *{sym}*" + (f" — {_fmt_price(price)}{change_str}" if price > 0 else ""),
                     f"  الإشارة: {dir_ar} | الثقة: {signal.confidence:.0%}",
                     f"  الاستراتيجية: {strat_name}",
                 ] + entry_lines + [""]

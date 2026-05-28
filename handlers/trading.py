@@ -19,6 +19,22 @@ from core.middleware    import require_tier
 logger = logging.getLogger(__name__)
 
 
+def _fmt_price(price: float) -> str:
+    """تنسيق السعر حسب حجمه — يعرض الأرقام المهمة دائماً."""
+    if price <= 0:
+        return "$0"
+    elif price >= 1000:
+        return f"${price:,.2f}"
+    elif price >= 1:
+        return f"${price:,.4f}"
+    elif price >= 0.001:
+        return f"${price:.6f}"
+    elif price >= 0.000001:
+        return f"${price:.8f}"
+    else:
+        return f"${price:.10f}"
+
+
 def _eng(context):  return context.bot_data.get("raed_engine")
 def _um(context):   return _eng(context).user_manager if _eng(context) else None
 
@@ -55,8 +71,11 @@ async def cmd_live(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args    = context.args or []
     action  = args[0].lower() if args else "status"
     user_id = update.effective_user.id
-    # state_manager مباشرة — لا user_manager
-    pass  # profile تُجلب من _sm عند الحاجة
+
+    # تعريف um وprofile — مطلوبان في جميع المسارات
+    from core.user_manager import user_manager as um
+    profile = um.get(user_id)
+
     msg     = await update.message.reply_text("🔍 جاري التحقق...")
 
     try:
