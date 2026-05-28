@@ -144,6 +144,22 @@ class UserManager:
     # ═══════════════════════════════════════════════════════════
     # حفظ وتحميل
     # ═══════════════════════════════════════════════════════════
+    def get_free_autotrade_days(self, user_id: int) -> int:
+        """يُعيد عدد أيام التداول الآلي المجاني المتبقية."""
+        return _sm.get_free_autotrade_days(user_id)
+
+    def is_autotrade_on(self, user_id: int) -> bool:
+        """يتحقق من حالة التداول الآلي."""
+        return _sm.is_autotrade_on(user_id)
+
+    def get_profile(self, user_id: int) -> "UserProfile":
+        """مرادف لـ get() — للتوافق."""
+        return self.get(user_id)
+
+    def allowed_exchanges(self, user_id: int) -> List[str]:
+        """يُعيد المنصات المتاحة للمستخدم."""
+        return _sm.allowed_exchanges(user_id)
+
     def _save(self):
         try:
             data = {
