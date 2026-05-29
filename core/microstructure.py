@@ -498,33 +498,38 @@ class MicrostructureLayer:
                                    order_size_usd: float) -> "LiquidityProfile":
         """يبني LiquidityProfile من bids/asks حقيقي."""
         try:
-            total_bid = sum(float(b[0]) * float(b[1]) for b in bids[:20])
-            total_ask = sum(float(a[0]) * float(a[1]) for a in asks[:20])
-            total     = total_bid + total_ask
-            net_press = (total_bid - total_ask) / max(total, 1)
-            best_bid  = float(bids[0][0]) if bids else 0
-            best_ask  = float(asks[0][0]) if asks else 0
-            spread    = abs(best_ask - best_bid) / max(best_bid, 1) * 100
-            slippage  = order_size_usd / max(total_bid, 1) * 100 if total_bid > 0 else 1.0
-            score     = min(1.0, total / 1e6 * 0.5 + (1 - min(spread, 1)) * 0.5)
+            total_bid  = sum(float(b[0]) * float(b[1]) for b in bids[:20])
+            total_ask  = sum(float(a[0]) * float(a[1]) for a in asks[:20])
+            total      = total_bid + total_ask
+            imbalance  = (total_bid - total_ask) / max(total, 1)
+            best_bid   = float(bids[0][0]) if bids else 0
+            best_ask   = float(asks[0][0]) if asks else 0
+            mid_price  = (best_bid + best_ask) / 2 if best_bid and best_ask else 0
+            spread     = abs(best_ask - best_bid) / max(best_bid, 1) * 100
+            slippage   = order_size_usd / max(total_bid, 1) * 100 if total_bid > 0 else 1.0
+            score      = min(1.0, total / 1e6 * 0.5 + (1 - min(spread, 1)) * 0.5)
+            warnings_  = []
+            if spread > 0.5:
+                warnings_.append(f"spread مرتفع: {spread:.2f}٪")
             return LiquidityProfile(
                 symbol=symbol,
-                liquidity_score=round(score, 3),
+                bid_price=best_bid, ask_price=best_ask, mid_price=mid_price,
+                spread_pct=round(spread, 4),
                 bid_depth_usd=round(total_bid, 0),
                 ask_depth_usd=round(total_ask, 0),
-                spread_pct=round(spread, 4),
-                slippage_pct=round(slippage, 4),
-                net_pressure=round(net_press, 3),
-                support_level=walls.support_level,
-                resistance_level=walls.resistance_level,
-                buy_walls=walls.buy_walls,
-                sell_walls=walls.sell_walls,
+                imbalance=round(imbalance, 3),
+                estimated_slippage_pct=round(slippage, 4),
+                liquidity_score=round(score, 3),
+                pressure=round(imbalance, 3),
+                is_tradeable=score > 0.3,
+                warnings=warnings_,
                 source="exchange",
             )
         except Exception as e:
             logger.warning(f"_build_profile_from_walls ({symbol}): {e}")
             return self._fallback_profile(symbol)
 
+    
     def _estimate_profile_from_volume(self, symbol: str,
                                        vol: float, price: float,
                                        order_size_usd: float) -> "LiquidityProfile":
@@ -535,28 +540,26 @@ class MicrostructureLayer:
         slippage  = order_size_usd / max(bid_depth, 1) * 100
         return LiquidityProfile(
             symbol=symbol,
-            liquidity_score=round(score, 3),
-            bid_depth_usd=round(bid_depth, 0),
-            ask_depth_usd=round(ask_depth, 0),
-            spread_pct=0.05, slippage_pct=round(slippage, 4),
-            net_pressure=0.0,
-            support_level=price * 0.95,
-            resistance_level=price * 1.05,
-            buy_walls=[], sell_walls=[],
+            bid_price=price * 0.999, ask_price=price * 1.001, mid_price=price,
+            spread_pct=0.05,
+            bid_depth_usd=round(bid_depth, 0), ask_depth_usd=round(ask_depth, 0),
+            imbalance=0.0, estimated_slippage_pct=round(slippage, 4),
+            liquidity_score=round(score, 3), pressure=0.0,
+            is_tradeable=score > 0.1,
+            warnings=["⚠️ بيانات تقديرية — ليست Order Book حقيقي"],
             source="coingecko",
         )
 
+    
     def _fallback_profile(self, symbol: str) -> "LiquidityProfile":
-        """يُعيد بروفايل افتراضي عند فشل جميع المصادر."""
+        """بروفايل افتراضي."""
         return LiquidityProfile(
             symbol=symbol,
-            liquidity_score=0.5,
-            bid_depth_usd=0, ask_depth_usd=0,
-            spread_pct=0.1, slippage_pct=1.0,
-            net_pressure=0.0,
-            support_level=0, resistance_level=0,
-            buy_walls=[], sell_walls=[],
-            source="fallback",
+            bid_price=0, ask_price=0, mid_price=0, spread_pct=0.1,
+            bid_depth_usd=0, ask_depth_usd=0, imbalance=0.0,
+            estimated_slippage_pct=1.0, liquidity_score=0.5,
+            pressure=0.0, is_tradeable=False,
+            warnings=["⚠️ بيانات غير متاحة"], source="fallback",
         )
 
 
