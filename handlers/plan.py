@@ -12,8 +12,8 @@ import re
 
 def _fmt_price(price: float) -> str:
     if price <= 0:       return "$0"
-    elif price >= 1000:  return f"${price:,.2f}"
-    elif price >= 1:     return f"${price:,.4f}"
+    elif price >= 1000:  return f"{_fmt_price(price)}"
+    elif price >= 1:     return f"{_fmt_price(price)}"
     elif price >= 0.001: return f"${price:.6f}"
     elif price >= 1e-6:  return f"${price:.8f}"
     else:                return f"${price:.10f}"
@@ -677,3 +677,5 @@ def register(app):
     app.add_handler(CommandHandler("stats",      cmd_stats))
     app.add_handler(CommandHandler("approve",    cmd_approve))
     app.add_handler(CommandHandler("reject",     cmd_reject))
+
+# راسالة انتظار: 📋 الأصول في وضع المراقبة — لم تصل لشروط الدخول بعد
