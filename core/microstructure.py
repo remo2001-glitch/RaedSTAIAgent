@@ -253,6 +253,35 @@ class MicrostructureLayer:
         except Exception as e:
             logger.warning(f"Bybit Order Book ({symbol}): {e}")
 
+        # OKX Public API fallback
+        try:
+            if self.session:
+                okx_sym = f"{symbol.upper()}-USDT"
+                url = f"https://www.okx.com/api/v5/market/books?instId={okx_sym}&sz={depth_limit}"
+                async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=6)) as r:
+                    if r.status == 200:
+                        data  = await r.json()
+                        books = (data.get("data") or [{}])[0]
+                        if books.get("bids") or books.get("asks"):
+                            return self._compute_walls_from_levels(
+                                symbol, books.get("bids", []), books.get("asks", []))
+        except Exception as e:
+            logger.debug(f"OKX walls ({symbol}): {e}")
+
+        # Bybit Public API fallback
+        try:
+            if self.session:
+                url = f"https://api.bybit.com/v5/market/orderbook?category=spot&symbol={symbol.upper()}USDT&limit={depth_limit}"
+                async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=6)) as r:
+                    if r.status == 200:
+                        data = await r.json()
+                        res  = data.get("result", {})
+                        bids, asks = res.get("b", []), res.get("a", [])
+                        if bids or asks:
+                            return self._compute_walls_from_levels(symbol, bids, asks)
+        except Exception as e:
+            logger.debug(f"Bybit walls ({symbol}): {e}")
+
         return OrderFlowSignal(symbol, [], [], 0, 0, 0)
 
     def _compute_walls(self, symbol: str, book: Dict) -> OrderFlowSignal:

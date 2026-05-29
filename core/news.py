@@ -484,7 +484,7 @@ class NewsEngine:
             b64_image = base64.b64encode(image_data).decode("utf-8")
             sym_text  = f"لـ {symbol}" if symbol else ""
             prompt_text = (
-                f"أنت خبير تحليل فني للكريبتو. حلل شارت {sym_text} بدقة باللغة العربية."
+                f"أنت خبير تحليل فني للكريبتو. أجب بنص عربي واضح بدون markdown headers (###) أو bullet lists. استخدم الأرقام ١- ٢- فقط. حلل شارت {sym_text} بدقة باللغة العربية."
                 " أجب بنص عربي واضح ومنظم بدون markdown headers (###) أو (####) أو bullet lists."
                 " استخدم الترقيم فقط: ١- ٢- ٣- إلخ. اذكر الأسعار الدقيقة."
                 " الأقسام المطلوبة:"

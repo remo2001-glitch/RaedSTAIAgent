@@ -149,16 +149,15 @@ class DataLayer:
         if cached := _cached(key, "price"):
             return cached
 
-        # Binance
-        result = await self._price_binance(symbol)
-        if result:
+        # CoinGecko أولاً (Binance محجوب على Railway)
+        result = await self._price_coingecko(symbol)
+        if result and result.get("price", 0) > 0:
             _store(key, result)
             return result
 
-        # CoinGecko fallback
-        await asyncio.sleep(1)
-        result = await self._price_coingecko(symbol)
-        if result:
+        # Binance fallback
+        result = await self._price_binance(symbol)
+        if result and result.get("price", 0) > 0:
             _store(key, result)
             return result
 

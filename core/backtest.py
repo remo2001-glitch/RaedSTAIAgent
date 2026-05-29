@@ -433,8 +433,18 @@ class BacktestEngine:
             f"",
             f"🔬 *موثوقية النتائج: {r.confidence_score:.0%}*",
             f"",
-            f"💡 {r.summary_ar.replace('_',' ')}",
         ]
+        if r.confidence_score < 0.7:
+            lines.append("⚠️ موثوقية منخفضة — لا تبنِ قرارات على هذه النتائج")
+        if r.total_trades < 30:
+            lines.append(f"⚠️ {r.total_trades} صفقات فقط — الحد الأدنى للتحليل الإحصائي 30 صفقة")
+        if r.win_rate < 40 or r.sharpe_ratio < 0:
+            alt = {"trend_following":"hybrid","mean_reversion":"breakout",
+                   "breakout":"mean_reversion","hybrid":"trend_following"}.get(
+                   r.strategy_used,"hybrid")
+            lines.append(f"💡 جرّب: /backtest {r.symbol} {alt}")
+        else:
+            lines.append(f"💡 {r.summary_ar.replace('_',' ')}")
         return "\n".join(lines)
 
 
