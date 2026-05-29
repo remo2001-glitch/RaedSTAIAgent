@@ -200,7 +200,7 @@ async def cmd_live(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"الباقة: {profile.tier_name}",
                     f"حجم المحفظة: ${port_v:,.0f}",
                     f"حد العملات: {profile.coin_limit} عملة",
-                    f"تداول تلقائي: {'✅ مُفعَّل' if autotrade_on else '❌ مُوقَف'}",
+                    f"🤖 التداول الآلي: {'✅ مُفعَّل — /autotrade off للإيقاف' if autotrade_on else '❌ مُوقَف — /autotrade on للتفعيل'}",
                 ]
                 if days_left > 0:
                     lines.append(f"⏰ تداول تلقائي مجاني: {days_left} يوم متبقٍ")
@@ -747,43 +747,64 @@ def build_confirm_keyboard(symbol: str, direction: str,
 # ════════════════════════════════════════════════════════════════
 @require_tier("autotrade")
 async def cmd_autotrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    engine = _eng(context)
+    engine  = _eng(context)
     if not engine:
         await update.message.reply_text("⚠️ النظام لم يُهيَّأ بعد"); return
-    args   = context.args or []
-    action = args[0].lower() if args else ""
-    if action not in ("on","off","تشغيل","إيقاف"):
-        await update.message.reply_text(
-            "⚠️ /autotrade on أو /autotrade off"); return
+
+    from core.user_manager import user_manager as um
+    args    = context.args or []
+    action  = args[0].lower() if args else "status"
+    user_id = update.effective_user.id
+
     try:
         if engine.kill_switch.is_active:
             await update.message.reply_text(
-                "🔴 Kill Switch مفعّل\n/killswitch reset للتشغيل"); return
-        user_id    = update.effective_user.id
-        has_live   = engine.user_has_live_trading(user_id)
-        trade_mode = "💰 حقيقي" if has_live else "🎮 افتراضي"
-        if action in ("on","تشغيل"):
-            engine.auto_trade_enabled = True
-            scan_txt = engine.scheduler.next_scan_ar() if engine.scheduler else ""
+                "🔴 Kill Switch مفعّل — /killswitch reset للتشغيل"); return
+
+        ex_info   = engine.get_user_exchange(user_id)
+        mode      = f"💰 حقيقي ({ex_info['name'].upper()})" if ex_info else "🎮 افتراضي"
+        tier_name = um.get(user_id).tier_name
+        is_on     = _sm.is_autotrade_on(user_id)
+
+        if action in ("on", "تشغيل"):
+            _sm.set_autotrade_on(user_id, True)
             await update.message.reply_text(
-                f"✅ *التداول التلقائي مُفعَّل*\n"
-                f"الوضع: {trade_mode}\n\n"
-                f"⏰ *جدول المسح*\n"
-                f"01:00 · 05:00 · 09:00 · 13:00 · 17:00 · 21:00 KSA\n"
-                + (f"\n🔜 {scan_txt}" if scan_txt else "") +
-                f"\n\n/autotrade off للإيقاف",
+                "✅ *التداول الآلي مُفعَّل*\n"
+                "━━━━━━━━━━━━━━━━━━\n"
+                f"الوضع: {mode}\n"
+                f"الباقة: {tier_name}\n\n"
+                f"⏰ *جدول المسح*\n{_scan_schedule()}\n\n"
+                f"🔜 *المسح القادم:* {_next_scan()}\n\n"
+                "للإيقاف الفوري: /autotrade off",
                 parse_mode=ParseMode.MARKDOWN)
+
+        elif action in ("off", "إيقاف"):
+            _sm.set_autotrade_on(user_id, False)
+            await update.message.reply_text(
+                "⏹️ *التداول الآلي مُوقَف*\n"
+                "━━━━━━━━━━━━━━━━━━\n"
+                "لن تُنفَّذ صفقات آلية حتى إعادة التفعيل.\n\n"
+                "للتفعيل مجدداً: /autotrade on",
+                parse_mode=ParseMode.MARKDOWN)
+
         else:
-            engine.auto_trade_enabled = False
+            # عرض الحالة الحالية
+            schedule = f"⏰ جدول المسح:\n{_scan_schedule()}\n\n🔜 المسح القادم: {_next_scan()}\n\n" if is_on else ""
             await update.message.reply_text(
-                "🛑 *التداول التلقائي مُوقَف*",
+                "🤖 *التداول الآلي — رائد*\n"
+                "━━━━━━━━━━━━━━━━━━\n"
+                f"الحالة: {'✅ مُفعَّل' if is_on else '❌ مُوقَف'}\n"
+                f"الوضع: {mode}\n"
+                f"الباقة: {tier_name}\n\n"
+                f"{schedule}"
+                f"{'للإيقاف: /autotrade off' if is_on else 'للتفعيل: /autotrade on'}",
                 parse_mode=ParseMode.MARKDOWN)
+
     except Exception as e:
         logger.error(f"cmd_autotrade: {e}")
-        await update.message.reply_text("❌ خطأ")
+        await update.message.reply_text("❌ خطأ في التداول الآلي")
 
 
-@require_tier("killswitch")
 async def cmd_killswitch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine = _eng(context)
     if not engine:

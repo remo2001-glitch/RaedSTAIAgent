@@ -542,7 +542,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         rsi = _calc_rsi(candles)
 
         # حساب regime + EMA (مصدر واحد للحقيقة)
-        regime_desc = "غير محدد"
+        regime_desc = "⚪ جاري تحديث بيانات السوق"
         is_bearish  = False
         ema_bearish = False
         if len(candles) >= 30:
@@ -794,7 +794,7 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # توصية شاملة: RSI + Fear + Regime + EMA
         # مبدأ الحذر: إذا regime غير محدد → لا توصية شراء
-        regime_unknown = regime_desc in ("غير محدد", "", None)
+        regime_unknown = regime_desc in ("⚪ جاري تحديث بيانات السوق", "", None)
 
         if rsi < 30 and fear_val < 40 and not ema_bearish and not is_bearish and not regime_unknown:
             # ذروة بيع + خوف + EMA صاعد + سوق غير هابط → شراء محتمل
