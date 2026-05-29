@@ -516,19 +516,22 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text(f"🧠 جاري التحليل العميق لـ {symbol}...")
 
     try:
-        price_d, candles, fear = await asyncio.gather(
+        price_d, candles, fear, btc_dom = await asyncio.gather(
             engine.data_layer.get_price(symbol),
-            engine.data_layer.get_ohlcv(symbol, "1d", 100),
+            engine.data_layer.get_ohlcv(symbol, "1d", 250),
             engine.data_layer.get_fear_greed(),
+            engine.data_layer.get_btc_dominance(),
             return_exceptions=True
         )
         price_d = price_d if isinstance(price_d, dict) else {}
         candles = candles if isinstance(candles, list) else []
         fear    = fear    if isinstance(fear, dict)    else {"value": 50}
+        btc_dom = btc_dom if isinstance(btc_dom, float) else 50.0
 
         price      = float(price_d.get("price") or 0)
         fear_val   = int(fear.get("value") or 50)
-        change_24h = float(price_d.get("change_24h") or price_d.get("price_change_percentage_24h") or 0)
+        change_24h = float(price_d.get("change_24h") or
+                           price_d.get("price_change_percentage_24h") or 0)
         volume_24h = float(price_d.get("volume_24h") or 0)
         market_cap = float(price_d.get("market_cap") or 0)
 
@@ -538,14 +541,33 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         rsi = _calc_rsi(candles)
 
-        regime = None
+        # حساب regime + EMA (مصدر واحد للحقيقة)
         regime_desc = "غير محدد"
+        is_bearish  = False
+        ema_bearish = False
         if len(candles) >= 30:
             try:
-                regime = engine.regime_detector.detect(candles, btc_dominance=btc_dom, fear_greed=fear_val)
-                regime_desc = regime.description_ar
+                regime_obj  = engine.regime_detector.detect(
+                    candles, btc_dominance=btc_dom, fear_greed=fear_val)
+                regime_desc = regime_obj.description_ar
+                is_bearish  = "هابط" in regime_desc
+            except Exception as e:
+                logger.warning(f"regime detect: {e}")
+
+        # EMA check
+        if len(candles) >= 20:
+            try:
+                closes = [float(c.get("close", 0)) for c in candles if c.get("close")]
+                ema20  = sum(closes[-20:]) / 20
+                ema50  = sum(closes[-50:]) / 50 if len(closes) >= 50 else ema20
+                ema_bearish = price < ema20 and price < ema50
             except Exception:
                 pass
+
+        # اتجاه العملة
+        trend = ("هابط" if is_bearish or ema_bearish
+                 else "صاعد" if not is_bearish and not ema_bearish and rsi > 50
+                 else "محايد")
 
         candles_summary = ""
         if len(candles) >= 5:
@@ -558,7 +580,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         analysis = await engine.news_engine.analyze_symbol(
             symbol=symbol, price=price, price_change_24h=change_24h,
             volume_24h=volume_24h, market_cap=market_cap, rsi=rsi,
-            fear_greed=fear_val, regime_desc=regime_desc,
+            fear_greed=fear_val, regime_desc=regime_desc, trend=trend,
             candles_summary=candles_summary)
 
         change_sign = "+" if change_24h >= 0 else ""
@@ -693,16 +715,18 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🔍 جاري التحليل الأولي لـ {symbol}...")
 
     try:
-        price_d, candles, fear = await asyncio.gather(
+        price_d, candles, fear, btc_dom = await asyncio.gather(
             engine.data_layer.get_price(symbol),
-            engine.data_layer.get_ohlcv(symbol, "1d", 100),
+            engine.data_layer.get_ohlcv(symbol, "1d", 250),
             engine.data_layer.get_fear_greed(),
+            engine.data_layer.get_btc_dominance(),
             return_exceptions=True
         )
 
         price_d = price_d if isinstance(price_d, dict) else {}
         candles = candles if isinstance(candles, list) else []
         fear    = fear    if isinstance(fear, dict)    else {"value": 50}
+        btc_dom = btc_dom if isinstance(btc_dom, float) else 50.0
 
         price      = float(price_d.get("price") or 0)
         fear_val   = int(fear.get("value") or 50)
@@ -716,6 +740,35 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         rsi = _calc_rsi(candles)
 
+        # حساب regime أولاً — يؤثر على التوصية
+        regime_desc = "⚪ بيانات غير كافية للتحليل"
+        regime_obj  = None
+        is_bearish  = False
+        ema_bearish = False   # السعر تحت EMA الرئيسية
+
+        if len(candles) >= 30:
+            try:
+                regime_obj  = engine.regime_detector.detect(
+                    candles, btc_dominance=btc_dom, fear_greed=fear_val)
+                regime_desc = regime_obj.description_ar
+                is_bearish  = "هابط" in regime_desc
+            except Exception as e:
+                logger.warning(f"regime detect: {e}")
+
+        # فحص EMA — إذا السعر تحت EMA20 → إشارة هبوطية
+        if len(candles) >= 20:
+            try:
+                closes  = [float(c.get("close", 0)) for c in candles if c.get("close")]
+                ema5    = sum(closes[-5:])  / 5  if len(closes) >= 5  else closes[-1]
+                ema10   = sum(closes[-10:]) / 10 if len(closes) >= 10 else closes[-1]
+                ema20   = sum(closes[-20:]) / 20
+                ema50   = sum(closes[-50:]) / 50 if len(closes) >= 50 else ema20
+                # هابط حقيقي: السعر تحت معظم EMAs
+                ema_below_count = sum([price < ema5, price < ema10, price < ema20, price < ema50])
+                ema_bearish = ema_below_count >= 3  # تحت 3 من 4 EMAs = هابط
+            except Exception:
+                pass
+
         # مستويات الدعم والمقاومة (20 شمعة)
         support = resistance = 0.0
         if len(candles) >= 20:
@@ -727,45 +780,36 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 support    = min(lows)  * 0.99
                 resistance = max(highs) * 1.01
 
-        # توصية بناءً على RSI + Fear & Greed (معايير مُحسَّنة)
-        if rsi < 30 and fear_val < 40:
+        # توصية شاملة: RSI + Fear + Regime + EMA
+        # مبدأ الحذر: إذا regime غير محدد → لا توصية شراء
+        regime_unknown = regime_desc in ("غير محدد", "", None)
+
+        if rsi < 30 and fear_val < 40 and not ema_bearish and not is_bearish and not regime_unknown:
+            # ذروة بيع + خوف + EMA صاعد + سوق غير هابط → شراء محتمل
             direction = "🟢 شراء محتمل"
-            entry     = price * 0.99
-            tp1       = price * 1.05
-            tp2       = price * 1.10
-            sl        = price * 0.95
+            entry = price * 0.99; tp1 = price * 1.05; tp2 = price * 1.10; sl = price * 0.95
+        elif rsi < 30 and (is_bearish or ema_bearish or regime_unknown):
+            # ذروة بيع لكن في سوق هابط أو غير محدد → انتظار ارتداد فقط
+            direction = "⏳ انتظار ارتداد"
+            entry = price * 0.98; tp1 = price * 1.03; tp2 = price * 1.06; sl = price * 0.95
         elif rsi > 70 and fear_val > 60:
             direction = "🔴 بيع محتمل"
-            entry     = price * 1.01
-            tp1       = price * 0.95
-            tp2       = price * 0.90
-            sl        = price * 1.05
-        elif 30 <= rsi <= 45 and fear_val < 50:
+            entry = price * 1.01; tp1 = price * 0.95; tp2 = price * 0.90; sl = price * 1.05
+        elif rsi > 70 and ema_bearish:
+            # ذروة شراء + سوق هابط → بيع قوي
+            direction = "🔴 بيع قوي"
+            entry = price * 1.005; tp1 = price * 0.94; tp2 = price * 0.88; sl = price * 1.04
+        elif 30 <= rsi <= 45 and fear_val < 50 and not is_bearish:
             direction = "🟡 شراء محتاط"
-            entry     = price * 0.99
-            tp1       = price * 1.04
-            tp2       = price * 1.08
-            sl        = price * 0.96
+            entry = price * 0.99; tp1 = price * 1.04; tp2 = price * 1.08; sl = price * 0.96
         elif 55 <= rsi <= 70 and fear_val > 50:
             direction = "🟠 بيع محتاط"
-            entry     = price * 1.01
-            tp1       = price * 0.96
-            tp2       = price * 0.92
-            sl        = price * 1.04
+            entry = price * 1.01; tp1 = price * 0.96; tp2 = price * 0.92; sl = price * 1.04
         else:
             direction = "⚪ انتظار"
-            entry     = price
-            tp1       = price * 1.05
-            tp2       = price * 1.08
-            sl        = price * 0.96
+            entry = price; tp1 = price * 1.05; tp2 = price * 1.08; sl = price * 0.96
 
-        regime_desc = "غير محدد"
-        if len(candles) >= 30:
-            try:
-                regime = engine.regime_detector.detect(candles, btc_dominance=btc_dom, fear_greed=fear_val)
-                regime_desc = regime.description_ar
-            except Exception:
-                pass
+        # regime_desc محسوبة أعلاه
 
         # تحذيرات متعددة
         bear_buy_warning = ""
