@@ -439,7 +439,9 @@ class NewsEngine:
                               volume_24h: float, market_cap: float,
                               rsi: float, fear_greed: int,
                               regime_desc: str,
-                              candles_summary: str = "") -> str:
+                              candles_summary: str = "",
+                              trend: str = "",
+                              **kwargs) -> str:
         """تحليل عميق للعملة — Groq مع fallback دائم."""
         if not self.groq_key:
             logger.warning(f"analyze_symbol ({symbol}): GROQ_API_KEY مفقود")
