@@ -9,6 +9,12 @@ import asyncio
 import logging
 import re
 
+from telegram import Update
+from telegram.ext import ContextTypes
+from telegram.constants import ParseMode
+from core.middleware import require_tier
+from core.state_manager import state_manager as _sm
+
 
 def _fmt_price(price: float) -> str:
     """تنسيق السعر حسب حجمه — يعرض الأرقام المهمة دائماً."""

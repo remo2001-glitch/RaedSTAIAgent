@@ -6,6 +6,7 @@
 """
 
 import logging
+from core.middleware import require_tier
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 from telegram.constants import ParseMode

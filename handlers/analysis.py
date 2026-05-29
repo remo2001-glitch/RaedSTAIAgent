@@ -16,6 +16,7 @@
 
 import asyncio
 import logging
+from core.middleware import require_tier
 from telegram import Update
 from telegram.ext import ContextTypes, CommandHandler, MessageHandler, filters
 from core.state_manager import state_manager as _sm
