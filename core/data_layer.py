@@ -278,7 +278,9 @@ class DataLayer:
             return cached  # دائماً List
 
         # CoinGecko أولاً (Binance محجوب على Railway)
-        cg_candles = await self._ohlcv_coingecko(symbol, interval, limit)
+        # تحويل limit إلى days لـ CoinGecko
+        cg_days    = min(limit, 2000)
+        cg_candles = await self._ohlcv_coingecko(symbol, cg_days)
         if len(cg_candles) >= 10:
             _store(key, cg_candles, "ohlcv")
             return cg_candles
@@ -616,6 +618,43 @@ class DataLayer:
     # ═══════════════════════════════════════════════════════════
     # 4. الأخبار — يُعيد دائماً List
     # ═══════════════════════════════════════════════════════════
+# CoinGecko News — بديل CryptoPanic
+    async def _news_coingecko(self) -> list:
+        """يجلب أخبار CoinGecko العامة."""
+        try:
+            data = await _fetch(self.session,
+                "https://api.coingecko.com/api/v3/news",
+                headers=_H_CG, params={"page": "1"})
+            if isinstance(data, dict) and "data" in data:
+                items = []
+                for n in data["data"][:20]:
+                    items.append({
+                        "title":       n.get("title", ""),
+                        "description": n.get("description", ""),
+                        "published":   n.get("updated_at", ""),
+                        "url":         n.get("url", ""),
+                        "source":      "coingecko",
+                    })
+                return items
+        except Exception as e:
+            logger.debug(f"CoinGecko news: {e}")
+        return []
+
+    async def _news_coindesk_rss(self) -> list:
+        """CoinDesk RSS — fallback."""
+        try:
+            html = await _fetch(self.session,
+                "https://www.coindesk.com/arc/outboundfeeds/rss/", {})
+            if not isinstance(html, str): return []
+            import re
+            titles = re.findall(r'<title><!\[CDATA\[(.*?)\]\]></title>', html)
+            links  = re.findall(r'<link>(https://www\.coindesk\.com/[^<]+)</link>', html)
+            return [{"title": t, "url": l, "source": "coindesk"}
+                    for t, l in zip(titles[1:], links)][:10]
+        except Exception as e:
+            logger.debug(f"CoinDesk RSS: {e}")
+        return []
+
     async def get_news(self, currencies: str = "BTC,ETH",
                         limit: int = 20) -> List[Dict]:
         key = f"news:{currencies}"
@@ -624,30 +663,13 @@ class DataLayer:
 
         items = []
 
-        # ── ١. CryptoPanic ─────────────────────────────────────
+        # ── ١. CoinGecko News (بديل CryptoPanic) ────────────────
         try:
-            params = {"public": "true", "currencies": currencies,
-                      "filter": "important", "kind": "news"}
-            if self.cryptopanic_key:
-                params["auth_token"] = self.cryptopanic_key
-
-            data = await _fetch(self.session,
-                                "https://cryptopanic.com/api/v1/posts/",
-                                params=params)
-            if isinstance(data, dict):
-                for post in data.get("results", [])[:limit]:
-                    title = post.get("title", "")
-                    if title:
-                        items.append({
-                            "title":     title,
-                            "url":       post.get("url", ""),
-                            "source":    post.get("source", {}).get("title", ""),
-                            "published": post.get("created_at", ""),
-                            "votes_pos": post.get("votes", {}).get("positive", 0),
-                            "votes_neg": post.get("votes", {}).get("negative", 0),
-                        })
+            cg_news = await self._news_coingecko()
+            if cg_news:
+                all_news.extend(cg_news[:15])
         except Exception as e:
-            logger.warning(f"CryptoPanic: {e}")
+            logger.debug(f"CoinGecko news: {e}")
 
         # ── ٢. RSS — دائماً يعمل بغض النظر عن CryptoPanic ─────
         # نُمرر العملات للفلترة الذكية

@@ -441,11 +441,11 @@ class StateManager:
             f"• المعرّف: `{user_id}`",
             f"• الباقة: {'👑 مالك' if is_owner else tier_info['name']}",
             f"• حجم المحفظة: ${portfolio:,.0f}",
-            f"• حد العملات: {tier_info['coins']} عملة",
+            f"• حد العملات: {'∞ غير محدود' if tier == 'admin' else str(tier_info['coins']) + ' عملة'}",
             f"• المنصات: {', '.join(self.allowed_exchanges(user_id)).upper()}",
             f"• Futures: {'✅' if futures else '❌'}",
             f"• Margin: {'✅' if margin else '❌'}",
-            f"• التخزين: {'🔴 Redis' if self._redis_ok else '🟡 ملف محلي'}",
+            f"• التخزين: {'🟢 Redis متصل' if self._redis_ok else '🟡 ملف محلي'}",
         ]
         return "\n".join(lines)
 
