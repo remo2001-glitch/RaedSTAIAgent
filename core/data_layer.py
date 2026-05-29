@@ -49,6 +49,17 @@ _CG_MAP = {
     "ARB":"arbitrum","OP":"optimism","APT":"aptos",
     "TRX":"tron","SHIB":"shiba-inu","SUI":"sui",
     "TON":"the-open-network","PEPE":"pepe",
+    # عملات جديدة 2024-2026
+    "HYPE":"hyperliquid","LEO":"leo-token","TRUMP":"maga",
+    "BONK":"bonk","WIF":"dogwifcoin","POPCAT":"popcat",
+    "BRETT":"based-brett","MOG":"mog-coin",
+    "EIGEN":"eigenlayer","ENA":"ethena",
+    "TAO":"bittensor","WLD":"worldcoin-wld",
+    "ONDO":"ondo-finance","PYTH":"pyth-network",
+    "JTO":"jito-governance-token","JUP":"jupiter-ag",
+    "STRK":"starknet","MANTA":"manta-network",
+    "ALT":"altlayer","PIXEL":"pixels",
+    "PORTAL":"portal-gaming","ROAM":"roam",
     # إضافات مهمة
     "BGB":"bitget-token","OKB":"okb","HT":"huobi-token",
     "CRO":"crypto-com-chain","FTT":"ftx-token","GT":"gate",
