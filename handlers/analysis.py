@@ -282,10 +282,11 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         candles, onchain, fear, news_raw, btc_dom = await asyncio.gather(
-            engine.data_layer.get_ohlcv(symbol, "1d", 365),  # زيادة الطلب
+            engine.data_layer.get_ohlcv(symbol, "1d", 365),
             engine.data_layer.get_onchain(),
             engine.data_layer.get_fear_greed(),
             engine.data_layer.get_news(currencies=symbol),
+            engine.data_layer.get_btc_dominance(),
             return_exceptions=True
         )
         candles  = candles  if isinstance(candles, list) else []
@@ -600,7 +601,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             analysis = await engine.news_engine.analyze_symbol(
                 symbol=symbol, price=price, price_change_24h=change_24h,
                 volume_24h=volume_24h, market_cap=market_cap, rsi=rsi,
-                fear_greed=fear_val, regime_desc=regime_desc, trend=trend,
+                fear_greed=fear_val, regime_desc=regime_desc,
                 candles_summary=candles_summary)
             if not analysis or len(analysis.strip()) < 20:
                 raise ValueError("تحليل فارغ")
