@@ -166,11 +166,17 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = await update.message.reply_text("🔗 جاري جلب بيانات On-Chain...")
     try:
-        data, fear = await asyncio.gather(
+        data, fear, funding, oi, whale = await asyncio.gather(
             engine.data_layer.get_onchain(),
             engine.data_layer.get_fear_greed(),
+            engine.data_layer.get_funding_rate("BTC"),
+            engine.data_layer.get_open_interest("BTC"),
+            engine.data_layer.get_whale_ratio("BTC"),
             return_exceptions=True
         )
+        funding = funding if isinstance(funding, dict) else {}
+        oi      = oi      if isinstance(oi,      dict) else {}
+        whale   = whale   if isinstance(whale,   dict) else {}
         data  = data  if isinstance(data, dict) else {"tvl": 0, "protocols": []}
         fear  = fear  if isinstance(fear, dict) else {"value": 50, "label_ar": "محايد"}
         top_p = (data.get("protocols") or [])[:5]
@@ -273,11 +279,17 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tier2    = _sm.get_tier(user_id2)
     if not is_symbol_allowed(symbol, tier2):
         await update.message.reply_text(
-            get_tier_message(symbol, tier2), parse_mode="Markdown"); return
+            (
+                f"⛔ *{symbol}* غير متاحة لباقتك الحالية\n\n"
+                f"باقتك: {_sm.get_tier_name(user_id)}\n"
+                f"هذه العملة تتطلب باقة أعلى\n\n"
+                f"⬆️ للترقية: /upgrade\n"
+                f"📋 لعرض عملاتك المتاحة: /premium"
+            ), parse_mode="Markdown"); return
 
     msg = await update.message.reply_text(
         f"📡 جاري تحليل {symbol} عبر ٥ مصادر...\n"
-        "⏳ قد يستغرق ١٠-٢٠ ثانية — يُرجى الانتظار"
+        "⏳ قد يستغرق ٢٠-٣٠ ثانية — يُرجى الانتظار"
     )
 
     try:
@@ -521,7 +533,13 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tier_an = _sm.get_tier(user_id)
     if not is_symbol_allowed(symbol, tier_an):
         await update.message.reply_text(
-            get_tier_message(symbol, tier_an), parse_mode="Markdown"); return
+            (
+                f"⛔ *{symbol}* غير متاحة لباقتك الحالية\n\n"
+                f"باقتك: {_sm.get_tier_name(user_id)}\n"
+                f"هذه العملة تتطلب باقة أعلى\n\n"
+                f"⬆️ للترقية: /upgrade\n"
+                f"📋 لعرض عملاتك المتاحة: /premium"
+            ), parse_mode="Markdown"); return
     if not symbol:
         await update.message.reply_text(
             "📊 مثال الاستخدام: /analyze BTC\n"
