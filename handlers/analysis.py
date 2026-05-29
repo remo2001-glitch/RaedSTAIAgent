@@ -28,6 +28,31 @@ from telegram.constants import ParseMode
 logger = logging.getLogger(__name__)
 
 
+def _rsi_label(rsi: float) -> str:
+    """تسمية RSI بمناطق احترافية."""
+    if rsi >= 70:   return f"🔴 ذروة شراء ({rsi:.0f})"
+    elif rsi >= 60: return f"🟠 قريب ذروة شراء ({rsi:.0f})"
+    elif rsi >= 45: return f"⚪ محايد ({rsi:.0f})"
+    elif rsi >= 35: return f"🟡 قريب ذروة بيع ({rsi:.0f})"
+    elif rsi >= 25: return f"🟠 ذروة بيع ({rsi:.0f})"
+    else:           return f"🔴 ذروة بيع شديدة ({rsi:.0f})"
+
+
+def _market_contradiction(rsi: float, fear_greed: int, regime_desc: str) -> str:
+    """تحليل تناقض المؤشرات."""
+    is_bearish = "هابط" in str(regime_desc)
+    oversold   = rsi < 35
+    high_fear  = fear_greed < 30
+
+    if high_fear and oversold and is_bearish:
+        return "⏳ ذعر + ذروة بيع + هابط = انتظر تأكيد قبل الدخول"
+    if high_fear and oversold:
+        return "🟢 نمط تجميع: خوف شديد + ذروة بيع = فرصة محتملة"
+    if fear_greed > 70 and rsi > 65:
+        return "🔴 طمع + ذروة شراء = خطر انعكاس"
+    return ""
+
+
 def _fmt_price(price: float) -> str:
     """تنسيق السعر حسب حجمه — يعرض الأرقام المهمة دائماً."""
     if price <= 0:      return "$0"
@@ -603,10 +628,12 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                  else "صاعد" if not is_bearish and not ema_bearish and rsi > 50
                  else "محايد")
 
-        candles_summary = ""
-        if len(candles) >= 5:
+        # candles_summary كـ JSON احترافي لـ Groq
+        candles_summary = engine.data_layer.build_candles_summary(candles, symbol)
+        if not candles_summary:
+            # fallback نصي
             try:
-                p5 = [float(c.get("close", c.get("price", 0)) or 0) for c in candles[-5:] if c]
+                p5 = [float(c.get("close", 0) or 0) for c in candles[-5:] if c]
                 p5 = [p for p in p5 if p > 0]
             except Exception:
                 p5 = []
