@@ -334,7 +334,11 @@ class StateManager:
     # إعدادات التداول
     # ═══════════════════════════════════════════════════════════
     def get_futures_enabled(self, user_id: int) -> bool:
-        if TIERS[self.get_tier(user_id)]["level"] < 2:
+        tier = self.get_tier(user_id)
+        # المدير دائماً لديه Futures
+        if tier == "admin":
+            return True
+        if TIERS[tier]["level"] < 2:
             return False
         return self._get_user(user_id).get("futures_enabled", False)
 

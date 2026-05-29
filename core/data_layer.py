@@ -16,6 +16,11 @@ from typing import Dict, List, Optional, Any
 import aiohttp
 
 from core.data_validator import validator
+try:
+    from core.coins_list import get_cg_id as _coins_cg_id, RANKED_CG_MAP as _RANKED_CG_MAP
+except ImportError:
+    _coins_cg_id = None
+    _RANKED_CG_MAP = {}
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +53,7 @@ _CG_MAP = {
     "LTC":"litecoin","ATOM":"cosmos","NEAR":"near",
     "ARB":"arbitrum","OP":"optimism","APT":"aptos",
     "TRX":"tron","SHIB":"shiba-inu","SUI":"sui",
-    "TON":"the-open-network","PEPE":"pepe",
+    "TON":"the-open-network","PEPE":"pepe","ARKM":"arkham","BGB":"bitget-token","OKB":"okb",
     # عملات جديدة 2024-2026
     "HYPE":"hyperliquid","LEO":"leo-token","TRUMP":"maga",
     # DeFi classics
@@ -66,7 +71,7 @@ _CG_MAP = {
     "BONK":"bonk","WIF":"dogwifcoin","POPCAT":"popcat",
     "BRETT":"based-brett","MOG":"mog-coin",
     "EIGEN":"eigenlayer","ENA":"ethena",
-    "TAO":"bittensor","WLD":"worldcoin-wld",
+    "TAO":"bittensor","WLD":"worldcoin-wld","NOT":"notcoin","DOGS":"dogs-2","ORDI":"ordi","SATS":"1000sats-ordinals",
     "ONDO":"ondo-finance","PYTH":"pyth-network",
     "JTO":"jito-governance-token","JUP":"jupiter-ag",
     "STRK":"starknet","MANTA":"manta-network",
@@ -76,11 +81,11 @@ _CG_MAP = {
     "BGB":"bitget-token","OKB":"okb","HT":"huobi-token",
     "CRO":"crypto-com-chain","FTT":"ftx-token","GT":"gate",
     "MX":"mexc-token","KCS":"kucoin-shares","WBT":"whitebit",
-    "INJ":"injective-protocol","SEI":"sei-network",
+    "INJ":"injective-protocol","SEI":"sei-network","RAIN":"rain-coin-2","NAKA":"nakamoto-games",
     "TIA":"celestia","PYTH":"pyth-network","JTO":"jito-governance-token",
     "WIF":"dogwifcoin","BONK":"bonk","FLOKI":"floki",
     "RENDER":"render-token","FET":"fetch-ai","AGIX":"singularitynet",
-    "TAO":"bittensor","WLD":"worldcoin-wld","ONDO":"ondo-finance",
+    "TAO":"bittensor","WLD":"worldcoin-wld","NOT":"notcoin","DOGS":"dogs-2","ORDI":"ordi","SATS":"1000sats-ordinals","ONDO":"ondo-finance",
     "STX":"blockstack","ICP":"internet-computer","FIL":"filecoin",
     "HBAR":"hedera-hashgraph","VET":"vechain","ALGO":"algorand",
     "EOS":"eos","XLM":"stellar","XMR":"monero","AAVE":"aave",
@@ -89,7 +94,15 @@ _CG_MAP = {
     "RUNE":"thorchain","KAVA":"kava","ZIL":"zilliqa",
 }
 def _cg_id(symbol: str) -> str:
-    return _CG_MAP.get(symbol.upper(), symbol.lower())
+    sym = symbol.upper()
+    # ١. فحص _CG_MAP المحلي أولاً
+    if sym in _CG_MAP:
+        return _CG_MAP[sym]
+    # ٢. فحص coins_list
+    if _RANKED_CG_MAP and sym in _RANKED_CG_MAP:
+        return _RANKED_CG_MAP[sym]
+    # ٣. fallback: lowercase
+    return sym.lower()
 
 # ─── تحويل interval لـ CoinGecko ─────────────────────────────
 def _cg_interval(interval: str) -> str:

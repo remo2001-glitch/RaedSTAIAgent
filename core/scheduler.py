@@ -80,11 +80,28 @@ class Scheduler:
                 await self._check_scan(now)
                 await self._check_weekly(now)
                 await self._check_monthly(now)
+                await self._check_coins_update(now)
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error(f"Scheduler loop error: {e}")
             await asyncio.sleep(60)
+
+    async def _check_coins_update(self, now):
+        """يُحدِّث قائمة العملات شهرياً."""
+        if not hasattr(self, "_last_coins_upd"):
+            self._last_coins_upd = 0
+        if now - self._last_coins_upd < 30 * 24 * 3600:
+            return
+        try:
+            from core.coins_list import update_coins_list_from_api
+            if hasattr(self.engine, "session") and self.engine.session:
+                ok = await update_coins_list_from_api(self.engine.session)
+                if ok:
+                    self._last_coins_upd = now
+                    logger.info("✅ Scheduler: قائمة العملات مُحدَّثة شهرياً")
+        except Exception as e:
+            logger.debug(f"_check_coins_update: {e}")
 
     # ── المسح الرباعي ────────────────────────────────────────
     async def _check_scan(self, now: datetime):
