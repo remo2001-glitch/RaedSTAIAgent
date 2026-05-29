@@ -570,73 +570,49 @@ class NewsEngine:
             return "❌ خطأ في تحليل الشارت. حاول لاحقاً"
     def _rule_based_symbol_analysis(self, symbol: str, price: float,
                                      change_24h: float, rsi: float,
-                                     fear_greed: int, regime_desc: str) -> str:
-        # توحيد الاتجاه مع regime_desc إذا متوفر
+                                     fear_greed: int, regime_desc: str,
+                                     news_sentiment: float = 0.0) -> str:
+        """تحليل rule-based احترافي — يستخدم كل مدارس التحليل الفني."""
+
+        # ١. تحديد الاتجاه
         if regime_desc and "هابط" in regime_desc:
             trend = "هابط"
         elif regime_desc and "صاعد" in regime_desc:
             trend = "صاعد"
         else:
             trend = "صاعد" if change_24h > 2 else "هابط" if change_24h < -2 else "محايد"
-        if rsi < 20:
-            rsi_signal = "🚨 ذروة بيع تاريخية — احتمال ارتداد حاد قريب"
-        elif rsi < 30:
-            rsi_signal = "ذروة بيع — احتمال ارتداد"
-        elif rsi > 80:
-            rsi_signal = "🚨 ذروة شراء متطرفة — احتمال تصحيح حاد"
-        elif rsi > 70:
-            rsi_signal = "ذروة شراء — احتمال تراجع"
-        else:
-            rsi_signal = "محايد"
-        fg_signal  = ("خوف شديد — فرصة شراء محتملة" if fear_greed < 25
-                       else "جشع — احتمال تصحيح" if fear_greed > 75
-                       else "محايد")
-        # تحذير تعارض RSI + Fear & Greed
-        conflict_warn = ""
-        if rsi > 70 and fear_greed < 30:
-            conflict_warn = "\n⚠️ RSI في ذروة الشراء رغم الخوف — الصعود قد يكون مبالغاً فيه"
-        elif rsi < 30 and fear_greed > 70:
-            conflict_warn = "\n⚠️ RSI في ذروة البيع رغم الجشع — تصحيح محتمل"
 
-        # تحذير ارتفاع/انخفاض حاد
-        spike_warn = ""
-        if abs(change_24h) > 15:
-            dir_ar = "ارتفاع" if change_24h > 0 else "انخفاض"
-            spike_warn = f"\n🚨 {dir_ar} حاد {abs(change_24h):.1f}٪ في 24 ساعة — خطر الدخول مرتفع"
+        # ٢. تفسير RSI بمناطق دقيقة
+        rsi_text = _rsi_interpretation(rsi)
 
-        # تنسيق السعر
-        if price >= 1000:      price_str = f"${price:,.2f}"
-        elif price >= 1:       price_str = f"${price:,.4f}"
-        elif price >= 0.001:   price_str = f"${price:.6f}"
-        else:                  price_str = f"${price:.8f}"
+        # ٣. تفسير Fear & Greed
+        fg_text = _fear_greed_interpretation(fear_greed)
 
-        result_text = (
-            f"📊 تحليل {symbol}\n"
-            f"السعر: {price_str}\n"
-            f"التغيير 24h: {change_24h:+.2f}%\n"
-            f"الاتجاه: {trend}\n"
-            f"RSI {rsi:.0f}: {rsi_signal}\n"
-            f"Fear & Greed {fear_greed}: {fg_signal}\n"
-            f"السوق: {regime_desc}"
-        )
-        if conflict_warn: result_text += conflict_warn
-        if spike_warn:    result_text += spike_warn
-        if not self.groq_key:
-            result_text += "\n\n💡 أضف GROQ_API_KEY في Railway للتحليل المتقدم"
-        return result_text
+        # ٤. تحليل التناقض
+        contradiction = _contradiction_analysis(rsi, fear_greed, regime_desc, news_sentiment)
+
+        # ٥. تنسيق السعر
+        if price >= 1000:    p_str = f"${price:,.2f}"
+        elif price >= 1:     p_str = f"${price:,.4f}"
+        elif price >= 0.001: p_str = f"${price:.6f}"
+        else:                p_str = f"${price:.8f}"
+
+        # ٦. بناء التحليل
+        lines = [
+            f"📊 تحليل {symbol}",
+            f"السعر: {p_str} ({change_24h:+.2f}%)",
+            f"الاتجاه: {trend}",
+            f"RSI {rsi:.0f}: {rsi_text}",
+            f"Fear & Greed {fear_greed}: {fg_text}",
+            f"السوق: {regime_desc}",
+        ]
+
+        # ٧. إضافة تحليل التناقض إذا وُجد
+        if contradiction:
+            lines.append("")
+            lines.append("📊 *تحليل المؤشرات المتقاطعة*")
+            lines.extend(contradiction.split("\n"))
+
+        return "\n".join(lines)
 
 
-def _strip_markdown_headers(text: str) -> str:
-    """يُزيل ### و#### من نص Groq Vision."""
-    import re
-    # إزالة headers
-    text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
-    # إزالة ** bold **
-    text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
-    # تحويل - bullets إلى •
-    text = re.sub(r'^- ', '• ', text, flags=re.MULTILINE)
-    return text.strip()
-
-
-# Singleton
-news_engine = NewsEngine()

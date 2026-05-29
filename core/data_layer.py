@@ -866,6 +866,56 @@ class DataLayer:
             logger.debug(f"miner_flows ({symbol}): {e}")
         return result
 
+    def build_candles_summary(self, candles: list, symbol: str = "") -> str:
+        """يبني ملخص شموع احترافي لـ Groq — يشمل EMA + RSI + MACD + حجم."""
+        if not candles or len(candles) < 5:
+            return ""
+        try:
+            closes  = [float(c.get("close", 0) or 0) for c in candles if c.get("close")]
+            volumes = [float(c.get("volume", 0) or 0) for c in candles if c.get("volume")]
+            if len(closes) < 5: return ""
+
+            last = closes[-1]
+            # EMAs
+            ema5  = sum(closes[-5:])  / 5  if len(closes) >= 5  else last
+            ema20 = sum(closes[-20:]) / 20 if len(closes) >= 20 else last
+            ema50 = sum(closes[-50:]) / 50 if len(closes) >= 50 else last
+
+            # RSI (14)
+            gains = losses = 0.0
+            for i in range(-14, 0):
+                d = closes[i] - closes[i-1]
+                if d > 0: gains  += d
+                else:     losses -= d
+            avg_g = gains / 14; avg_l = losses / 14
+            rsi = 100 - (100 / (1 + avg_g / avg_l)) if avg_l > 0 else 50
+
+            # حجم vs متوسط
+            avg_vol  = sum(volumes[-20:]) / max(len(volumes[-20:]), 1) if volumes else 0
+            last_vol = volumes[-1] if volumes else 0
+            vol_ratio = last_vol / max(avg_vol, 1)
+
+            # اتجاه آخر 5 شموع
+            trend_5d = (closes[-1] - closes[-5]) / max(closes[-5], 1) * 100
+
+            summary = {
+                "price":     round(last, 6),
+                "ema5":      round(ema5, 6),
+                "ema20":     round(ema20, 6),
+                "ema50":     round(ema50, 6),
+                "rsi14":     round(rsi, 1),
+                "trend_5d":  round(trend_5d, 2),
+                "vol_ratio": round(vol_ratio, 2),
+                "candles_n": len(closes),
+                "above_ema5":  last > ema5,
+                "above_ema20": last > ema20,
+                "above_ema50": last > ema50,
+            }
+            import json
+            return json.dumps(summary, ensure_ascii=False)
+        except Exception as e:
+            return ""
+
     async def get_onchain(self, protocol: str = "all") -> Dict:
         key = f"onchain:{protocol}"
         if cached := _cached(key, "onchain"):
