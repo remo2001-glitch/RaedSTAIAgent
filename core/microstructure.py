@@ -56,41 +56,17 @@ class MicrostructureLayer:
     # 1. تحليل السيولة الرئيسي
     # ═══════════════════════════════════════════════════════════
     async def analyze(self, symbol: str,
-                       order_size_usd: float = 1000) -> LiquidityProfile:
-        """
-        يُحلل السيولة:
-        ١. Binance Order Book (حقيقي) — إذا فشل →
-        ٢. CoinGecko (حجم تداول حقيقي) — إذا فشل →
-        ٣. تقديرات افتراضية آمنة
-        """
-        cached = self._cache.get(symbol)
-        if cached and time.time() - cached[1] < self._cache_ttl:
-            return cached[0]
+                       order_size_usd: float = 10_000) -> "LiquidityProfile":
+        """يحلل سيولة العملة — OKX أولاً ثم Bybit ثم CoinGecko."""
+        # فحص الـ cache
+        if symbol in self._cache:
+            profile, ts = self._cache[symbol]
+            if time.time() - ts < self.TTL:
+                return profile
 
-        # ── ١. Binance Order Book ─────────────────────────────
-        BN_ENDPOINTS = [
-            "https://api.binance.com",
-            "https://api1.binance.com",
-            "https://api2.binance.com",
-            "https://api3.binance.com",
-        ]
-        for ep in BN_ENDPOINTS:
-            try:
-                url = f"{ep}/api/v3/depth?symbol={symbol.upper()}USDT&limit=50"
-                if self.session:
-                    async with self.session.get(
-                        url, timeout=aiohttp.ClientTimeout(total=6)
-                    ) as r:
-                        if r.status == 200:
-                            data    = await r.json()
-                            profile = self._compute_profile(symbol, data, order_size_usd)
-                            self._cache[symbol] = (profile, time.time())
-                            return profile
-            except Exception as e:
-                logger.warning(f"Binance Order Book {ep} ({symbol}): {e}")
-                continue
+        import aiohttp
 
-        # ── ٢. OKX Public API (Order Book حقيقي) ────────────
+        # ── ١. OKX Public API (أفضل مصدر متاح من Railway) ────
         try:
             if self.session:
                 okx_sym = f"{symbol.upper()}-USDT"
@@ -104,17 +80,17 @@ class MicrostructureLayer:
                         bids  = books.get("bids", [])
                         asks  = books.get("asks", [])
                         if bids or asks:
-                            walls = self._compute_walls_from_levels(symbol, bids, asks)
+                            walls   = self._compute_walls_from_levels(symbol, bids, asks)
                             profile = self._build_profile_from_walls(
                                 symbol, walls, bids, asks, order_size_usd)
                             profile.source = "okx"
                             self._cache[symbol] = (profile, time.time())
-                            logger.info(f"Liquidity OKX ({symbol}): ✅ Order Book حقيقي")
+                            logger.info(f"✅ Liquidity OKX ({symbol})")
                             return profile
         except Exception as e:
-            logger.debug(f"OKX Order Book ({symbol}): {e}")
+            logger.debug(f"OKX analyze ({symbol}): {e}")
 
-        # ── ٣. Bybit Public API ───────────────────────────────
+        # ── ٢. Bybit Public API ────────────────────────────────
         try:
             if self.session:
                 url = (f"https://api.bybit.com/v5/market/orderbook"
@@ -128,119 +104,59 @@ class MicrostructureLayer:
                         bids = res.get("b", [])
                         asks = res.get("a", [])
                         if bids or asks:
-                            walls = self._compute_walls_from_levels(symbol, bids, asks)
+                            walls   = self._compute_walls_from_levels(symbol, bids, asks)
                             profile = self._build_profile_from_walls(
                                 symbol, walls, bids, asks, order_size_usd)
                             profile.source = "bybit"
                             self._cache[symbol] = (profile, time.time())
-                            logger.info(f"Liquidity Bybit ({symbol}): ✅ Order Book حقيقي")
+                            logger.info(f"✅ Liquidity Bybit ({symbol})")
                             return profile
         except Exception as e:
-            logger.debug(f"Bybit Order Book ({symbol}): {e}")
+            logger.debug(f"Bybit analyze ({symbol}): {e}")
+
+        # ── ٣. Binance (محجوب على Railway غالباً) ─────────────
+        for ep in ["https://api.binance.com", "https://api1.binance.com"]:
+            try:
+                url = f"{ep}/api/v3/depth?symbol={symbol.upper()}USDT&limit=50"
+                if self.session:
+                    async with self.session.get(
+                        url, timeout=aiohttp.ClientTimeout(total=5)
+                    ) as r:
+                        if r.status == 200:
+                            data    = await r.json()
+                            profile = self._compute_profile(symbol, data, order_size_usd)
+                            self._cache[symbol] = (profile, time.time())
+                            return profile
+            except Exception as e:
+                logger.debug(f"Binance {ep} ({symbol}): {e}")
 
         # ── ٤. CoinGecko — حجم تداول تقديري ──────────────────
         try:
             from core.data_layer import _cg_id, _fetch, _H_CG
+            cg = _cg_id(symbol)
+            url = f"https://api.coingecko.com/api/v3/coins/{cg}"
             if self.session:
-                cg   = _cg_id(symbol)
-                data = await _fetch(
-                    self.session,
-                    f"https://api.coingecko.com/api/v3/coins/{cg}",
-                    headers=_H_CG,
-                    params={"localization": "false", "tickers": "false",
-                            "community_data": "false", "developer_data": "false"},
-                    retries=2,
-                )
-                if isinstance(data, dict) and "market_data" in data:
-                    md         = data["market_data"]
-                    price      = float(md.get("current_price", {}).get("usd") or 0)
-                    volume_24h = float(md.get("total_volume", {}).get("usd") or 0)
-                    market_cap = float(md.get("market_cap", {}).get("usd") or 0)
-                    if price > 0 and volume_24h > 0:
-                        profile = self._build_profile_from_market_data(
-                            symbol, price, volume_24h, market_cap)
-                        logger.info(
-                            f"Liquidity CoinGecko ({symbol}): "
-                            f"vol=${volume_24h/1e6:.0f}M | "
-                            f"score={profile.liquidity_score:.2f}")
-                        self._cache[symbol] = (profile, time.time())
-                        return profile
-        except Exception as e2:
-            logger.warning(f"CoinGecko liquidity ({symbol}): {e2}")
+                async with self.session.get(
+                    url, headers=_H_CG,
+                    timeout=aiohttp.ClientTimeout(total=10)
+                ) as r:
+                    if r.status == 200:
+                        coin = await r.json()
+                        md   = coin.get("market_data", {})
+                        vol  = float(md.get("total_volume", {}).get("usd", 0))
+                        price= float(md.get("current_price", {}).get("usd", 0))
+                        if vol > 0 and price > 0:
+                            profile = self._estimate_profile_from_volume(
+                                symbol, vol, price, order_size_usd)
+                            profile.source = "coingecko"
+                            self._cache[symbol] = (profile, time.time())
+                            return profile
+        except Exception as e:
+            logger.debug(f"CoinGecko analyze ({symbol}): {e}")
 
-        # ── ٣. Fallback آمن ───────────────────────────────────
-        profile = self._build_safe_fallback(symbol)
-        self._cache[symbol] = (profile, time.time())
-        return profile
+        return self._fallback_profile(symbol)
 
-    def _build_profile_from_market_data(self, symbol: str, price: float,
-                                          volume_24h: float,
-                                          market_cap: float) -> LiquidityProfile:
-        """
-        يبني LiquidityProfile من بيانات CoinGecko الحقيقية.
-        الحسابات مبنية على معادلات سوقية واقعية.
-        """
-        # عمق الشراء/البيع ≈ 2% من حجم التداول اليومي
-        depth_usd     = volume_24h * 0.02
-        bid_depth_usd = depth_usd * 0.52   # ضغط شراء أكبر قليلاً
-        ask_depth_usd = depth_usd * 0.48
 
-        # Spread حسب Market Cap (معادلة سوقية واقعية)
-        if market_cap > 100e9:   spread = 0.05   # BTC/ETH — ضيق جداً
-        elif market_cap > 10e9:  spread = 0.10   # Large cap
-        elif market_cap > 1e9:   spread = 0.20   # Mid cap
-        else:                    spread = 0.50   # Small cap
-
-        slippage  = spread / 2
-
-        # نسبة السيولة حسب حجم التداول اليومي
-        if volume_24h > 10e9:    liq_score = 0.95
-        elif volume_24h > 1e9:   liq_score = 0.85
-        elif volume_24h > 100e6: liq_score = 0.70
-        elif volume_24h > 10e6:  liq_score = 0.50
-        else:                    liq_score = 0.30
-
-        imbalance = bid_depth_usd / (bid_depth_usd + ask_depth_usd)
-        pressure  = ("شراء" if imbalance > 0.52
-                     else "بيع" if imbalance < 0.48
-                     else "neutral")
-
-        return LiquidityProfile(
-            symbol=symbol,
-            bid_price=round(price * (1 - spread / 200), 6),
-            ask_price=round(price * (1 + spread / 200), 6),
-            spread_pct=round(spread, 3),
-            mid_price=price,
-            bid_depth_usd=round(bid_depth_usd, 0),
-            ask_depth_usd=round(ask_depth_usd, 0),
-            imbalance=round(imbalance, 3),
-            estimated_slippage_pct=round(slippage, 3),
-            liquidity_score=round(liq_score, 3),
-            pressure=pressure,
-            is_tradeable=liq_score >= 0.4,
-            warnings=["البيانات من CoinGecko (حجم تداول حقيقي)"],
-            source="coingecko",
-        )
-
-    def _build_safe_fallback(self, symbol: str) -> LiquidityProfile:
-        """Fallback آمن عند فشل جميع المصادر."""
-        return LiquidityProfile(
-            symbol=symbol,
-            bid_price=0, ask_price=0,
-            spread_pct=0.3, mid_price=0,
-            bid_depth_usd=50_000, ask_depth_usd=50_000,
-            imbalance=0.5,
-            estimated_slippage_pct=0.15,
-            liquidity_score=0.4,
-            pressure="neutral",
-            is_tradeable=True,
-            warnings=["بيانات غير متاحة — تقديرات افتراضية"],
-            source="fallback",
-        )
-
-    # ═══════════════════════════════════════════════════════════
-    # 2. تحليل الجدران (Walls)
-    # ═══════════════════════════════════════════════════════════
     async def detect_walls(self, symbol: str,
                             depth_limit: int = 100) -> OrderFlowSignal:
         """يكشف جدران الشراء والبيع في Order Book."""

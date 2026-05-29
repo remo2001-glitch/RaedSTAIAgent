@@ -745,6 +745,127 @@ class DataLayer:
     # ═══════════════════════════════════════════════════════════
     # 5. On-Chain — يُعيد دائماً Dict
     # ═══════════════════════════════════════════════════════════
+
+    # ═══ مؤشرات On-Chain المتقدمة ═══
+
+    async def get_funding_rate(self, symbol: str) -> dict:
+        """يجلب Funding Rate من OKX + Binance."""
+        key = f"funding:{symbol}"
+        if cached := _cached(key, "funding"):
+            return cached
+        result = {"rate": 0.0, "rate_pct": 0.0, "signal": "محايد", "source": "unknown"}
+        try:
+            # OKX
+            inst = f"{symbol.upper()}-USDT-SWAP"
+            url  = f"https://www.okx.com/api/v5/public/funding-rate?instId={inst}"
+            if self.session:
+                async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=8)) as r:
+                    if r.status == 200:
+                        data = await r.json()
+                        items = data.get("data", [])
+                        if items:
+                            rate = float(items[0].get("fundingRate", 0))
+                            result = {
+                                "rate":     rate,
+                                "rate_pct": round(rate * 100, 4),
+                                "signal":   "⚠️ ضغط على Longs" if rate > 0.0005
+                                            else "✅ فرصة Longs" if rate < -0.0001
+                                            else "⚪ محايد",
+                                "source":   "okx",
+                            }
+                            _store(key, result, "funding")
+                            return result
+        except Exception as e:
+            logger.debug(f"funding_rate ({symbol}): {e}")
+        return result
+
+    async def get_open_interest(self, symbol: str) -> dict:
+        """يجلب Open Interest من OKX."""
+        key = f"oi:{symbol}"
+        if cached := _cached(key, "funding"):
+            return cached
+        result = {"oi_usd": 0.0, "oi_change_pct": 0.0, "signal": "محايد", "source": "unknown"}
+        try:
+            inst = f"{symbol.upper()}-USDT-SWAP"
+            url  = f"https://www.okx.com/api/v5/rubik/stat/contracts/open-interest-history?instId={inst}&period=1H&limit=2"
+            if self.session:
+                async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=8)) as r:
+                    if r.status == 200:
+                        data  = await r.json()
+                        items = data.get("data", [])
+                        if len(items) >= 2:
+                            oi_now  = float(items[0][1]) if items[0] else 0
+                            oi_prev = float(items[1][1]) if items[1] else oi_now
+                            chg     = (oi_now - oi_prev) / max(oi_prev, 1) * 100
+                            result  = {
+                                "oi_usd":        oi_now,
+                                "oi_change_pct": round(chg, 2),
+                                "signal":        "📈 ضغط شرائي" if chg > 5
+                                                 else "📉 ضغط بيعي" if chg < -5
+                                                 else "⚪ محايد",
+                                "source":        "okx",
+                            }
+                            _store(key, result, "funding")
+                            return result
+        except Exception as e:
+            logger.debug(f"open_interest ({symbol}): {e}")
+        return result
+
+    async def get_whale_ratio(self, symbol: str) -> dict:
+        """يجلب Exchange Whale Ratio من CoinGlass."""
+        key = f"whale:{symbol}"
+        if cached := _cached(key, "onchain"):
+            return cached
+        result = {"ratio": 0.0, "signal": "محايد", "inflow": 0.0, "outflow": 0.0}
+        try:
+            url  = f"https://open-api.coinglass.com/public/v2/indicator/exchange_whale_ratio?symbol={symbol.upper()}&timeType=h4"
+            if self.session:
+                async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=8)) as r:
+                    if r.status == 200:
+                        data  = await r.json()
+                        items = data.get("data", {})
+                        if items:
+                            ratio = float(items.get("whaleRatio", 0))
+                            result = {
+                                "ratio":   round(ratio, 3),
+                                "signal":  "🔴 الحيتان تبيع" if ratio > 0.85
+                                           else "🟢 الحيتان تتراكم" if ratio < 0.60
+                                           else "🟡 نشاط متوسط",
+                                "inflow":  float(items.get("exchangeInflow",  0)),
+                                "outflow": float(items.get("exchangeOutflow", 0)),
+                            }
+                            _store(key, result, "onchain")
+                            return result
+        except Exception as e:
+            logger.debug(f"whale_ratio ({symbol}): {e}")
+        return result
+
+    async def get_miner_flows(self, symbol: str = "BTC") -> dict:
+        """يجلب نشاط تدفقات المعدنين."""
+        key = f"miner:{symbol}"
+        if cached := _cached(key, "onchain"):
+            return cached
+        # CoinGlass miner flows
+        result = {"outflow_30d": 0.0, "signal": "محايد"}
+        try:
+            url = f"https://open-api.coinglass.com/public/v2/indicator/miner_to_exchange?symbol={symbol}"
+            if self.session:
+                async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=8)) as r:
+                    if r.status == 200:
+                        data = await r.json()
+                        items = (data.get("data") or [])
+                        if items:
+                            flow = float(items[-1].get("amount", 0)) if items else 0
+                            result = {
+                                "outflow_30d": round(flow, 2),
+                                "signal": "⚠️ المعدنون يبيعون" if flow > 1000
+                                          else "✅ ضغط بيع منخفض",
+                            }
+                            _store(key, result, "onchain")
+        except Exception as e:
+            logger.debug(f"miner_flows ({symbol}): {e}")
+        return result
+
     async def get_onchain(self, protocol: str = "all") -> Dict:
         key = f"onchain:{protocol}"
         if cached := _cached(key, "onchain"):
@@ -768,7 +889,7 @@ class DataLayer:
             CEX_EXCLUDE = {
                 "binance","okx","bitfinex","bybit","coinbase","coinbase bridge","coinbase wrapped staked eth","coinbase wrapped","kraken",
                 "gate","kucoin","htx","huobi","crypto.com","bitstamp",
-                "gemini","bitget","mexc","binance cex","okx exchange","ssv network","lido","binance eth","wbtc","hyperliquid bridge","hyperliquid vault","coinbase bridge","coinbase wrapped",
+                "gemini","bitget","mexc","binance cex","okx exchange","ssv network","lido","binance eth","wbtc","hyperliquid bridge","hyperliquid vault","coinbase bridge","coinbase wrapped","binance bitcoin","binance staked btc","eigencloud","eigen cloud","wrapped bitcoin",
                 "binance staked eth","binance eth","binance btc",
                 "wrapped bitcoin","wbtc","coinbase wrapped staked eth",
             }
