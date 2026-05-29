@@ -773,8 +773,8 @@ async def cmd_autotrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "━━━━━━━━━━━━━━━━━━\n"
                 f"الوضع: {mode}\n"
                 f"الباقة: {tier_name}\n\n"
-                f"⏰ *جدول المسح*\n{_scan_schedule()}\n\n"
-                f"🔜 *المسح القادم:* {_next_scan()}\n\n"
+                "⏰ *جدول المسح*\n"
+                "01:00 · 05:00 · 09:00 · 13:00 · 17:00 · 21:00 KSA\n\n"
                 "للإيقاف الفوري: /autotrade off",
                 parse_mode=ParseMode.MARKDOWN)
 
@@ -789,14 +789,17 @@ async def cmd_autotrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         else:
             # عرض الحالة الحالية
-            schedule = f"⏰ جدول المسح:\n{_scan_schedule()}\n\n🔜 المسح القادم: {_next_scan()}\n\n" if is_on else ""
+            schedule_text = (
+                "⏰ *جدول المسح*\n"
+                "01:00 · 05:00 · 09:00 · 13:00 · 17:00 · 21:00 KSA\n\n"
+            ) if is_on else ""
             await update.message.reply_text(
                 "🤖 *التداول الآلي — رائد*\n"
                 "━━━━━━━━━━━━━━━━━━\n"
                 f"الحالة: {'✅ مُفعَّل' if is_on else '❌ مُوقَف'}\n"
                 f"الوضع: {mode}\n"
                 f"الباقة: {tier_name}\n\n"
-                f"{schedule}"
+                f"{schedule_text}"
                 f"{'للإيقاف: /autotrade off' if is_on else 'للتفعيل: /autotrade on'}",
                 parse_mode=ParseMode.MARKDOWN)
 
