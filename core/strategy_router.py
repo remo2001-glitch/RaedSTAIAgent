@@ -53,12 +53,26 @@ class SignalLayer:
                  onchain_data: Dict, news_sentiment: float,
                  backtest_win_rate: float, macro_data: Dict,
                  regime: RegimeResult) -> SignalResult:
+        """يُنتج إشارة شاملة — محمية من البيانات الناقصة."""
+        # حماية: candles فارغة → إشارة محايدة
+        candles = candles or []
+        if not onchain_data or not isinstance(onchain_data, dict):
+            onchain_data = {}
 
         # ── ١. تحليل تقني ──
-        tech = self._technical_signal(candles)
+        try:
+            tech = self._technical_signal(candles)
+        except Exception as e:
+            logger.warning(f"technical_signal ({symbol}): {e}")
+            tech = {"score": 0.5, "bias": "neutral", "rsi": 50,
+                    "ema_align": False, "macd_hist": 0, "bb_pos": 0.5,
+                    "vol_ratio": 1.0}
 
         # ── ٢. On-Chain ──
-        oc_score = self._onchain_signal(onchain_data)
+        try:
+            oc_score = self._onchain_signal(onchain_data)
+        except Exception:
+            oc_score = 0.5
 
         # ── ٣. الأخبار (sentiment -1 to +1 → 0 to 1) ──
         news_score = (news_sentiment + 1) / 2

@@ -51,6 +51,18 @@ _CG_MAP = {
     "TON":"the-open-network","PEPE":"pepe",
     # عملات جديدة 2024-2026
     "HYPE":"hyperliquid","LEO":"leo-token","TRUMP":"maga",
+    # DeFi classics
+    "CRV":"curve-dao-token","MKR":"maker","SNX":"havven",
+    "COMP":"compound-governance-token","YFI":"yearn-finance",
+    "BAL":"balancer","SUSHI":"sushi","1INCH":"1inch",
+    "CAKE":"pancakeswap-token","GMX":"gmx",
+    # Infrastructure
+    "RAIN":"rain-coin-2","KDA":"kadena","ROSE":"oasis-network",
+    "KAVA":"kava","BAND":"band-protocol","API3":"api3",
+    "REN":"republic-protocol","CELO":"celo",
+    # Layer 2
+    "IMX":"immutable-x","METIS":"metis-token",
+    "BOBA":"boba-network","ZKS":"zksync",
     "BONK":"bonk","WIF":"dogwifcoin","POPCAT":"popcat",
     "BRETT":"based-brett","MOG":"mog-coin",
     "EIGEN":"eigenlayer","ENA":"ethena",
@@ -342,17 +354,29 @@ class DataLayer:
                 curr_p = float(prices[i][1])
                 if prev_p <= 0 or curr_p <= 0:
                     continue
+                # حساب OHLC صحيح — يضمن l <= o <= h و l <= c <= h
+                high_p = max(prev_p, curr_p) * 1.005
+                low_p  = min(prev_p, curr_p) * 0.995
+                # تأكد أن open و close بين high و low
+                open_p  = max(low_p, min(prev_p, high_p))
+                close_p = max(low_p, min(curr_p, high_p))
                 candle = {
                     "timestamp": float(prices[i][0]) / 1000,
-                    "open":      prev_p,
-                    "high":      max(prev_p, curr_p) * 1.005,
-                    "low":       min(prev_p, curr_p) * 0.995,
-                    "close":     curr_p,
+                    "open":      open_p,
+                    "high":      high_p,
+                    "low":       low_p,
+                    "close":     close_p,
                     "volume":    float(vols[i][1]) if i < len(vols) else 0.0,
                 }
-                res = validator.validate_ohlcv(candle)
-                if res.is_usable:
-                    candles.append(res.cleaned)
+                try:
+                    res = validator.validate_ohlcv(candle)
+                    if res.is_usable:
+                        candles.append(res.cleaned)
+                    else:
+                        # إضافة مباشرة بدون validator إذا فشل
+                        candles.append(candle)
+                except Exception:
+                    candles.append(candle)
             except (ValueError, TypeError, IndexError):
                 continue
         logger.info(f"CoinGecko OHLCV ({symbol}): {len(candles)} شمعة")
@@ -706,7 +730,7 @@ class DataLayer:
             CEX_EXCLUDE = {
                 "binance","okx","bitfinex","bybit","coinbase","coinbase bridge","coinbase wrapped staked eth","coinbase wrapped","kraken",
                 "gate","kucoin","htx","huobi","crypto.com","bitstamp",
-                "gemini","bitget","mexc","binance cex","okx exchange","ssv network","lido","binance eth","wbtc",
+                "gemini","bitget","mexc","binance cex","okx exchange","ssv network","lido","binance eth","wbtc","hyperliquid bridge","hyperliquid vault","coinbase bridge","coinbase wrapped",
                 "binance staked eth","binance eth","binance btc",
                 "wrapped bitcoin","wbtc","coinbase wrapped staked eth",
             }

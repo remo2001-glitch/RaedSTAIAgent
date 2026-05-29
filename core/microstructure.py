@@ -90,7 +90,55 @@ class MicrostructureLayer:
                 logger.warning(f"Binance Order Book {ep} ({symbol}): {e}")
                 continue
 
-        # ── ٢. CoinGecko — حجم تداول حقيقي ──────────────────
+        # ── ٢. OKX Public API (Order Book حقيقي) ────────────
+        try:
+            if self.session:
+                okx_sym = f"{symbol.upper()}-USDT"
+                url = f"https://www.okx.com/api/v5/market/books?instId={okx_sym}&sz=50"
+                async with self.session.get(
+                    url, timeout=aiohttp.ClientTimeout(total=8)
+                ) as r:
+                    if r.status == 200:
+                        data  = await r.json()
+                        books = (data.get("data") or [{}])[0]
+                        bids  = books.get("bids", [])
+                        asks  = books.get("asks", [])
+                        if bids or asks:
+                            walls = self._compute_walls_from_levels(symbol, bids, asks)
+                            profile = self._build_profile_from_walls(
+                                symbol, walls, bids, asks, order_size_usd)
+                            profile.source = "okx"
+                            self._cache[symbol] = (profile, time.time())
+                            logger.info(f"Liquidity OKX ({symbol}): ✅ Order Book حقيقي")
+                            return profile
+        except Exception as e:
+            logger.debug(f"OKX Order Book ({symbol}): {e}")
+
+        # ── ٣. Bybit Public API ───────────────────────────────
+        try:
+            if self.session:
+                url = (f"https://api.bybit.com/v5/market/orderbook"
+                       f"?category=spot&symbol={symbol.upper()}USDT&limit=50")
+                async with self.session.get(
+                    url, timeout=aiohttp.ClientTimeout(total=8)
+                ) as r:
+                    if r.status == 200:
+                        data = await r.json()
+                        res  = data.get("result", {})
+                        bids = res.get("b", [])
+                        asks = res.get("a", [])
+                        if bids or asks:
+                            walls = self._compute_walls_from_levels(symbol, bids, asks)
+                            profile = self._build_profile_from_walls(
+                                symbol, walls, bids, asks, order_size_usd)
+                            profile.source = "bybit"
+                            self._cache[symbol] = (profile, time.time())
+                            logger.info(f"Liquidity Bybit ({symbol}): ✅ Order Book حقيقي")
+                            return profile
+        except Exception as e:
+            logger.debug(f"Bybit Order Book ({symbol}): {e}")
+
+        # ── ٤. CoinGecko — حجم تداول تقديري ──────────────────
         try:
             from core.data_layer import _cg_id, _fetch, _H_CG
             if self.session:
