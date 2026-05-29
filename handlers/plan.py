@@ -13,6 +13,11 @@ from telegram import Update
 from telegram.ext import ContextTypes, CommandHandler, MessageHandler, filters
 from telegram.constants import ParseMode
 from core.middleware import require_tier
+try:
+    from core.coins_list import is_symbol_allowed, get_tier_message
+except ImportError:
+    is_symbol_allowed = lambda s, t: True
+    get_tier_message  = lambda s, t: f'⛔ {s} غير متاحة'
 from core.state_manager import state_manager as _sm
 
 

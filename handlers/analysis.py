@@ -17,6 +17,7 @@
 import asyncio
 import logging
 from core.middleware import require_tier
+from core.coins_list import is_symbol_allowed, get_tier_message
 from telegram import Update
 from telegram.ext import ContextTypes, CommandHandler, MessageHandler, filters
 from core.state_manager import state_manager as _sm
@@ -266,6 +267,14 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     args   = context.args or ["BTC"]
     symbol = args[0].upper()
+
+    # فحص الباقة
+    user_id2 = update.effective_user.id
+    tier2    = _sm.get_tier(user_id2)
+    if not is_symbol_allowed(symbol, tier2):
+        await update.message.reply_text(
+            get_tier_message(symbol, tier2), parse_mode="Markdown"); return
+
     msg = await update.message.reply_text(
         f"📡 جاري تحليل {symbol} عبر ٥ مصادر...\n"
         "⏳ قد يستغرق ١٠-٢٠ ثانية — يُرجى الانتظار"
@@ -505,7 +514,13 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     args   = context.args or []
-    symbol = args[0].upper() if args else ""
+    symbol = args[0].upper()
+
+    # فحص الباقة للعملة المطلوبة
+    tier_an = _sm.get_tier(user_id)
+    if not is_symbol_allowed(symbol, tier_an):
+        await update.message.reply_text(
+            get_tier_message(symbol, tier_an), parse_mode="Markdown"); return
     if not symbol:
         await update.message.reply_text(
             "📊 مثال الاستخدام: /analyze BTC\n"
