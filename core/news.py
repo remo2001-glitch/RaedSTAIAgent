@@ -35,6 +35,33 @@ SENTIMENT_LABELS = {
 }
 
 
+
+def _translate_news_title(title: str) -> str:
+    """ترجمة المصطلحات الشائعة في عناوين الأخبار."""
+    if not title:
+        return title
+    arabic_chars = sum(1 for c in title if "؀" <= c <= "ۿ")
+    if arabic_chars > len(title) * 0.3:
+        return title
+    replacements = {
+        "Bitcoin": "بيتكوين", "Ethereum": "إيثيريوم", "SEC": "هيئة SEC",
+        "ETF": "صندوق ETF", "approval": "موافقة", "approved": "وافقت",
+        "fraud": "احتيال", "charges": "تهم قانونية", "billion": "مليار",
+        "million": "مليون", "record": "رقم قياسي", "outflow": "تدفق خروج",
+        "inflow": "تدفق دخول", "rally": "ارتفاع", "crash": "انهيار",
+        "surge": "قفزة", "ban": "حظر", "hack": "اختراق",
+        "exchange": "منصة تداول", "institutional": "مؤسسي",
+        "adoption": "تبني", "regulation": "تنظيم",
+        "lawsuit": "دعوى قضائية", "treasury": "خزينة",
+        "analyst": "محلل", "market": "سوق", "global": "عالمي",
+        "crypto": "كريبتو", "blockchain": "بلوكتشين",
+        "trading": "تداول", "indicator": "مؤشر",
+    }
+    result = title
+    for en, ar in replacements.items():
+        result = result.replace(en, ar).replace(en.lower(), ar)
+    return result
+
 class NewsEngine:
     def __init__(self, groq_key: str = "", session: Optional[aiohttp.ClientSession] = None):
         self.groq_key = groq_key
@@ -468,6 +495,8 @@ class NewsEngine:
                         result.get("analysis") or
                         result.get("market_impact_ar") or "")
                 if text and len(text) > 20:
+                    # إزالة سطور الهيدر المكررة (السعر/RSI/السوق) من بداية النص
+                    text = _strip_header_duplicates(text)
                     return text
         except Exception as _ae:
             logger.error(f"analyze_symbol ({symbol}): {_ae}")

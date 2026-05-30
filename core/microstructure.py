@@ -454,16 +454,18 @@ class MicrostructureLayer:
         if walls is not None and not isinstance(walls, Exception) and not isinstance(walls, bool):
             buy_walls  = getattr(walls, "buy_walls",  []) or []
             sell_walls = getattr(walls, "sell_walls", []) or []
+            # عرض أعلى/أدنى أمر (ملاحظة #26)
+            lines += ["", "📋 *جدران الأوامر*"]
             if buy_walls:
-                lines += ["", "📋 *أكبر أوامر الشراء (Bids)*"]
-                for w in buy_walls[:3]:
-                    lines.append(f"• ${w['price']:,.2f} — ${w['value_usd']/1e6:.2f}M")
+                top_bid = buy_walls[0]
+                lines.append(f"• أعلى أمر شراء (Bid): ${top_bid['price']:,.2f} — ${top_bid['value_usd']/1e6:.2f}M")
+            else:
+                lines.append("• أعلى أمر شراء (Bid): غير متاح")
             if sell_walls:
-                lines += ["", "📋 *أكبر أوامر البيع (Asks)*"]
-                for w in sell_walls[:3]:
-                    lines.append(f"• ${w['price']:,.2f} — ${w['value_usd']/1e6:.2f}M")
-            if not buy_walls and not sell_walls:
-                lines += ["", "📋 جدران السوق: لا توجد أوامر كبيرة حالياً"]
+                top_ask = sell_walls[0]
+                lines.append(f"• أدنى أمر بيع (Ask):  ${top_ask['price']:,.2f} — ${top_ask['value_usd']/1e6:.2f}M")
+            else:
+                lines.append("• أدنى أمر بيع (Ask):  غير متاح")
 
             # دعم ومقاومة
             sup = getattr(walls, "support_level", 0)
@@ -536,11 +538,12 @@ class MicrostructureLayer:
             total_bid  = sum(float(b[0]) * float(b[1]) for b in bids[:20])
             total_ask  = sum(float(a[0]) * float(a[1]) for a in asks[:20])
             total      = total_bid + total_ask
-            imbalance  = (total_bid - total_ask) / max(total, 1)
+            total_dep  = total_bid + total_ask
+            imbalance  = total_bid / max(total_dep, 1)  # 0=كل بيع, 1=كل شراء
             best_bid   = float(bids[0][0]) if bids else 0
             best_ask   = float(asks[0][0]) if asks else 0
             mid_price  = (best_bid + best_ask) / 2 if best_bid and best_ask else 0
-            spread     = abs(best_ask - best_bid) / max(best_bid, 1) * 100
+            spread     = abs(best_ask - best_bid) / max(best_bid, 0.0001) * 100
             slippage   = order_size_usd / max(total_bid, 1) * 100 if total_bid > 0 else 1.0
             score      = min(1.0, total / 1e6 * 0.5 + (1 - min(spread, 1)) * 0.5)
             warnings_  = []
@@ -555,7 +558,7 @@ class MicrostructureLayer:
                 imbalance=round(imbalance, 3),
                 estimated_slippage_pct=round(slippage, 4),
                 liquidity_score=round(score, 3),
-                pressure=round(imbalance, 3),
+                pressure=("شراء" if imbalance > 0.55 else "بيع" if imbalance < 0.45 else "neutral"),
                 is_tradeable=score > 0.3,
                 warnings=warnings_,
                 source="exchange",

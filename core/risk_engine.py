@@ -76,14 +76,25 @@ class RiskEngine:
     # ═══════════════════════════════════════════════════════════
     # نقطة الدخول الرئيسية
     # ═══════════════════════════════════════════════════════════
+    MAX_AUTO_LEVERAGE = 3
+
     def assess(self, symbol: str, direction: str, confidence: float,
                price: float, atr_pct: float, regime: str,
-               portfolio_value: Optional[float] = None) -> RiskAssessment:
+               portfolio_value: Optional[float] = None,
+               trade_type: str = "spot",
+               is_autotrade: bool = False,
+               leverage: int = 1) -> RiskAssessment:
         """
         يُقيّم الصفقة ويُعيد القرار النهائي مع الحجم المعدّل.
         """
         portfolio = portfolio_value or self._cur_value
         reasons, warnings = [], []
+
+        # ── فحص ٠: رافعة التداول الآلي
+        if is_autotrade and trade_type in ("futures_long", "futures_short"):
+            if leverage > self.MAX_AUTO_LEVERAGE:
+                msg = "الرافعة " + str(leverage) + "X تتجاوز حد الأوتوتريد (" + str(self.MAX_AUTO_LEVERAGE) + "X) — نفّذ يدوياً"
+                return self._reject(msg, 0, confidence)
 
         # ── فحص ١: الثقة ──────────────────────────────────────
         if confidence < self.cfg["min_confidence"]:
@@ -310,6 +321,44 @@ def _decision_ar(d: RiskDecision) -> str:
 def _today_str() -> str:
     from datetime import date
     return str(date.today())
+
+
+    def validate_futures_leverage(self, leverage: int, is_autotrade: bool):
+        """يتحقق من الرافعة — يعيد (ok, message)."""
+        if is_autotrade and leverage > self.MAX_AUTO_LEVERAGE:
+            return False, (
+                "⛔ *الرافعة في التداول الآلي محدودة بـ 3X*\n\n"
+                "• طلبك: " + str(leverage) + "X\n"
+                "• الحد المسموح: 3X\n\n"
+                "للتداول برافعة أعلى يُرجى التنفيذ اليدوي عبر /execute"
+            )
+        if leverage > 10:
+            return True, "⚠️ رافعة مرتفعة جداً — خطر تصفية عالٍ"
+        return True, ""
+
+    def format_futures_signal_ar(self, symbol: str, direction: str,
+                                   entry: float, target: float,
+                                   stop: float, leverage: int = 1,
+                                   is_autotrade: bool = False) -> str:
+        """تنسيق إشارة Futures عربي."""
+        rr    = abs(target - entry) / max(abs(stop - entry), 0.0001)
+        d_ar  = "📈 Long" if "long" in direction else "📉 Short"
+        lev_n = "• الرافعة: " + str(leverage) + "X" + (" (أوتوتريد — حد 3X)" if is_autotrade else "")
+        p_fmt = lambda p: ("${:,.2f}".format(p) if p >= 1000 else "${:,.4f}".format(p))
+        pct   = lambda a, b: abs(a - b) / max(b, 0.0001) * 100
+        lines = [
+            d_ar + " Futures — " + symbol,
+            "━━━━━━━━━━━━━━━━━━",
+            "• دخول: " + p_fmt(entry),
+            "• هدف:  " + p_fmt(target) + " (+" + "{:.1f}".format(pct(target, entry)) + "%)",
+            "• وقف:  " + p_fmt(stop)   + " (-"  + "{:.1f}".format(pct(stop, entry))  + "%)",
+            "• R/R:  1:" + "{:.1f}".format(rr),
+            lev_n,
+            "",
+            "⚠️ متاح لمن لديه ربط Futures فعّال (/live)",
+            "⚠️ هذا التحليل استرشادي — القرار للمستخدم",
+        ]
+        return "\n".join(lines)
 
 
 # Singleton

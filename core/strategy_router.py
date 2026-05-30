@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 class SignalResult:
     symbol:          str
     direction:       str        # "long" | "short" | "neutral"
+    trade_type:      str = "spot"  # "spot" | "futures_long" | "futures_short"
     confidence:      float      # 0–1
     signal_sources:  Dict[str, float]  # source → contribution
     technicals:      Dict
@@ -96,15 +97,41 @@ class SignalLayer:
         regime_adj = _regime_confidence_adj(regime.regime)
         confidence = min(raw_conf * regime_adj, 0.97)
 
-        direction = "neutral"
+        # ── تحديد الاتجاه مع دعم Futures ────────────────────────
+        direction      = "neutral"
+        trade_type     = "spot"   # spot | futures_long | futures_short
+        rsi_val        = tech.get("rsi", 50)
+        is_bear_regime = regime.regime.value in ("bear_trend", "distribution")
+        is_bull_regime = regime.regime.value in ("bull_trend", "accumulation")
+
         if confidence > 0.65 and tech["bias"] == "bullish":
-            direction = "long"
+            direction  = "long"
+            trade_type = "spot"
+            # Futures Long: سوق صاعد + RSI مقبول + EMA مؤكد
+            if is_bull_regime and rsi_val < 65 and tech.get("ema_align"):
+                trade_type = "futures_long"
+
         elif confidence > 0.65 and tech["bias"] == "bearish":
-            direction = "short"
+            direction  = "short"
+            trade_type = "spot"  # Spot: لا تقصير في Spot عادة
+            # Futures Short: سوق هابط + RSI فوق 40 (ليس ذروة بيع)
+            if is_bear_regime and rsi_val > 40:
+                trade_type = "futures_short"
+
+        # ذروة شراء RSI>70 في أي سوق → Short Futures فرصة
+        elif rsi_val > 72 and confidence > 0.60 and is_bear_regime:
+            direction  = "short"
+            trade_type = "futures_short"
+
+        # ذروة بيع RSI<25 + هابط → Long Futures انعكاس محتمل (بتأكيد أعلى)
+        elif rsi_val < 25 and confidence > 0.70 and is_bear_regime:
+            direction  = "long"
+            trade_type = "futures_long"
 
         return SignalResult(
             symbol=symbol,
             direction=direction,
+            trade_type=trade_type,
             confidence=round(confidence, 3),
             signal_sources={
                 "technical": round(tech["score"], 3),
@@ -253,10 +280,19 @@ class SignalLayer:
         elif vol_r > 3.0:
             warnings.append(f"📈 حجم مرتفع {vol_r:.1f}x — تأكيد الحركة")
 
+        # تسمية نوع الصفقة
+        trade_label = ""
+        tt = getattr(s, "trade_type", "spot")
+        if tt == "futures_long":
+            trade_label = " 📈 Futures Long"
+        elif tt == "futures_short":
+            trade_label = " 📉 Futures Short"
+
         text = (
-            f"📡 *إشارة رائد — {s.symbol}*\n"
+            f"📡 *إشارة رائد — {s.symbol}*{trade_label}\n"
             f"━━━━━━━━━━━━━━━━━━\n"
-            f"الاتجاه: {'🟢 شراء' if s.direction=='long' else '🔴 بيع' if s.direction=='short' else '⚪ محايد'}\n"
+            f"الاتجاه: {'🟢 شراء' if s.direction=='long' else '🔴 بيع' if s.direction=='short' else '⚪ محايد'}"
+            + (f" ({tt.replace('_', ' ').title()})" if tt != 'spot' else "") + "\n"
             f"الثقة:  {bar} {s.confidence:.0%}\n\n"
             f"📊 *مصادر الإشارة*\n"
             f"• تقني:    {s.signal_sources['technical']:.0%}\n"
@@ -302,6 +338,7 @@ STRATEGY_AR = {
 REGIME_TO_STRATEGIES = {
     Regime.BULL_TREND:       [Strategy.TREND_FOLLOWING, Strategy.BREAKOUT],
     Regime.BEAR_TREND:       [Strategy.MEAN_REVERSION, Strategy.REDUCE_EXPOSURE],
+    # ملاحظة: Futures Short تُضاف من SignalLayer.generate() مباشرة
     Regime.SIDEWAYS:         [Strategy.MEAN_REVERSION, Strategy.ARBITRAGE],
     Regime.HIGH_VOLATILITY:  [Strategy.VOLATILITY_EXPANSION, Strategy.REDUCE_EXPOSURE],
     Regime.ACCUMULATION:     [Strategy.ONCHAIN_ACCUMULATION, Strategy.TREND_FOLLOWING],
@@ -374,7 +411,8 @@ class PortfolioEngine:
 
     def allocate(self, candidates: List[SignalResult],
                  portfolio_value: float,
-                 regime: RegimeResult) -> List[AllocationResult]:
+                 regime: RegimeResult,
+                 event_multiplier: float = 1.0) -> List[AllocationResult]:
         """
         candidates: قائمة إشارات مرتبة بالثقة
         يوزع رأس المال بين الأفضل وفق القيود.
