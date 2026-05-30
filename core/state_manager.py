@@ -1,6 +1,6 @@
 """
-رائد — State Manager v5
-نظام الباقات المحدَّث مع دعم الباقة الخاصة القابلة للتخصيص
+رائد — State Manager v5.1
+إصلاح: ذاكرة المستخدمين + رسائل الباقات
 """
 
 import json
@@ -15,20 +15,18 @@ logger = logging.getLogger(__name__)
 STATE_FILE = os.path.join(os.path.dirname(__file__), '..', 'bot_state.json')
 
 # ═══════════════════════════════════════════════════════════
-# تعريف الباقات — محدَّث
+# تعريف الباقات
 # ═══════════════════════════════════════════════════════════
 TIERS = {
     "free":    {"name": "🆓 مجاني",   "coins": 30,   "level": 0},
     "silver":  {"name": "🥈 فضي",     "coins": 90,   "level": 1},
     "gold":    {"name": "🥇 ذهبي",    "coins": 150,  "level": 2},
     "diamond": {"name": "💎 ماسي",    "coins": 350,  "level": 3},
-    "custom":  {"name": "⚙️ خاصة",   "coins": 100,  "level": 2},  # قابلة للتخصيص
+    "custom":  {"name": "⚙️ خاصة",   "coins": 100,  "level": 2},
     "admin":   {"name": "👑 مدير",    "coins": 9999, "level": 99},
 }
 
-# ═══════════════════════════════════════════════════════════
-# الأوامر والباقات المطلوبة
-# ═══════════════════════════════════════════════════════════
+# الأوامر والباقة المطلوبة لكل أمر
 CMD_TIER = {
     # ── مجاني ──
     "start":         "free",
@@ -57,7 +55,7 @@ CMD_TIER = {
     # ── ذهبي ──
     "analyze":       "gold",
     "planweek":      "gold",
-    "backtest":      "gold",
+    "backtest":      "gold",   # ✅ إصلاح #4: نُقل من ماسي إلى ذهبي
 
     # ── ماسي ──
     "chart":         "diamond",
@@ -74,17 +72,61 @@ CMD_TIER = {
     "setcustom":     "admin",
 }
 
-# ═══════════════════════════════════════════════════════════
 # المنصات لكل باقة
-# ═══════════════════════════════════════════════════════════
 TIER_EXCHANGES = {
-    "free":    [],                                          # لا ربط حقيقي
+    "free":    [],
     "silver":  ["okx"],
     "gold":    ["okx", "bitget", "bybit"],
     "diamond": ["okx", "bitget", "bybit", "binance", "mexc"],
-    "custom":  ["okx"],                                    # قابل للتخصيص
+    "custom":  ["okx"],
     "admin":   ["okx", "bitget", "bybit", "binance", "mexc"],
 }
+
+# ═══════════════════════════════════════════════════════════
+# رسائل الترقية — مخصصة لكل باقة وكل أمر
+# ═══════════════════════════════════════════════════════════
+
+# ترتيب الباقات للعرض
+TIER_ORDER = ["free", "silver", "gold", "diamond"]
+TIER_UPGRADE_CMD = {
+    "free":    "الباقة المجانية",
+    "silver":  "الباقة الفضية",
+    "gold":    "الباقة الذهبية",
+    "diamond": "الباقة الماسية",
+}
+
+def _build_blocked_message(user_tier: str, required_tier: str, command: str) -> str:
+    """
+    بناء رسالة ترقية دقيقة:
+    - تذكر باقة المستخدم الحالية
+    - تذكر الباقة المطلوبة بالضبط
+    - تعرض الأمر المحجوب
+    """
+    curr_name = TIERS[user_tier]["name"]
+    req_name  = TIERS[required_tier]["name"]
+
+    # تحديد الباقة التالية المباشرة للمستخدم
+    curr_level = TIERS[user_tier]["level"]
+    next_tier  = None
+    for t in TIER_ORDER:
+        if TIERS[t]["level"] > curr_level:
+            next_tier = t
+            break
+
+    next_name = TIERS[next_tier]["name"] if next_tier else req_name
+
+    # هل المطلوب هو الباقة التالية مباشرة أم أعلى؟
+    if next_tier and TIERS[next_tier]["level"] >= TIERS[required_tier]["level"]:
+        upgrade_to = next_name
+    else:
+        upgrade_to = req_name
+
+    return (
+        f"🔒 *هذا الأمر غير متاح في باقتك*\n\n"
+        f"• باقتك الحالية: {curr_name}\n"
+        f"• الأمر `/{command}` متاح من: {req_name} وأعلى\n\n"
+        f"⬆️ للترقية إلى {upgrade_to}: /upgrade"
+    )
 
 
 class StateManager:
@@ -95,7 +137,7 @@ class StateManager:
         self._init_redis()
         self._load_fallback()
         self._apply_env_vars()
-        logger.info(f"✅ StateManager v5 (Redis={'✅' if self._redis_ok else '❌ fallback'})")
+        logger.info(f"✅ StateManager v5.1 (Redis={'✅' if self._redis_ok else '❌ fallback'})")
 
     # ─── Redis ───────────────────────────────────────────────
     def _init_redis(self):
@@ -152,6 +194,7 @@ class StateManager:
             if os.path.exists(STATE_FILE):
                 with open(STATE_FILE, 'r', encoding='utf-8') as f:
                     self._state = json.load(f)
+                logger.info(f"✅ State loaded: {len(self._state.get('users', {}))} users")
         except Exception as e:
             logger.warning(f"state load: {e}")
             self._state = {"users": {}}
@@ -182,15 +225,28 @@ class StateManager:
         logger.info("✅ StateManager: initialized")
 
     def _sync_from_redis(self):
+        """
+        ✅ إصلاح #1: مزامنة ثنائية الاتجاه بين Redis و _state
+        يضمن عدم فقدان بيانات المستخدمين بعد كل deploy
+        """
         try:
-            users = self._redis_get_all_users()
-            for uid in users:
+            # أولاً: تحميل كل مستخدمي Redis إلى _state
+            redis_users = self._redis_get_all_users()
+            for uid in redis_users:
                 ud = self._redis_get_user(uid)
                 if ud:
                     self._state.setdefault("users", {})[str(uid)] = ud
-            if users:
+
+            # ثانياً: رفع مستخدمي _state إلى Redis (إذا لم يكونوا فيه)
+            for uid_str, ud in self._state.get("users", {}).items():
+                if uid_str.isdigit():
+                    uid = int(uid_str)
+                    if uid not in redis_users and isinstance(ud, dict) and ud.get("tier", "free") != "free":
+                        self._redis_set_user(uid, ud)
+
+            if redis_users:
                 self.save()
-                logger.info(f"✅ Redis sync: {len(users)} users")
+                logger.info(f"✅ Redis sync ثنائي: {len(redis_users)} users من Redis")
         except Exception as e:
             logger.warning(f"_sync_from_redis: {e}")
 
@@ -231,7 +287,6 @@ class StateManager:
         tier = self.get_tier(user_id)
         if tier == "admin":
             return 9999
-        # الباقة الخاصة قد تحتوي حداً مخصصاً
         ud = self._get_user(user_id)
         if tier == "custom" and "custom_coins" in ud:
             return int(ud["custom_coins"])
@@ -240,27 +295,24 @@ class StateManager:
     def can_use_command(self, user_id: int, command: str) -> bool:
         tier     = self.get_tier(user_id)
         required = CMD_TIER.get(command, "free")
-        # الباقة الخاصة: فحص الأوامر المخصصة
         if tier == "custom":
             ud = self._get_user(user_id)
             custom_cmds = ud.get("custom_commands", [])
             if custom_cmds:
                 return command in custom_cmds
-            # fallback: مستوى ذهبي افتراضياً
             return TIERS["gold"]["level"] >= TIERS[required]["level"]
         if tier == "admin":
             return True
         return TIERS[tier]["level"] >= TIERS[required]["level"]
 
     def get_blocked_reason(self, user_id: int, command: str) -> str:
-        required  = CMD_TIER.get(command, "free")
-        req_name  = TIERS[required]["name"]
-        curr_name = self.get_tier_name(user_id)
-        return (
-            f"🔒 هذا الأمر يتطلب *{req_name}* أو أعلى\n\n"
-            f"باقتك الحالية: {curr_name}\n\n"
-            f"⬆️ للترقية: /upgrade"
-        )
+        """
+        ✅ إصلاح #3: رسائل ترقية دقيقة لكل مستخدم
+        تعرض باقته الحالية والباقة المطلوبة بالضبط
+        """
+        user_tier    = self.get_tier(user_id)
+        required     = CMD_TIER.get(command, "free")
+        return _build_blocked_message(user_tier, required, command)
 
     def allowed_exchanges(self, user_id: int) -> List[str]:
         tier = self.get_tier(user_id)
@@ -275,13 +327,11 @@ class StateManager:
         return exchange.lower() in self.allowed_exchanges(user_id)
 
     def can_use_live_trading(self, user_id: int) -> bool:
-        """المجاني لا يستطيع ربط منصة حقيقية."""
         return self.get_tier(user_id) != "free"
 
     # ═══ الباقة الخاصة ══════════════════════════════════════
     def set_custom_tier(self, user_id: int, config: dict,
                          requester_id: int = 0) -> bool:
-        """يضبط باقة خاصة مخصصة — للمدير فقط."""
         if requester_id and self.get_tier(requester_id) != "admin":
             return False
         ud = self._get_user(user_id)
@@ -440,6 +490,10 @@ class StateManager:
 
     # ═══ Profile ════════════════════════════════════════════
     def format_profile_ar(self, user_id: int) -> str:
+        """
+        ✅ إصلاح #2: عرض معلومات الباقة الصحيحة للمستخدم
+        مع قائمة الأوامر المتاحة لباقته
+        """
         tier      = self.get_tier(user_id)
         tier_info = TIERS[tier]
         owner     = self._get_owner_id()
@@ -451,12 +505,19 @@ class StateManager:
         exchanges = self.allowed_exchanges(user_id)
         ex_str    = ", ".join(e.upper() for e in exchanges) if exchanges else "❌ لا ربط حقيقي"
 
-        # الباقة الخاصة
         if tier == "custom":
             cfg = self.get_custom_config(user_id)
             tier_display = cfg.get("label", "⚙️ خاصة")
         else:
             tier_display = "👑 مالك" if is_owner else tier_info["name"]
+
+        # قائمة الأوامر المتاحة لهذه الباقة
+        available_cmds = [
+            f"/{cmd}" for cmd, req in CMD_TIER.items()
+            if self.can_use_command(user_id, cmd)
+            and req != "admin"  # لا نعرض أوامر المدير للمستخدمين
+        ]
+        cmds_str = "  ".join(sorted(available_cmds)) if available_cmds else "—"
 
         lines = [
             f"👤 *ملف المستخدم*",
@@ -467,7 +528,8 @@ class StateManager:
             f"• المنصات: {ex_str}",
             f"• Futures: {'✅' if futures else '❌'}",
             f"• Margin: {'✅' if margin else '❌'}",
-            f"• التخزين: {'🟢 Redis متصل' if self._redis_ok else '🟡 ملف محلي'}",
+            f"• التخزين: {self.get_redis_status()}",
+            f"\n📋 *أوامرك المتاحة:*\n{cmds_str}",
         ]
         return "\n".join(lines)
 
@@ -486,12 +548,21 @@ class StateManager:
         except Exception: return set()
 
     def _get_user(self, user_id: int) -> dict:
+        """
+        ✅ إصلاح #1: يبحث أولاً في Redis ثم في _state كـ fallback
+        يمنع فقدان بيانات المستخدمين عند إعادة التشغيل
+        """
         if self._redis_ok:
             rd = self._redis_get_user(user_id)
-            if rd: return dict(rd)
+            if rd:
+                # حفظ نسخة في _state أيضاً كـ backup
+                self._state.setdefault("users", {})[str(user_id)] = rd
+                return dict(rd)
+        # fallback إلى _state (ملف محلي أو ذاكرة)
         return dict(self._state.setdefault("users", {}).get(str(user_id), {}))
 
     def _set_user(self, user_id: int, data: dict):
+        """يحفظ في Redis و _state معاً دائماً."""
         if self._redis_ok:
             self._redis_set_user(user_id, data)
         self._state.setdefault("users", {})[str(user_id)] = data
