@@ -107,7 +107,7 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = await update.message.reply_text(
         f"📋 جاري بناء {plan_label}...\n"
-        + ("⏳ المسح الشامل يستغرق ٣٠-٦٠ ثانية — يُرجى الانتظار" if scan_mode
+        + ("⏳ المسح الشامل يستغرق ٦٠-١٢٠ ثانية — يُرجى الانتظار بصبر" if scan_mode
            else "⏳ قد يستغرق ٢٠-٤٠ ثانية — يُرجى عدم تكرار الأمر")
     )
     try:
@@ -244,11 +244,12 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                       else "🔴 بيع" if (cand or {}).get("direction") == "short"
                       else "⚪ انتظار")
             conf = float((cand or {}).get("confidence") or 0)
-            line = f"💎 *{sym_p}*"
-            if price_v > 0:
-                line += f" — ${price_v:,.2f}"
+            conf_warn = " ⚠️ دون حد الدخول" if (cand and conf < 0.65) else ""
+            # تنسيق السعر الصحيح حسب حجمه
+            price_str = _fmt_price(price_v) if price_v > 0 else "🔄 جاري الجلب"
+            line = f"💎 *{sym_p}* — {price_str}"
             if cand:
-                line += f" | {dir_ar} | ثقة: {conf:.0%}"
+                line += f" | {dir_ar} | ثقة: {conf:.0%}{conf_warn}"
             price_lines.append(line)
 
         lines += ["", "💰 *العملات المُحلَّلة*"] + price_lines
@@ -331,11 +332,20 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
             engine.data_layer.get_news(currencies=",".join(symbols), limit=10),
             return_exceptions=True,
         )
+        # retry لأي عملة فشل جلب بياناتها
+        ohlcv_sym_raw = [gathered[3+i] if isinstance(gathered[3+i], list) else []
+                         for i in range(len(symbols))]
+        for i, sym in enumerate(symbols):
+            if len(ohlcv_sym_raw[i]) < 20:
+                logger.warning(f"planweek: retry OHLCV for {sym}")
+                await asyncio.sleep(1)
+                retry = await engine.data_layer.get_ohlcv(sym, "1d", 100)
+                if isinstance(retry, list) and len(retry) >= 20:
+                    ohlcv_sym_raw[i] = retry
         fear      = gathered[0] if isinstance(gathered[0], dict)  else {"value": 50, "label_ar": "محايد"}
         onchain   = gathered[1] if isinstance(gathered[1], dict)  else {}
         btc_c     = (gathered[2] if isinstance(gathered[2], list) else []) or []
-        ohlcv_sym = [gathered[3+i] if isinstance(gathered[3+i], list) else []
-                     for i in range(len(symbols))]
+        ohlcv_sym = ohlcv_sym_raw  # بعد retry
         news_raw  = gathered[3+len(symbols)] if isinstance(gathered[3+len(symbols)], list) else []
         fear_val  = int((fear or {}).get("value") or 50)
 
@@ -415,9 +425,12 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             f"  • أو Fear & Greed < 25",
                         ]
 
+                # تنبيه إذا الثقة تحت الحد
+                conf_warning = " ⚠️ دون حد الدخول" if signal.confidence < 0.65 else ""
+                price_str = f" — {_fmt_price(price)}{change_str}" if price > 0 else " — 🔄 جاري جلب السعر"
                 lines += [
-                    f"💎 *{sym}*" + (f" — {_fmt_price(price)}{change_str}" if price > 0 else ""),
-                    f"  الإشارة: {dir_ar} | الثقة: {signal.confidence:.0%}",
+                    f"💎 *{sym}*{price_str}",
+                    f"  الإشارة: {dir_ar} | الثقة: {signal.confidence:.0%}{conf_warning}",
                     f"  الاستراتيجية: {strat_name}",
                 ] + entry_lines + [""]
             except Exception as e:

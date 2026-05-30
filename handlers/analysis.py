@@ -226,7 +226,18 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "━━━━━━━━━━━━━━━━━━",
             f"📊 إجمالي TVL: ${tvl/1e9:.2f}B",
             f"{fear_emoji} Fear & Greed: {fear_val} — {fear.get('label_ar', 'محايد')}",
+            f"📈 تغيير TVL 24h: {onchain.get('tvl_change_1d', 0):+.2f}٪",
         ]
+
+        # بيانات شبكة Bitcoin
+        btc_hashrate = onchain.get("btc_hashrate", 0)
+        btc_tx       = onchain.get("btc_tx_count_24h", 0)
+        if btc_hashrate > 0 or btc_tx > 0:
+            lines += ["", "⛏️ *شبكة Bitcoin*"]
+            if btc_hashrate > 0:
+                lines.append(f"• Hashrate: {btc_hashrate/1e9:.1f} EH/s")
+            if btc_tx > 0:
+                lines.append(f"• معاملات 24h: {btc_tx:,}")
 
         if top_p:
             lines += ["", "🏆 *أكبر البروتوكولات*"]
@@ -235,7 +246,7 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 name  = str(p.get("name", "")).replace("_", " ")
                 lines.append(f"{i}. {name} — ${tvl_b:.2f}B")
         else:
-            lines += ["", "⚠️ بيانات البروتوكولات غير متاحة حالياً"]
+            lines += ["", "⚠️ بيانات البروتوكولات غير متاحة حالياً — يُرجى المحاولة لاحقاً"]
 
         lines += ["", "📡 المصدر: DeFiLlama | 🤖 رائد"]
         await msg.edit_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
@@ -555,9 +566,8 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
     symbol = args[0].upper()
 
     # فحص الباقة للعملة المطلوبة
-    tier_an   = _sm.get_tier(user_id)
-    coin_lan  = _sm.coin_limit(user_id)
-    if not is_symbol_allowed(symbol, tier_an, coin_lan if tier_an == "custom" else 0):
+    tier_an = _sm.get_tier(user_id)
+    if not is_symbol_allowed(symbol, tier_an):
         await update.message.reply_text(
             (
                 f"⛔ *{symbol}* غير متاحة لباقتك الحالية\n\n"
@@ -573,7 +583,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    msg = await update.message.reply_text(f"🧠 جاري التحليل العميق لـ {symbol}...")
+    msg = await update.message.reply_text(f"🧠 جاري التحليل العميق لـ {symbol}...\n⏳ قد يستغرق ٢٠-٤٠ ثانية")
 
     try:
         price_d, candles, fear, btc_dom = await asyncio.gather(
@@ -658,17 +668,50 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                        f"RSI: {rsi:.0f} | السوق: {regime_desc}")
 
         change_sign = "+" if change_24h >= 0 else ""
+        # حساب مستويات دخول/خروج من ATR
+        atr_pct = _calc_atr(candles) / 100 if candles else 0.03
+        rsi_lbl = _rsi_label(rsi)
+        contradiction = _market_contradiction(rsi, fear_val, regime_desc)
+
+        # مستويات ذكية بناءً على ATR واتجاه السوق
+        if rsi < 40 and not ("هابط" in regime_desc and rsi > 30):
+            entry = price * (1 - atr_pct * 0.3)
+            tp1   = price * (1 + atr_pct * 1.5)
+            tp2   = price * (1 + atr_pct * 2.5)
+            sl    = price * (1 - atr_pct * 1.2)
+            levels_lines = [
+                "",
+                "📍 *مناطق الدخول والخروج*",
+                f"• دخول مقترح: {_fmt_price(entry)}",
+                f"• هدف ١: {_fmt_price(tp1)} ({atr_pct*150:.1f}%+)",
+                f"• هدف ٢: {_fmt_price(tp2)} ({atr_pct*250:.1f}%+)",
+                f"• وقف الخسارة: {_fmt_price(sl)} ({atr_pct*120:.1f}%-)",
+            ]
+        elif rsi > 65:
+            levels_lines = [
+                "",
+                "⚠️ *تحذير ذروة شراء*",
+                f"• RSI={rsi:.0f} — خطر انعكاس",
+                f"• انتظر تراجعاً إلى: {_fmt_price(price * (1 - atr_pct))}",
+            ]
+        else:
+            levels_lines = []
+
         parts = [
             f"🧠 *تحليل {symbol} — رائد*",
             "━━━━━━━━━━━━━━━━━━",
             f"💰 السعر: {_fmt_price(price)} ({change_sign}{change_24h:.2f}%)",
-            f"📊 RSI: {rsi:.0f} | Fear & Greed: {fear_val}",
+            f"📊 RSI: {rsi_lbl} | Fear & Greed: {fear_val}",
             f"🌍 السوق: {regime_desc}",
+            f"📉 EMA50: {'✅ فوق' if not ema_bearish else '❌ تحت'} | حجم: {volume_24h/1e6:.1f}M$" if volume_24h > 0 else f"📉 EMA50: {'✅ فوق' if not ema_bearish else '❌ تحت'}",
             "━━━━━━━━━━━━━━━━━━",
             analysis,
-            "",
-            "⚠️ هذا التحليل استرشادي — القرار للمستخدم",
         ]
+        if levels_lines:
+            parts.extend(levels_lines)
+        if contradiction:
+            parts += ["", contradiction]
+        parts += ["", "⚠️ هذا التحليل استرشادي — القرار للمستخدم"]
         full = _clean_md("\n".join(parts))
 
         if len(full) > 4000:
@@ -767,7 +810,14 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         logger.error(f"cmd_chart: {e}")
-        await msg.edit_text("❌ خطأ في تحليل الشارت. حاول مجدداً")
+        await msg.edit_text(
+            "⚙️ *تحليل الشارت البصري — قيد الصيانة*\n\n"
+            "🔄 *بدائل متاحة الآن:*\n"
+            "• /analyze — تحليل عميق شامل\n"
+            "• /signal  — إشارة + مستويات دخول\n"
+            "• /quicksignal — تحليل سريع",
+            parse_mode=ParseMode.MARKDOWN
+        )
 
 
 # ════════════════════════════════════════════════════════════════
