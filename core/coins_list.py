@@ -14,11 +14,12 @@ logger = logging.getLogger(__name__)
 
 # ─── حدود الباقات ─────────────────────────────────────────────────────────────
 TIER_LIMITS = {
-    "free":    50,    # أول 50 عملة
+    "free":    30,    # أول 30 عملة
     "silver":  90,    # أول 90 عملة
     "gold":    150,   # أول 150 عملة
-    "diamond": 500,   # أول 500 عملة
-    "admin":   9999,  # جميع العملات بلا حدود
+    "diamond": 350,   # أول 350 عملة
+    "custom":  100,   # قابل للتخصيص
+    "admin":   9999,  # جميع العملات
 }
 
 # ─── القائمة الثابتة (تُحدَّث شهرياً) ─────────────────────────────────────────
@@ -345,12 +346,13 @@ def get_allowed_symbols(tier: str) -> list:
     return RANKED_SYMBOLS[:min(limit, len(RANKED_SYMBOLS))]
 
 
-def is_symbol_allowed(symbol: str, tier: str) -> bool:
+def is_symbol_allowed(symbol: str, tier: str,
+                       custom_limit: int = 0) -> bool:
     """يتحقق إذا كانت العملة مسموحة للمستخدم."""
     if tier in ("admin",):
         return True
     _load_updated_list()
-    limit = TIER_LIMITS.get(tier, 50)
+    limit = custom_limit if tier == "custom" and custom_limit else TIER_LIMITS.get(tier, 30)
     allowed = set(RANKED_SYMBOLS[:min(limit, len(RANKED_SYMBOLS))])
     return symbol.upper() in allowed
 
@@ -386,9 +388,11 @@ def get_tier_message(symbol: str, tier: str) -> str:
                 f"🔓 يتطلب: *{required}* أو أعلى\n"
                 f"⬆️ للترقية: /upgrade"
             )
+    # العملة غير موجودة في القائمة أصلاً
     return (
-        f"⛔ *{sym_upper}* غير موجودة في القائمة الحالية\n"
-        f"📋 القائمة تُحدَّث شهرياً من CoinGecko/CMC"
+        f"⛔ *{sym_upper}* غير متاحة حالياً\n"
+        f"📋 القائمة تُحدَّث شهرياً من CoinGecko/CMC\n"
+        f"💡 جرّب: BTC, ETH, BNB, SOL, XRP"
     )
 
 
