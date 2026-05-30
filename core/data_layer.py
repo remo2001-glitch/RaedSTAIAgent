@@ -26,13 +26,16 @@ logger = logging.getLogger(__name__)
 
 # ─── TTL كاش ──────────────────────────────────────────────────
 CACHE_TTL = {
-    "price":   30,    # 30 ثانية — سعر حديث دائماً
-    "ohlcv":   300,
-    "news":    300,
-    "onchain": 600,
+    "price":   60,    # 60 ثانية — مناسب لـ 100+ مستخدم (كان 30)
+    "ohlcv":   600,   # 10 دقائق (كان 5)
+    "news":    600,   # 10 دقائق (كان 5)
+    "onchain": 900,   # 15 دقيقة (كان 10)
     "fear":    3600,
-    "hist":    3600,
+    "hist":    7200,  # ساعتان (كان ساعة)
 }
+# كاش مشترك بين المستخدمين — طلب واحد يخدم الجميع
+_shared_price_cache: Dict[str, Dict] = {}
+_SHARED_PRICE_TTL = 60  # ثانية
 _cache: Dict[str, Dict] = {}
 
 def _cached(key: str, ttl_key: str) -> Optional[Any]:
@@ -137,7 +140,7 @@ async def _fetch(session: aiohttp.ClientSession, url: str,
         try:
             async with session.get(
                 url, headers=headers, params=params,
-                timeout=aiohttp.ClientTimeout(total=25)
+                timeout=aiohttp.ClientTimeout(total=35)
             ) as r:
                 if r.status == 200:
                     ct = r.headers.get("Content-Type","")
@@ -193,6 +196,12 @@ class DataLayer:
 
         # Binance fallback
         result = await self._price_binance(symbol)
+        if result and result.get("price", 0) > 0:
+            _store(key, result)
+            return result
+
+        # OKX fallback — مصدر ثالث غير محجوب
+        result = await self._price_okx(symbol)
         if result and result.get("price", 0) > 0:
             _store(key, result)
             return result
@@ -267,6 +276,38 @@ class DataLayer:
             }
         except (ValueError, TypeError):
             return None
+
+
+    async def _price_okx(self, symbol: str) -> Optional[Dict]:
+        """OKX Public API — fallback للسعر (غير محجوب على Railway)."""
+        try:
+            inst_id = f"{symbol.upper()}-USDT"
+            data = await _fetch(
+                self.session,
+                f"https://www.okx.com/api/v5/market/ticker?instId={inst_id}",
+                headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+                retries=2,
+            )
+            if isinstance(data, dict) and data.get("data"):
+                ticker = data["data"][0]
+                price  = float(ticker.get("last", 0))
+                if price <= 0:
+                    return None
+                open24 = float(ticker.get("open24h", price) or price)
+                change = ((price - open24) / open24 * 100) if open24 > 0 else 0
+                return {
+                    "symbol":                       symbol.upper(),
+                    "price":                        price,
+                    "change_24h":                   round(change, 4),
+                    "price_change_percentage_24h":  round(change, 4),
+                    "volume_24h":                   float(ticker.get("volCcy24h", 0) or 0),
+                    "high_24h":                     float(ticker.get("high24h", 0) or 0),
+                    "low_24h":                      float(ticker.get("low24h", 0) or 0),
+                    "source":                       "okx",
+                }
+        except Exception as e:
+            logger.debug(f"_price_okx ({symbol}): {e}")
+        return None
 
     # ═══════════════════════════════════════════════════════════
     # 2. OHLCV — يُعيد دائماً List (قد تكون فارغة لكن ليست None)
@@ -667,7 +708,7 @@ class DataLayer:
         try:
             cg_news = await self._news_coingecko()
             if cg_news:
-                all_news.extend(cg_news[:15])
+                items.extend(cg_news[:15])
         except Exception as e:
             logger.debug(f"CoinGecko news: {e}")
 
@@ -972,6 +1013,30 @@ class DataLayer:
                 result["tvl_change_1d"] = 0.0
         except Exception:
             result["tvl_change_1d"] = 0.0
+
+        # ── إضافة Fear & Greed لـ onchain ───────────────────────
+        try:
+            fg = await self.get_fear_greed()
+            result["fear_greed"] = int((fg or {}).get("value", 50))
+            result["fear_greed_ar"] = (fg or {}).get("label_ar", "محايد")
+        except Exception:
+            result["fear_greed"] = 50
+            result["fear_greed_ar"] = "محايد"
+
+        # ── بيانات شبكة Bitcoin من Blockchain.info ─────────────
+        try:
+            btc_stats = await _fetch(
+                self.session,
+                "https://api.blockchain.info/stats",
+                headers={"User-Agent": "Mozilla/5.0"},
+                retries=2,
+            )
+            if isinstance(btc_stats, dict):
+                result["btc_hashrate"]     = float(btc_stats.get("hash_rate", 0))
+                result["btc_tx_count_24h"] = int(btc_stats.get("n_tx_per_day", 0))
+                result["btc_mempool"]      = int(btc_stats.get("mempool_size", 0))
+        except Exception:
+            pass
 
         _store(key, result, "onchain")
         return result   # دائماً Dict

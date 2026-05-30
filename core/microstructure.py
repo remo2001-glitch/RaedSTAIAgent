@@ -61,7 +61,7 @@ class MicrostructureLayer:
         # فحص الـ cache
         if symbol in self._cache:
             profile, ts = self._cache[symbol]
-            if time.time() - ts < self.TTL:
+            if time.time() - ts < self._cache_ttl:
                 return profile
 
         import aiohttp
@@ -159,12 +159,47 @@ class MicrostructureLayer:
 
     async def detect_walls(self, symbol: str,
                             depth_limit: int = 100) -> OrderFlowSignal:
-        """يكشف جدران الشراء والبيع في Order Book."""
+        """يكشف جدران الشراء والبيع — OKX أولاً ثم Bybit ثم Binance."""
+
+        # ── ١. OKX (الأفضل من Railway) ──────────────────────────
+        try:
+            if self.session:
+                url = f"https://www.okx.com/api/v5/market/books?instId={symbol.upper()}-USDT&sz={depth_limit}"
+                async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=8)) as r:
+                    if r.status == 200:
+                        data  = await r.json()
+                        books = (data.get("data") or [{}])[0]
+                        bids  = books.get("bids", [])
+                        asks  = books.get("asks", [])
+                        if bids or asks:
+                            walls = self._compute_walls_from_levels(symbol, bids, asks)
+                            logger.info(f"✅ detect_walls OKX ({symbol})")
+                            return walls
+        except Exception as e:
+            logger.debug(f"detect_walls OKX ({symbol}): {e}")
+
+        # ── ٢. Bybit ────────────────────────────────────────────
+        try:
+            if self.session:
+                url = f"https://api.bybit.com/v5/market/orderbook?category=spot&symbol={symbol.upper()}USDT&limit={depth_limit}"
+                async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=8)) as r:
+                    if r.status == 200:
+                        data = await r.json()
+                        res  = data.get("result", {})
+                        bids = res.get("b", [])
+                        asks = res.get("a", [])
+                        if bids or asks:
+                            walls = self._compute_walls_from_levels(symbol, bids, asks)
+                            logger.info(f"✅ detect_walls Bybit ({symbol})")
+                            return walls
+        except Exception as e:
+            logger.debug(f"detect_walls Bybit ({symbol}): {e}")
+
+        # ── ٣. Binance (قد يكون محجوباً على Railway) ───────────
         BN_ENDPOINTS = [
             "https://api.binance.com",
             "https://api1.binance.com",
             "https://api2.binance.com",
-            "https://api3.binance.com",
         ]
         for ep in BN_ENDPOINTS:
             try:
@@ -177,7 +212,7 @@ class MicrostructureLayer:
                             data = await r.json()
                             return self._compute_walls(symbol, data)
             except Exception as e:
-                logger.warning(f"detect_walls {ep} ({symbol}): {e}")
+                logger.debug(f"detect_walls Binance {ep} ({symbol}): {e}")
                 continue
 
         # fallback: OKX Public API (لا يحتاج API key)
@@ -416,7 +451,7 @@ class MicrostructureLayer:
         lines.append(f"• Slippage متوقع: {profile.estimated_slippage_pct:.3f}٪")
 
         # أكبر أوامر الشراء والبيع (من walls إذا متاحة)
-        if walls and not isinstance(walls, Exception):
+        if walls is not None and not isinstance(walls, Exception) and not isinstance(walls, bool):
             buy_walls  = getattr(walls, "buy_walls",  []) or []
             sell_walls = getattr(walls, "sell_walls", []) or []
             if buy_walls:
