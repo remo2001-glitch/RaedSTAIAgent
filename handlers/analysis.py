@@ -396,6 +396,26 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _clean_md(engine.strategy_router.format_ar(strategy, params)),
             _clean_md(engine.risk_engine.format_assessment_ar(risk, symbol)),
         ]
+        # إشارة Futures إذا مؤهل (ذهبي+ ولديه ربط فعال)
+        try:
+            user_id_sig = update.effective_user.id
+            tt_sig      = getattr(signal, "trade_type", "spot")
+            tier_sig    = _sm.get_tier(user_id_sig)
+            if tt_sig in ("futures_long", "futures_short") and tier_sig in ("gold","diamond","admin"):
+                fut_atr  = _calc_atr(candles) / 100 if candles else 0.03
+                fut_dir  = "long" if tt_sig == "futures_long" else "short"
+                if fut_dir == "long":
+                    fut_tp = price * (1 + fut_atr * 2)
+                    fut_sl = price * (1 - fut_atr * 1.2)
+                else:
+                    fut_tp = price * (1 - fut_atr * 2)
+                    fut_sl = price * (1 + fut_atr * 1.2)
+                fut_txt = engine.risk_engine.format_futures_signal_ar(
+                    symbol, fut_dir, price, fut_tp, fut_sl, leverage=1)
+                parts.append(_clean_md(fut_txt))
+        except Exception as _fe:
+            logger.debug(f"futures display: {_fe}")
+
         full_text = "\n\n".join(parts) + warning
         await msg.edit_text(full_text, parse_mode=ParseMode.MARKDOWN)
 
@@ -761,14 +781,13 @@ async def cmd_chart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text(
-        "📊 *تحليل الشارت البصري*\n"
+        "⚙️ *تحليل الشارت البصري — قيد الصيانة*\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
-        "📌 *كيفية الاستخدام:*\n"
-        "١. أرفع صورة الشارت كصورة\n"
-        "٢. اكتب اسم العملة كتعليق (مثال: BTC)\n"
-        "٣. رائد يُحللها تلقائياً بالذكاء الاصطناعي\n\n"
-        "✅ الصيغ المدعومة: PNG و JPG\n"
-        "⏳ وقت التحليل: ١٥-٣٠ ثانية",
+        "🔄 *بدائل متاحة الآن:*\n"
+        "• /analyze — تحليل عميق شامل (ذهبي+)\n"
+        "• /signal  — إشارة + مستويات دخول\n"
+        "• /quicksignal — تحليل سريع مجاني\n\n"
+        "⏳ سيعود تحليل الشارت البصري قريباً",
         parse_mode="Markdown")
 
 
