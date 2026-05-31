@@ -508,7 +508,8 @@ async def cmd_regime(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ════════════════════════════════════════════════════════════════
 @require_tier("signal")
 async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    engine = _eng(context)
+    engine  = _eng(context)
+    user_id = update.effective_user.id if update.effective_user else 0
     if not engine:
         await update.message.reply_text("⚠️ النظام لم يُهيَّأ بعد")
         return
@@ -618,7 +619,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parts.append(_clean_md("\n".join(fib_lines)))
         # إشارة Futures إذا مؤهل (ذهبي+ ولديه ربط فعال)
         try:
-            user_id_sig = update.effective_user.id
+            user_id_sig = user_id  # M#69: user_id معرَّف مسبقاً
             tt_sig      = getattr(signal, "trade_type", "spot")
             tier_sig    = _sm.get_tier(user_id_sig)
             if tt_sig in ("futures_long", "futures_short") and tier_sig in ("gold","diamond","admin"):
