@@ -9,7 +9,9 @@ main.py v2 — نقطة الدخول الرئيسية
 - إضافة جميع الأوامر في build_app بشكل صحيح
 - safety_monitor: إرسال تنبيه إذا اكتشف Kill Switch
 """
-
+import os
+ip = os.popen("curl -4 ifconfig.me 2>/dev/null").read().strip()
+print(f"🌐 Outbound IPv4: {ip}")
 import asyncio
 import logging
 import os
