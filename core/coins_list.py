@@ -328,7 +328,110 @@ COINS_RANKED = [
     (298, "POOL",  "pooltogether"),
     (299, "GTC",   "gitcoin"),
     (300, "FARM",  "harvest-finance"),
+    # ٣٠١-٤٠٠ (ماسي — إضافة لتغطية 350 عملة)
+    (301, "ZRO",    "zro"),
+    (302, "ASTER",  "aster-network"),
+    (303, "RSR",    "reserve-rights-token"),
+    (304, "QNT",    "quant-network"),
+    (305, "JASMY",  "jasmycoin"),
+    (306, "LUNA",   "terra-luna-2"),
+    (307, "LUNC",   "terra-luna"),
+    (308, "GMT",    "stepn"),
+    (309, "FTM",    "fantom"),
+    (310, "KSM",    "kusama"),
+    (311, "EGLD",   "elrond-erd-2"),
+    (312, "MINA",   "mina-protocol"),
+    (313, "RON",    "ronin"),
+    (314, "OSMO",   "osmosis"),
+    (315, "RUNE",   "thorchain"),
+    (316, "APE",    "apecoin"),
+    (317, "LPT",    "livepeer"),
+    (318, "GNS",    "gains-network"),
+    (319, "MAGIC",  "magic"),
+    (320, "PENDLE", "pendle"),
+    (321, "BLUR",   "blur"),
+    (322, "DYDX",   "dydx"),
+    (323, "GMX",    "gmx"),
+    (324, "ANKR",   "ankr"),
+    (325, "AUDIO",  "audius"),
+    (326, "AXL",    "axelar"),
+    (327, "BICO",   "biconomy"),
+    (328, "C98",    "coin98"),
+    (329, "COTI",   "coti"),
+    (330, "EDU",    "open-campus"),
+    (331, "FLUX",   "zelcash"),
+    (332, "GAL",    "project-galaxy"),
+    (333, "GHST",   "aavegotchi"),
+    (334, "GNO",    "gnosis"),
+    (335, "ID",     "space-id"),
+    (336, "ILV",    "illuvium"),
+    (337, "IOST",   "iostoken"),
+    (338, "KLAY",   "klay-token"),
+    (339, "LSK",    "lisk"),
+    (340, "MAV",    "maverick-protocol"),
+    (341, "OCEAN",  "ocean-protocol"),
+    (342, "PEOPLE", "constitutiondao"),
+    (343, "PERP",   "perpetual-protocol"),
+    (344, "RAY",    "raydium"),
+    (345, "SCRT",   "secret"),
+    (346, "SKL",    "skale"),
+    (347, "SNT",    "status"),
+    (348, "SPELL",  "spell-token"),
+    (349, "SUN",    "sun-token"),
+    (350, "SYN",    "synapse-2"),
+    # ٣٥١-٤٠٠ (ادمن + احتياط)
+    (351, "THETA",  "theta-token"),
+    (352, "TLM",    "alien-worlds"),
+    (353, "TRU",    "truefi"),
+    (354, "TWT",    "trust-wallet-token"),
+    (355, "UMA",    "uma"),
+    (356, "VET",    "vechain"),
+    (357, "WAXP",   "wax"),
+    (358, "XEM",    "nem"),
+    (359, "XMR",    "monero"),
+    (360, "XNO",    "nano"),
+    (361, "XTZ",    "tezos"),
+    (362, "XVS",    "venus"),
+    (363, "YGG",    "yield-guild-games"),
+    (364, "ZEC",    "zcash"),
+    (365, "ZEN",    "horizen"),
+    (366, "ZIL",    "zilliqa"),
+    (367, "ZRX",    "0x"),
+    (368, "STORJ",  "storj"),
+    (369, "GLM",    "golem"),
+    (370, "ANT",    "aragon"),
+    (371, "AMP",    "amp-token"),
+    (372, "NMR",    "numeraire"),
+    (373, "GRT",    "the-graph"),
+    (374, "BAT",    "basic-attention-token"),
+    (375, "PORTAL", "portal-gaming"),
+    (376, "HOOK",   "hooked-protocol"),
+    (377, "JOE",    "joe"),
+    (378, "JST",    "just"),
+    (379, "REEF",   "reef"),
+    (380, "RLC",    "iexec-rlc"),
+    (381, "SFP",    "safepal"),
+    (382, "SLP",    "smooth-love-potion"),
+    (383, "ACH",    "alchemy-pay"),
+    (384, "AERGO",  "aergo"),
+    (385, "AGLD",   "adventure-gold"),
+    (386, "ASTR",   "astar"),
+    (387, "ATOR",   "ator-protocol"),
+    (388, "BAKE",   "bakerytoken"),
+    (389, "BETA",   "beta-finance"),
+    (390, "BNX",    "binaryx"),
+    (391, "CHESS",  "tranchess"),
+    (392, "CLV",    "clover-finance"),
+    (393, "COCOS",  "cocos-bcx"),
+    (394, "CTSI",   "cartesi"),
+    (395, "DAR",    "mines-of-dalarnia"),
+    (396, "DATA",   "streamr"),
+    (397, "DF",     "dforce-token"),
+    (398, "DGB",    "digibyte"),
+    (399, "DODO",   "dodo"),
+    (400, "DOME",   "everdome"),
 ]
+
 
 # الرموز المرتبة
 RANKED_SYMBOLS = [sym for _, sym, _ in COINS_RANKED]
@@ -380,18 +483,46 @@ def get_tier_message(symbol: str, tier: str) -> str:
     sym_upper    = symbol.upper()
     _load_updated_list()
 
-    for t, limit in sorted(TIER_LIMITS.items(), key=lambda x: x[1]):
-        if sym_upper in RANKED_SYMBOLS[:min(limit, len(RANKED_SYMBOLS))]:
+    sym_rank = None
+    for rank, sym, _ in COINS_RANKED:
+        if sym == sym_upper:
+            sym_rank = rank
+            break
+
+    if sym_rank is None:
+        # العملة غير موجودة في القائمة أصلاً
+        return (
+            f"⛔ *{sym_upper}* غير مدرجة في قائمة العملات المدعومة حالياً\n\n"
+            f"📋 القائمة تُحدَّث شهرياً — {sym_upper} قد تكون عملة جديدة\n"
+            f"💡 جرّب: BTC, ETH, BNB, SOL, XRP, LINK, ADA"
+        )
+
+    user_limit = TIER_LIMITS.get(tier, 30)
+    if sym_rank <= user_limit:
+        # العملة مسموحة! — خطأ في مكان آخر
+        return f"✅ {sym_upper} متاحة لباقتك ({current_name})"
+
+    # إيجاد الباقة المطلوبة
+    for t in ["free", "silver", "gold", "diamond", "admin"]:
+        if sym_rank <= TIER_LIMITS.get(t, 9999):
             required = tier_names.get(t, t)
+            if tier == "diamond":
+                # الماسي أعلى باقة — المشكلة في القائمة لا في الباقة
+                return (
+                    f"⛔ *{sym_upper}* خارج نطاق عملاتك حالياً\n\n"
+                    f"• باقتك: {current_name} (حتى {user_limit} عملة)\n"
+                    f"• ترتيب {sym_upper}: #{sym_rank}\n"
+                    f"• 💡 جرّب عملة ضمن أعلى {user_limit} عملة"
+                )
             return (
-                f"⛔ *{sym_upper}* غير متاحة لباقتك ({current_name})\n\n"
-                f"🔓 يتطلب: *{required}* أو أعلى\n"
+                f"⛔ *{sym_upper}* غير متاحة في باقتك الحالية\n\n"
+                f"• باقتك: {current_name}\n"
+                f"• *{sym_upper}* متاحة من: {required} وأعلى\n"
                 f"⬆️ للترقية: /upgrade"
             )
-    # العملة غير موجودة في القائمة أصلاً
+
     return (
         f"⛔ *{sym_upper}* غير متاحة حالياً\n"
-        f"📋 القائمة تُحدَّث شهرياً من CoinGecko/CMC\n"
         f"💡 جرّب: BTC, ETH, BNB, SOL, XRP"
     )
 
