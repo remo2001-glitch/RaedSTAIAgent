@@ -50,6 +50,34 @@ class Scheduler:
         self._last_monthly_ts: float = 0.0
 
     # ── التسجيل ──────────────────────────────────────────────
+
+    async def _check_all_limit_orders(self):
+        """يفحص جميع Limit Orders المعلقة لجميع المستخدمين."""
+        try:
+            if not hasattr(self, "_engine") or not self._engine:
+                return
+            engine = self._engine
+            # تحقق من كل OrderManager نشط
+            for user_id, info in getattr(engine, "_live_users", {}).items():
+                om = info.get("order_manager")
+                if om and hasattr(om, "_check_limit_orders"):
+                    await om._check_limit_orders(self._notify_user)
+                if om and hasattr(om, "_check_trailing_and_protect"):
+                    await om._check_trailing_and_protect(self._notify_user)
+        except Exception as e:
+            logger.debug(f"_check_all_limit_orders: {e}")
+
+    async def _notify_user(self, user_id: int, message: str):
+        """يُرسل إشعار لمستخدم محدد."""
+        try:
+            await self.send_fn(message, user_id=user_id)
+        except Exception as e:
+            logger.debug(f"_notify_user {user_id}: {e}")
+
+    def set_engine(self, engine):
+        """يُسجِّل المحرك للوصول لـ Order Managers."""
+        self._engine = engine
+
     def register_weekly(self, fn: Callable):
         self._weekly_report_fn = fn
 
@@ -74,6 +102,7 @@ class Scheduler:
 
     # ── الحلقة الرئيسية ──────────────────────────────────────
     async def _loop(self):
+        tick = 0
         while self._running:
             try:
                 now = datetime.now(timezone.utc)
@@ -81,11 +110,15 @@ class Scheduler:
                 await self._check_weekly(now)
                 await self._check_monthly(now)
                 await self._check_coins_update(now)
+                # فحص Limit Orders كل 30 ثانية
+                if tick % 1 == 0:
+                    await self._check_all_limit_orders()
+                tick += 1
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error(f"Scheduler loop error: {e}")
-            await asyncio.sleep(60)
+            await asyncio.sleep(30)
 
     async def _check_coins_update(self, now):
         """يُحدِّث قائمة العملات شهرياً."""
