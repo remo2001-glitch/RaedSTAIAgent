@@ -431,6 +431,17 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except (ValueError, TypeError):
         size_usd = 500.0
 
+    # M#90: قراءة Limit Price إذا حُدِّدت
+    limit_price = 0.0
+    if len(args) >= 5 and args[3].lower() == "limit":
+        try:
+            limit_price = float(args[4])
+        except (ValueError, TypeError):
+            await update.message.reply_text(
+                "⚠️ سعر Limit غير صحيح\n"
+                "مثال: `/execute FET buy 5 limit 0.259`",
+                parse_mode="Markdown"); return
+
     if direction not in ("buy","sell","شراء","بيع"):
         await update.message.reply_text("⚠️ الاتجاه: buy أو sell"); return
 
@@ -556,17 +567,25 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
             vol_m    = best_ex.get("volume_24h", 0) / 1e6
 
             kb = build_confirm_keyboard(symbol, trade_dir, final_size, best_ex.get("name",""))
+            # M#90: عرض نوع الأمر (Market أو Limit)
+            order_type_ar = f"⏳ Limit @ ${limit_price:,.4f}" if limit_price > 0 else "⚡ Market (سعر فوري)"
+            # M#92: auto_protect للذهبي وأعلى
+            from core.state_manager import state_manager as _sm2
+            user_tier   = _sm2.get_tier(user_id)
+            can_protect = user_tier in ("gold", "diamond", "admin")
+            protect_note = "\n🛡️ الحماية التلقائية: ✅ مُفعَّلة" if can_protect else ""
+
             await msg.edit_text(
                 f"📋 *تأكيد التنفيذ الحقيقي*\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
                 f"🪙 {symbol} | {'🟢 شراء' if is_buy else '🔴 بيع'}\n"
                 f"💰 الحجم: ${final_size:,.2f}\n"
-                f"📈 السعر: ${ep:,.4f}\n"
+                f"📈 نوع الأمر: {order_type_ar}\n"
                 f"🛑 وقف الخسارة: ${sl_price:,.4f} ({risk.stop_loss_pct:.1f}٪-)\n"
                 f"🎯 هدف الربح:   ${tp_price:,.4f} ({risk.take_profit_pct:.1f}٪+)\n"
                 f"📊 R/R: 1:{rr_ratio:.1f}\n"
                 f"🏦 المنصة: {best_ex.get('name','').upper()} (حجم ${vol_m:.0f}M)"
-                + balance_warn +
+                + balance_warn + protect_note +
                 f"\n\n⚠️ هذا تنفيذ حقيقي على حسابك",
                 parse_mode=ParseMode.MARKDOWN,
                 reply_markup=kb)
@@ -738,6 +757,7 @@ async def handle_trade_callback(update: Update,
             symbol    = parts[1]
             direction = parts[2]
             size_usd  = float(parts[3])
+            limit_p   = float(parts[4]) if len(parts) > 4 and parts[4] not in ("0", "0.0000") else 0.0
 
             # اختيار أفضل منصة
             best_ex = await engine.find_best_exchange(user_id, symbol)
@@ -748,6 +768,24 @@ async def handle_trade_callback(update: Update,
             om    = best_ex.get("order_manager")
             if not om:
                 await query.edit_message_text("⚠️ خطأ في Order Manager"); return
+
+            # M#90: Limit Order → pending
+            if limit_p > 0 and hasattr(om, "add_pending_limit"):
+                from core.state_manager import state_manager as _sm3
+                can_p = _sm3.get_tier(user_id) in ("gold","diamond","admin")
+                is_bl = direction == "long"
+                om.add_pending_limit(
+                    symbol=symbol, side="Buy" if is_bl else "Sell",
+                    size_usd=size_usd, limit_price=limit_p,
+                    stop_loss_pct=5.0, take_profit_pct=10.0,
+                    user_id=user_id, auto_protect=can_p,
+                )
+                await query.edit_message_text(
+                    f"✅ *أمر Limit محفوظ*\n⏳ ينفَّذ عند: ${limit_p:,.4f}\n"
+                    f"{'🛡️ الحماية مُفعَّلة' if can_p else ''}\n"
+                    f"• إشعار عند التنفيذ\n• يُلغى بعد 24 ساعة",
+                    parse_mode="Markdown")
+                return
 
             # M#83: محاولة متعددة لجلب السعر مع fallback
             price = 0.0
@@ -830,7 +868,8 @@ async def handle_trade_callback(update: Update,
 
 def build_confirm_keyboard(symbol: str, direction: str,
                              size_usd: float,
-                             exchange_name: str = "") -> InlineKeyboardMarkup:
+                             exchange_name: str = "",
+                             limit_price: float = 0.0) -> InlineKeyboardMarkup:
     ex_label = f" ({exchange_name.upper()})" if exchange_name else ""
     return InlineKeyboardMarkup([[
         InlineKeyboardButton(
