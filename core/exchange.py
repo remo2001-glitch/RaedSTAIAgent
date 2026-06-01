@@ -940,7 +940,7 @@ class MEXCExchange(BaseExchange):
             "symbol":   f"{symbol.upper()}USDT",
             "side":     "BUY" if side.lower() in ("buy","long") else "SELL",
             "type":     order_type.upper(),
-            "quantity": f"{qty:.6f}",
+            "quantity": f"{round(qty, 2):.2f}",
         }
         if order_type.upper() == "LIMIT" and price > 0:
             params["price"]       = f"{price:.8f}".rstrip("0").rstrip(".")
