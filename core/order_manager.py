@@ -23,15 +23,28 @@ class LiveTrade:
     size_usd:     float
     stop_loss:    float     # سعر وقف الخسارة
     take_profit:  float     # سعر الهدف
-    order_id:     str       = ""
-    status:       str       = "OPEN"   # OPEN | CLOSED | CANCELLED
-    exit_price:   float     = 0.0
-    pnl_usd:      float     = 0.0
-    pnl_pct:      float     = 0.0
-    opened_at:    float     = field(default_factory=time.time)
-    closed_at:    float     = 0.0
-    close_reason: str       = ""
-    user_id:      int       = 0
+    order_id:          str   = ""
+    status:            str   = "OPEN"   # OPEN | CLOSED | CANCELLED | PENDING
+    exit_price:        float = 0.0
+    pnl_usd:           float = 0.0
+    pnl_pct:           float = 0.0
+    opened_at:         float = field(default_factory=time.time)
+    closed_at:         float = 0.0
+    close_reason:      str   = ""
+    user_id:           int   = 0
+    # ── Limit Order ──────────────────────────────────────
+    limit_price:       float = 0.0   # 0 = market order
+    order_type:        str   = "MARKET"  # MARKET | LIMIT
+    # ── Trailing Stop (M#92) ─────────────────────────────
+    trailing_stop_pct: float = 0.0   # 0 = غير مفعَّل
+    trailing_stop_price: float = 0.0  # السعر الحالي للـ trailing
+    trailing_activated: bool  = False
+    highest_price:     float = 0.0   # أعلى سعر وصله منذ الدخول
+    # ── حماية تلقائية (M#92) ──────────────────────────────
+    auto_protect:      bool  = False  # للذهبي وأعلى
+    remind_sent:       bool  = False  # تم إرسال تذكير؟
+    remind_at:         float = 0.0    # وقت التذكير
+    profit_target_50pct: float = 0.0  # 50% من الهدف
 
 
 class OrderManager:
@@ -141,21 +154,222 @@ class OrderManager:
     # ═══════════════════════════════════════════════════════════
     # مراقبة SL/TP تلقائي
     # ═══════════════════════════════════════════════════════════
-    def start_monitoring(self):
+
+    # ═══════════════════════════════════════════════════════════
+    # Limit Orders — M#90/#91
+    # ═══════════════════════════════════════════════════════════
+    def add_pending_limit(self, symbol: str, side: str,
+                           size_usd: float, limit_price: float,
+                           stop_loss_pct: float, take_profit_pct: float,
+                           user_id: int, auto_protect: bool = False) -> str:
+        """يُضيف أمر Limit معلق — ينتظر وصول السعر."""
+        trade_id = f"LIMIT_{symbol}_{int(time.time())}"
+        entry    = limit_price
+        is_long  = side.lower() in ("buy", "long")
+        sl       = entry * (1 - stop_loss_pct/100)  if is_long else entry * (1 + stop_loss_pct/100)
+        tp       = entry * (1 + take_profit_pct/100) if is_long else entry * (1 - take_profit_pct/100)
+        tp_50    = entry + (tp - entry) * 0.5  # 50% من الهدف
+
+        trade = LiveTrade(
+            trade_id=trade_id, symbol=symbol.upper(), side=side.capitalize(),
+            entry_price=limit_price, qty=0, size_usd=size_usd,
+            stop_loss=sl, take_profit=tp,
+            status="PENDING", limit_price=limit_price,
+            order_type="LIMIT", user_id=user_id,
+            auto_protect=auto_protect,
+            profit_target_50pct=tp_50,
+            remind_at=time.time() + 1800,  # تذكير بعد 30 دقيقة
+            highest_price=limit_price,
+        )
+        self._trades[trade_id] = trade
+        logger.info(f"📋 Limit pending: {trade_id} | {side} {symbol} @ ${limit_price}")
+        return trade_id
+
+    async def _check_limit_orders(self, notify_fn=None):
+        """يفحص الأوامر المعلقة — هل وصل السعر؟"""
+        pending = [t for t in self._trades.values() if t.status == "PENDING"]
+        if not pending:
+            return
+
+        for trade in pending:
+            try:
+                price = await self.exchange.get_price(trade.symbol)
+                if price <= 0:
+                    continue
+
+                is_buy  = trade.side in ("Buy", "buy", "long")
+                reached = (is_buy and price <= trade.limit_price) or                           (not is_buy and price >= trade.limit_price)
+
+                # تذكير بعد 30 دقيقة إذا لم يُنفَّذ
+                if not trade.remind_sent and time.time() > trade.remind_at:
+                    trade.remind_sent = True
+                    if notify_fn:
+                        age_min = int((time.time() - trade.opened_at) / 60)
+                        await notify_fn(
+                            trade.user_id,
+                            f"⏰ *تذكير — أمر Limit معلق*\n\n"
+                            f"• {trade.symbol} | {'شراء' if is_buy else 'بيع'}\n"
+                            f"• الحجم: ${trade.size_usd:,.2f}\n"
+                            f"• سعر Limit: ${trade.limit_price:,.4f}\n"
+                            f"• السعر الحالي: ${price:,.4f}\n"
+                            f"• منذ: {age_min} دقيقة\n\n"
+                            f"الأمر سيُلغى تلقائياً بعد 24 ساعة."
+                        )
+
+                # إلغاء تلقائي بعد 24 ساعة
+                if time.time() - trade.opened_at > 86400:
+                    trade.status = "CANCELLED"
+                    trade.close_reason = "expired_24h"
+                    if notify_fn:
+                        await notify_fn(
+                            trade.user_id,
+                            f"🚫 *أمر Limit مُلغى تلقائياً*\n\n"
+                            f"• {trade.symbol} | Limit @ ${trade.limit_price:,.4f}\n"
+                            f"• السبب: انتهت المدة (24 ساعة)\n\n"
+                            f"💡 لتجديده: `/execute {trade.symbol} {'buy' if is_buy else 'sell'}"
+                            f" {trade.size_usd:.0f} limit {trade.limit_price}`"
+                        )
+                    continue
+
+                if reached:
+                    # تنفيذ الأمر
+                    qty = trade.size_usd / price if price > 0 else 0
+                    result = await self.exchange.place_order(
+                        symbol=trade.symbol, side=trade.side,
+                        qty=qty, order_type="LIMIT",
+                        price=trade.limit_price,
+                    )
+                    if result.success:
+                        trade.status       = "OPEN"
+                        trade.qty          = result.filled_qty or qty
+                        trade.entry_price  = result.avg_price or trade.limit_price
+                        trade.highest_price= trade.entry_price
+                        trade.order_id     = result.order_id
+                        trade.opened_at    = time.time()
+                        logger.info(f"✅ Limit نُفِّذ: {trade.trade_id}")
+                        if notify_fn:
+                            await notify_fn(
+                                trade.user_id,
+                                f"🔔 *تم تنفيذ أمر الشراء!*\n\n"
+                                f"• {trade.symbol} | {'شراء' if is_buy else 'بيع'}\n"
+                                f"• الكمية: {trade.qty:.4f}\n"
+                                f"• سعر التنفيذ: ${trade.entry_price:,.4f}\n"
+                                f"• وقف الخسارة: ${trade.stop_loss:,.4f}\n"
+                                f"• هدف الربح: ${trade.take_profit:,.4f}\n\n"
+                                f"💡 هل تريد وضع أمر بيع؟\n"
+                                f"`/execute {trade.symbol} sell {trade.size_usd:.0f} limit {trade.take_profit:.4f}`"
+                            )
+            except Exception as e:
+                logger.warning(f"check_limit {trade.trade_id}: {e}")
+
+    # ═══════════════════════════════════════════════════════════
+    # Trailing Stop — M#92 (للذهبي وأعلى)
+    # ═══════════════════════════════════════════════════════════
+    async def _check_trailing_and_protect(self, notify_fn=None):
+        """
+        نظام الحماية التلقائي (M#92) — للذهبي وأعلى:
+        - عند 50% من الهدف → يُفعِّل Trailing Stop
+        - عند وقف الخسارة → يُغلق تلقائياً
+        """
+        open_trades = [t for t in self._trades.values()
+                       if t.status == "OPEN" and t.auto_protect]
+        for trade in open_trades:
+            try:
+                price   = await self.exchange.get_price(trade.symbol)
+                if price <= 0:
+                    continue
+                is_long = trade.side in ("Buy", "buy")
+
+                # تحديث أعلى سعر
+                if is_long and price > trade.highest_price:
+                    trade.highest_price = price
+                elif not is_long and (trade.highest_price == 0 or price < trade.highest_price):
+                    trade.highest_price = price
+
+                # ── تفعيل Trailing عند 50% من الهدف ──
+                if is_long and not trade.trailing_activated:
+                    if price >= trade.profit_target_50pct > 0:
+                        trade.trailing_activated = True
+                        atr_trail = abs(trade.take_profit - trade.entry_price) * 0.3
+                        trade.trailing_stop_price = price - atr_trail
+                        trade.trailing_stop_pct   = atr_trail / price * 100
+                        logger.info(f"🎯 Trailing Stop مُفعَّل: {trade.trade_id}")
+                        if notify_fn:
+                            pnl_now = (price - trade.entry_price) / trade.entry_price * 100
+                            await notify_fn(
+                                trade.user_id,
+                                f"🎯 *Trailing Stop مُفعَّل — {trade.symbol}*\n\n"
+                                f"• وصلت 50% من هدفك ✅\n"
+                                f"• السعر الحالي: ${price:,.4f} (+{pnl_now:.1f}%)\n"
+                                f"• Trailing Stop: ${trade.trailing_stop_price:,.4f}\n"
+                                f"• الربح محمي تلقائياً 🛡️"
+                            )
+
+                # ── تحديث Trailing مع ارتفاع السعر ──
+                if trade.trailing_activated and is_long:
+                    atr_trail = trade.trailing_stop_pct / 100 * price
+                    new_trail = price - atr_trail
+                    if new_trail > trade.trailing_stop_price:
+                        trade.trailing_stop_price = new_trail
+
+                # ── إغلاق عند Trailing Stop ──
+                if trade.trailing_activated and is_long:
+                    if price <= trade.trailing_stop_price:
+                        await self.close_trade(trade.trade_id, "trailing_stop")
+                        if notify_fn:
+                            pnl = (price - trade.entry_price) / trade.entry_price * 100
+                            await notify_fn(
+                                trade.user_id,
+                                f"✅ *Trailing Stop نُفِّذ — {trade.symbol}*\n\n"
+                                f"• سعر الإغلاق: ${price:,.4f}\n"
+                                f"• الربح المحقق: +{pnl:.1f}% 🎉\n"
+                                f"• تم حماية ربحك تلقائياً"
+                            )
+                        continue
+
+                # ── وقف الخسارة التلقائي ──
+                sl_hit = (is_long and price <= trade.stop_loss) or                          (not is_long and price >= trade.stop_loss)
+                if sl_hit:
+                    await self.close_trade(trade.trade_id, "stop_loss_auto")
+                    if notify_fn:
+                        pnl = (price - trade.entry_price) / trade.entry_price * 100
+                        await notify_fn(
+                            trade.user_id,
+                            f"🛑 *وقف الخسارة نُفِّذ تلقائياً — {trade.symbol}*\n\n"
+                            f"• سعر الإغلاق: ${price:,.4f}\n"
+                            f"• الخسارة: {pnl:.1f}%\n"
+                            f"• تم حماية رأس مالك 🛡️"
+                        )
+
+            except Exception as e:
+                logger.warning(f"trailing_protect {trade.trade_id}: {e}")
+
+    def start_monitoring(self, notify_fn=None):
+        """
+        notify_fn: async fn(user_id, message) لإرسال إشعارات للمستخدمين.
+        """
+        self._notify_fn = notify_fn
         if not self._monitor_task:
-            self._monitor_task = asyncio.create_task(self._monitor_loop())
-            logger.info("✅ Order Monitor started")
+            self._monitor_task = asyncio.create_task(self._monitor_loop(notify_fn))
+            logger.info("✅ Order Monitor started (Limit + Trailing + Protect)")
 
     def stop_monitoring(self):
         if self._monitor_task:
             self._monitor_task.cancel()
             self._monitor_task = None
 
-    async def _monitor_loop(self):
-        """يفحص SL/TP كل 30 ثانية."""
+    async def _monitor_loop(self, notify_fn=None):
+        """
+        يفحص كل 30 ثانية:
+        - SL/TP للصفقات المفتوحة
+        - Limit Orders المعلقة
+        - Trailing Stop وحماية الربح (ذهبي وأعلى)
+        """
         while True:
             try:
                 await self._check_sl_tp()
+                await self._check_limit_orders(notify_fn)
+                await self._check_trailing_and_protect(notify_fn)
             except Exception as e:
                 logger.error(f"Monitor loop error: {e}")
             await asyncio.sleep(30)
