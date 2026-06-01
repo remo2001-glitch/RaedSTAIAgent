@@ -112,10 +112,20 @@ def _fmt_fib_lines(fib: dict, price: float) -> list:
         [(float(k), v, k) for k, v in fib["levels"].items() if float(k) <= 1.0],
         reverse=True
     )
+    # إيجاد المستوى الأقرب فقط — مستوى واحد
+    closest_lbl = None
+    closest_dst = float("inf")
     for _, val, label in ordered:
-        dist = abs(val - price) / max(price, 0.0001) * 100
-        mark = " ◀ أنت هنا" if dist < 1.5 else ""
-        icon = "🟢" if val < price else "🔴"
+        d = abs(val - price) / max(price, 0.0001) * 100
+        if d < closest_dst:
+            closest_dst = d
+            closest_lbl = label
+
+    for _, val, label in ordered:
+        icon    = "🟢" if val < price else "🔴"
+        # "أنت هنا" فقط للمستوى الأقرب وبشرط < 2%
+        is_here = (label == closest_lbl and closest_dst < 2.0)
+        mark    = " ◀ أنت هنا" if is_here else ""
         lines.append(f"  {icon} {label:>5} — {_fmt_price(val)}{mark}")
     ns = fib.get("nearest_support", 0)
     nr = fib.get("nearest_resistance", 0)
@@ -273,6 +283,21 @@ DEFAULT_SYMBOLS = ["BTC", "ETH", "BNB", "SOL"]
 def _eng(context):
     return context.bot_data.get("raed_engine")
 
+
+
+def _strip_header_duplicates(text: str) -> str:
+    """يحذف السطور المكررة (السعر/RSI/السوق) من نص التحليل."""
+    if not text: return text
+    lines = text.strip().split("\n")
+    skip_keys = ("السعر:", "سعر:", "rsi", "fear", "السوق:", "الاتجاه:", "📊 تحليل", "💰 ال", "🌍")
+    clean, skip_count = [], 0
+    for line in lines:
+        if skip_count < 8 and any(k in line.strip().lower() for k in skip_keys):
+            skip_count += 1
+            continue
+        clean.append(line)
+    result = "\n".join(clean).strip()
+    return result if len(result) > 30 else text
 
 def _clean_md(text: str) -> str:
     """
@@ -990,8 +1015,11 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # إضافة Fibonacci
         if fib_lines_a:
             parts.extend(fib_lines_a)
-        # إضافة Professional Block
-        parts += ["", "━━━━━━━━━━━━━━━━━━", _clean_md(pro_block_a)]
+        # إضافة Professional Block — مع إزالة التكرار
+        parts += ["", "━━━━━━━━━━━━━━━━━━"]
+        # تنظيف pro_block من أي سطور تكرر الهيدر
+        pro_clean = _clean_md(pro_block_a)
+        parts.append(pro_clean)
         parts += ["", "⚠️ هذا التحليل استرشادي — القرار للمستخدم"]
         full = _clean_md("\n".join(parts))
 

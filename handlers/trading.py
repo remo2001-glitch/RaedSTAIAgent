@@ -5,6 +5,7 @@
 - مدفوع: جميع المنصات + Futures/Margin + 150 عملة
 """
 
+import asyncio
 import logging
 from core.middleware import require_tier
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -511,20 +512,41 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
             best_ex = await engine.find_best_exchange(user_id, symbol)
 
         if best_ex:
-            # شبه آلي — زر تأكيد
-            kb = build_confirm_keyboard(symbol, trade_dir, final_size,
-                                         best_ex.get("name",""))
+            # M#79: فحص الرصيد وعرضه في شاشة التأكيد
+            balance_warn = ""
+            try:
+                actual_bal = await best_ex["exchange"].get_balance("USDT")
+                if actual_bal < final_size:
+                    balance_warn = (
+                        f"\n⚠️ *تحذير:* رصيدك ${actual_bal:,.2f} أقل من الحجم ${final_size:,.2f}"
+                        f"\n✏️ تعديل الحجم إلى ${actual_bal*0.9:.2f} تلقائياً"
+                    )
+                    final_size = actual_bal * 0.9
+                elif actual_bal < final_size * 1.1:
+                    balance_warn = f"\n💡 الرصيد المتاح: ${actual_bal:,.2f} (سيُستخدم {final_size/actual_bal*100:.0f}%)"
+            except Exception:
+                pass
+
+            # إعادة حساب السعر والمستويات
+            ep      = price * (1+0.1/100) if is_buy else price * (1-0.1/100)
+            sl_price = ep * (1-float(risk.stop_loss_pct or 5)/100) if is_buy else ep * (1+float(risk.stop_loss_pct or 5)/100)
+            tp_price = ep * (1+float(risk.take_profit_pct or 10)/100) if is_buy else ep * (1-float(risk.take_profit_pct or 10)/100)
+            rr_ratio = float(risk.take_profit_pct or 10) / max(float(risk.stop_loss_pct or 5), 0.1)
+            vol_m    = best_ex.get("volume_24h", 0) / 1e6
+
+            kb = build_confirm_keyboard(symbol, trade_dir, final_size, best_ex.get("name",""))
             await msg.edit_text(
                 f"📋 *تأكيد التنفيذ الحقيقي*\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
                 f"🪙 {symbol} | {'🟢 شراء' if is_buy else '🔴 بيع'}\n"
                 f"💰 الحجم: ${final_size:,.2f}\n"
                 f"📈 السعر: ${ep:,.4f}\n"
-                f"🛑 وقف الخسارة: ${sl_price:,.4f} ({risk.stop_loss_pct:.1f}٪)\n"
-                f"🎯 هدف الربح: ${tp_price:,.4f} ({risk.take_profit_pct:.1f}٪)\n"
-                f"🏦 المنصة: {best_ex.get('name','').upper()} "
-                f"(حجم ${best_ex.get('volume_24h',0)/1e6:.0f}M)\n\n"
-                f"⚠️ هذا تنفيذ حقيقي على حسابك",
+                f"🛑 وقف الخسارة: ${sl_price:,.4f} ({risk.stop_loss_pct:.1f}٪-)\n"
+                f"🎯 هدف الربح:   ${tp_price:,.4f} ({risk.take_profit_pct:.1f}٪+)\n"
+                f"📊 R/R: 1:{rr_ratio:.1f}\n"
+                f"🏦 المنصة: {best_ex.get('name','').upper()} (حجم ${vol_m:.0f}M)"
+                + balance_warn +
+                f"\n\n⚠️ هذا تنفيذ حقيقي على حسابك",
                 parse_mode=ParseMode.MARKDOWN,
                 reply_markup=kb)
             return
@@ -706,11 +728,60 @@ async def handle_trade_callback(update: Update,
             if not om:
                 await query.edit_message_text("⚠️ خطأ في Order Manager"); return
 
-            price = await best_ex["exchange"].get_price(symbol)
-            if price <= 0:
-                await query.edit_message_text(f"❌ لا يوجد سعر لـ {symbol}"); return
+            # M#83: محاولة متعددة لجلب السعر مع fallback
+            price = 0.0
+            for _attempt in range(3):
+                try:
+                    price = await best_ex["exchange"].get_price(symbol)
+                    if price > 0:
+                        break
+                    await asyncio.sleep(1)
+                except Exception:
+                    await asyncio.sleep(1)
 
-            side  = "Buy" if direction == "long" else "Sell"
+            # fallback: OKX public API
+            if price <= 0:
+                try:
+                    import aiohttp
+                    async with aiohttp.ClientSession() as _s:
+                        async with _s.get(
+                            f"https://www.okx.com/api/v5/market/ticker?instId={symbol.upper()}-USDT",
+                            timeout=aiohttp.ClientTimeout(total=8)
+                        ) as _r:
+                            _d = await _r.json()
+                            price = float((_d.get("data") or [{}])[0].get("last", 0) or 0)
+                except Exception:
+                    pass
+
+            if price <= 0:
+                await query.edit_message_text(
+                    f"❌ تعذّر جلب سعر {symbol} حالياً\n\n"
+                    f"• تحقق من أن {symbol} مدعومة على {best_ex.get('name','').upper()}\n"
+                    f"• أعد المحاولة بعد دقيقة",
+                    parse_mode="Markdown")
+                return
+
+            side = "Buy" if direction == "long" else "Sell"
+
+            # M#79: تحقق من الرصيد الفعلي قبل التنفيذ
+            try:
+                actual_balance = await best_ex["exchange"].get_balance("USDT")
+                if actual_balance < size_usd * 0.95:
+                    await query.edit_message_text(
+                        f"⚠️ *رصيد غير كافٍ*\n\n"
+                        f"• رصيدك الفعلي: ${actual_balance:,.2f} USDT\n"
+                        f"• حجم الصفقة: ${size_usd:,.2f}\n"
+                        f"• الفرق: ${size_usd - actual_balance:,.2f}\n\n"
+                        f"💡 أضف رصيداً أو قلل الحجم:\n"
+                        f"`/execute {symbol} {'buy' if direction=='long' else 'sell'} {actual_balance*0.9:.0f}`",
+                        parse_mode="Markdown")
+                    return
+                if actual_balance < size_usd * 1.05:
+                    # تحذير: يستخدم معظم الرصيد
+                    size_usd = actual_balance * 0.9  # استخدام 90% كحد أقصى
+            except Exception as _be:
+                logger.warning(f"balance check: {_be}")
+
             trade = await om.open_trade(
                 symbol=symbol, side=side, size_usd=size_usd,
                 entry_price=price, stop_loss_pct=5.0, take_profit_pct=10.0,
