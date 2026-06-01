@@ -52,6 +52,20 @@ class Balance:
 # ═══════════════════════════════════════════════════════════════
 # Base Exchange
 # ═══════════════════════════════════════════════════════════════
+
+# حدود الحجم الأدنى لكل منصة (USD)
+EXCHANGE_MIN_ORDER_USD = {
+    "binance": {"default": 5.0,  "BTC": 10.0, "ETH": 5.0},
+    "okx":     {"default": 1.0,  "BTC": 5.0,  "ETH": 2.0},
+    "bybit":   {"default": 1.0,  "BTC": 5.0,  "ETH": 1.0},
+    "bitget":  {"default": 2.0,  "BTC": 5.0,  "ETH": 2.0},
+    "mexc":    {"default": 1.0,  "BTC": 5.0,  "ETH": 1.0,  "FET": 1.0, "ZRO": 1.0},
+}
+
+def get_exchange_min_order(exchange_name: str, symbol: str) -> float:
+    ex_mins = EXCHANGE_MIN_ORDER_USD.get(exchange_name.lower(), {})
+    return ex_mins.get(symbol.upper(), ex_mins.get("default", 1.0))
+
 class BaseExchange:
     def __init__(self, api_key: str, api_secret: str, testnet: bool = False):
         # تنظيف credentials من أي مسافات أو أحرف خفية
@@ -96,6 +110,11 @@ class BaseExchange:
 # Binance Spot
 # ═══════════════════════════════════════════════════════════════
 class BinanceExchange(BaseExchange):
+    EXCHANGE_NAME = "binance"
+
+    async def get_min_order_size(self, symbol: str) -> float:
+        return get_exchange_min_order("binance", symbol)
+
 
     BASE     = "https://api.binance.com"
     BASE_TEST= "https://testnet.binance.vision"
@@ -232,6 +251,11 @@ class BinanceExchange(BaseExchange):
 # Bybit Spot V5
 # ═══════════════════════════════════════════════════════════════
 class BybitExchange(BaseExchange):
+    EXCHANGE_NAME = "bybit"
+
+    async def get_min_order_size(self, symbol: str) -> float:
+        return get_exchange_min_order("bybit", symbol)
+
 
     BASE      = "https://api.bybit.com"
     BASE_TEST = "https://api-testnet.bybit.com"
@@ -397,6 +421,11 @@ class BybitExchange(BaseExchange):
 # OKX V5
 # ═══════════════════════════════════════════════════════════════
 class OKXExchange(BaseExchange):
+    EXCHANGE_NAME = "okx"
+
+    async def get_min_order_size(self, symbol: str) -> float:
+        return get_exchange_min_order("okx", symbol)
+
     """OKX V5 API — Spot + Futures + Margin"""
 
     BASE      = "https://www.okx.com"
@@ -609,6 +638,11 @@ class OKXExchange(BaseExchange):
 # Bitget V2
 # ═══════════════════════════════════════════════════════════════
 class BitgetExchange(BaseExchange):
+    EXCHANGE_NAME = "bitget"
+
+    async def get_min_order_size(self, symbol: str) -> float:
+        return get_exchange_min_order("bitget", symbol)
+
     """Bitget V2 API — Spot + Futures"""
 
     BASE = "https://api.bitget.com"
@@ -840,6 +874,11 @@ class BitgetExchange(BaseExchange):
 # MEXC V3
 # ═══════════════════════════════════════════════════════════════
 class MEXCExchange(BaseExchange):
+    EXCHANGE_NAME = "mexc"
+
+    async def get_min_order_size(self, symbol: str) -> float:
+        return get_exchange_min_order("mexc", symbol)
+
     """MEXC V3 API — Spot"""
 
     BASE = "https://api.mexc.com"

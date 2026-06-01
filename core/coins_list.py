@@ -490,7 +490,6 @@ def get_tier_message(symbol: str, tier: str) -> str:
             break
 
     if sym_rank is None:
-        # العملة غير موجودة في القائمة أصلاً
         return (
             f"⛔ *{sym_upper}* غير مدرجة في قائمة العملات المدعومة حالياً\n\n"
             f"📋 القائمة تُحدَّث شهرياً — {sym_upper} قد تكون عملة جديدة\n"
@@ -499,31 +498,32 @@ def get_tier_message(symbol: str, tier: str) -> str:
 
     user_limit = TIER_LIMITS.get(tier, 30)
     if sym_rank <= user_limit:
-        # العملة مسموحة! — خطأ في مكان آخر
         return f"✅ {sym_upper} متاحة لباقتك ({current_name})"
 
-    # إيجاد الباقة المطلوبة
+    # إيجاد الباقة المطلوبة بدقة
+    required_tier = None
     for t in ["free", "silver", "gold", "diamond", "admin"]:
         if sym_rank <= TIER_LIMITS.get(t, 9999):
-            required = tier_names.get(t, t)
-            if tier == "diamond":
-                # الماسي أعلى باقة — المشكلة في القائمة لا في الباقة
-                return (
-                    f"⛔ *{sym_upper}* خارج نطاق عملاتك حالياً\n\n"
-                    f"• باقتك: {current_name} (حتى {user_limit} عملة)\n"
-                    f"• ترتيب {sym_upper}: #{sym_rank}\n"
-                    f"• 💡 جرّب عملة ضمن أعلى {user_limit} عملة"
-                )
-            return (
-                f"⛔ *{sym_upper}* غير متاحة في باقتك الحالية\n\n"
-                f"• باقتك: {current_name}\n"
-                f"• *{sym_upper}* متاحة من: {required} وأعلى\n"
-                f"⬆️ للترقية: /upgrade"
-            )
+            required_tier = t
+            break
+
+    required_name  = tier_names.get(required_tier, required_tier) if required_tier else "💎 ماسي"
+    required_limit = TIER_LIMITS.get(required_tier, 350) if required_tier else 350
+
+    if tier == "diamond":
+        return (
+            f"⛔ *{sym_upper}* خارج نطاق عملاتك حالياً\n\n"
+            f"• باقتك: {current_name} (حتى {user_limit} عملة)\n"
+            f"• ترتيب {sym_upper}: #{sym_rank} في السوق\n"
+            f"• 💡 جرّب عملة ضمن أعلى {user_limit} عملة بحسب الـ Market Cap"
+        )
 
     return (
-        f"⛔ *{sym_upper}* غير متاحة حالياً\n"
-        f"💡 جرّب: BTC, ETH, BNB, SOL, XRP"
+        f"⛔ *{sym_upper}* غير متاحة في باقتك الحالية\n\n"
+        f"• باقتك الحالية: {current_name} (حتى {user_limit} عملة)\n"
+        f"• ترتيب {sym_upper}: #{sym_rank} — متاحة من {required_name} (حتى {required_limit} عملة)\n\n"
+        f"⬆️ للترقية إلى {required_name}: /upgrade\n"
+        f"📋 عملاتك المتاحة: /premium"
     )
 
 
