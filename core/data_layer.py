@@ -69,7 +69,7 @@ _CG_MAP = {
     "KAVA":"kava","BAND":"band-protocol","API3":"api3",
     "REN":"republic-protocol","CELO":"celo",
     # إضافات مطلوبة — عملات كانت تفشل بـ ID خاطئ
-    "CFX":"conflux-token",    # ── إضافات ملاحظات #36,#38,#44 ──────────────────────────────
+    "CFX":"conflux-token","ZRO":"layerzero","ASTER":"aster-network",    # ── إضافات ملاحظات #36,#38,#44 ──────────────────────────────
     "RSR":"reserve-rights-token",
     "QNT":"quant-network",
     "BLUR":"blur",
@@ -200,7 +200,7 @@ _CG_MAP = {
     "INJ":"injective-protocol","SEI":"sei-network","RAIN":"rain-coin-2","NAKA":"nakamoto-games",
     "TIA":"celestia","PYTH":"pyth-network","JTO":"jito-governance-token",
     "WIF":"dogwifcoin","BONK":"bonk","FLOKI":"floki",
-    "RENDER":"render-token","FET":"fetch-ai","AGIX":"singularitynet",
+    "RENDER":"render-token","FET":"fetch-ai","FETCH":"fetch-ai","AGIX":"singularitynet",
     "TAO":"bittensor","WLD":"worldcoin-wld","NOT":"notcoin","DOGS":"dogs-2","ORDI":"ordi","SATS":"1000sats-ordinals","ONDO":"ondo-finance",
     "STX":"blockstack","ICP":"internet-computer","FIL":"filecoin",
     "HBAR":"hedera-hashgraph","VET":"vechain","ALGO":"algorand",
@@ -1113,6 +1113,64 @@ class DataLayer:
         except Exception as e:
             logger.debug(f"_hist_okx ({symbol}): {e}")
             return []
+
+
+    async def get_best_exchange_for_symbol(self, symbol: str,
+                                             exchanges: list) -> str:
+        """
+        يجد أفضل منصة لتداول عملة معينة بناءً على الحجم.
+        يُعيد اسم المنصة ذات السيولة الأعلى.
+        M#83: حل جذري لمشكلة OKX حجم=0 لبعض العملات
+        """
+        best_exchange = ""
+        best_volume   = 0.0
+        sym_upper     = symbol.upper()
+
+        for ex_name in exchanges:
+            try:
+                # جلب حجم التداول من كل منصة
+                vol = 0.0
+                if ex_name == "okx":
+                    data = await _fetch(
+                        self.session,
+                        f"https://www.okx.com/api/v5/market/ticker?instId={sym_upper}-USDT",
+                        headers={"User-Agent": "Mozilla/5.0"},
+                        retries=1,
+                    )
+                    if isinstance(data, dict) and data.get("data"):
+                        vol = float(data["data"][0].get("volCcy24h", 0) or 0)
+
+                elif ex_name in ("bybit", "bitget", "mexc", "binance"):
+                    # Bybit
+                    if ex_name == "bybit":
+                        url = f"https://api.bybit.com/v5/market/tickers?category=spot&symbol={sym_upper}USDT"
+                    elif ex_name == "mexc":
+                        url = f"https://api.mexc.com/api/v3/ticker/24hr?symbol={sym_upper}USDT"
+                    else:
+                        url = f"https://api.bitget.com/api/v2/spot/market/tickers?symbol={sym_upper}USDT"
+                    try:
+                        data = await _fetch(self.session, url,
+                                            headers={"User-Agent": "Mozilla/5.0"}, retries=1)
+                        if isinstance(data, dict):
+                            vol = float(
+                                data.get("volume", 0) or
+                                data.get("quoteVolume", 0) or
+                                (data.get("result", {}).get("list", [{}])[0] if ex_name == "bybit" else {}).get("volume24h", 0) or 0
+                            )
+                    except Exception:
+                        pass
+
+                if vol > best_volume:
+                    best_volume   = vol
+                    best_exchange = ex_name
+                    logger.debug(f"get_best_exchange: {sym_upper} → {ex_name} vol=${vol:,.0f}")
+
+            except Exception as e:
+                logger.debug(f"get_best_exchange {ex_name} ({sym_upper}): {e}")
+
+        result = best_exchange or (exchanges[0] if exchanges else "okx")
+        logger.info(f"Best exchange for {sym_upper}: {result} vol=${best_volume:,.0f}")
+        return result
 
     async def get_onchain(self, protocol: str = "all") -> Dict:
         key = f"onchain:{protocol}"
