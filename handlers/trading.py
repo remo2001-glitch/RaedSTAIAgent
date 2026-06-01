@@ -495,9 +495,14 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 engine.risk_engine.format_assessment_ar(risk, symbol),
                 parse_mode=ParseMode.MARKDOWN); return
 
+        # M#89: احترام حجم المستخدم بالضبط
+        # risk_engine قد يُصغِّر الحجم للحماية — لكن لا يُكبِّره أبداً
         final_size = min(float(risk.approved_size or size_usd),
                           size_usd * ev_mult)
-        final_size = max(final_size, 10.0)
+        # لا نرفع الحجم أبداً فوق ما طلبه المستخدم
+        final_size = min(final_size, size_usd)
+        # الحد الأدنى المطلق = $1 (ليس $10)
+        final_size = max(final_size, 1.0)
         is_buy     = direction in ("buy","شراء")
         slip       = 0.1
         ep         = price * (1+slip/100) if is_buy else price * (1-slip/100)
@@ -512,6 +517,22 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
             best_ex = await engine.find_best_exchange(user_id, symbol)
 
         if best_ex:
+            # M#89: فحص الحد الأدنى من المنصة
+            try:
+                ex_obj  = best_ex["exchange"]
+                ex_name = best_ex.get("name", "")
+                min_ord = await ex_obj.get_min_order_size(symbol) if hasattr(ex_obj, "get_min_order_size") else 1.0
+                if final_size < min_ord:
+                    await msg.edit_text(
+                        f"❌ *الحجم أقل من الحد الأدنى*\n\n"
+                        f"• طلبك: ${final_size:,.2f}\n"
+                        f"• الحد الأدنى لـ {symbol} على {ex_name.upper()}: ${min_ord:,.2f}\n\n"
+                        f"💡 جرّب: `/execute {symbol} {direction} {min_ord:.0f}`",
+                        parse_mode="Markdown")
+                    return
+            except Exception as _me:
+                pass
+
             # M#79: فحص الرصيد وعرضه في شاشة التأكيد
             balance_warn = ""
             try:
