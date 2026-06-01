@@ -859,8 +859,16 @@ async def handle_trade_callback(update: Update,
                     f"/trades لمتابعة الصفقات",
                     parse_mode=ParseMode.MARKDOWN)
             else:
+                # M#94: رسالة خطأ مفصلة بدل الرسالة العامة
                 await query.edit_message_text(
-                    "❌ فشل التنفيذ\nتحقق من الرصيد وصلاحيات API")
+                    "❌ *فشل التنفيذ*\n\n"
+                    "الأسباب المحتملة:\n"
+                    "• رصيد USDT غير كافٍ\n"
+                    "• دقة الكمية غير مقبولة من المنصة\n"
+                    "• صلاحيات API — تحقق من تفعيل Spot Trading\n"
+                    "• الحد الأدنى للصفقة لم يُستوفَ\n\n"
+                    "💡 جرّب /live لمراجعة حالة الاتصال",
+                    parse_mode="Markdown")
         except Exception as e:
             logger.error(f"handle_trade_callback: {e}")
             await query.edit_message_text(f"❌ خطأ: {str(e)[:100]}")
