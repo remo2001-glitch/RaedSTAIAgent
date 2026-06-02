@@ -5,7 +5,7 @@ main.py v2 — نقطة الدخول الرئيسية
 الإصلاحات:
 - تحقق من OWNER_CHAT_ID صحيح (رقمي وغير فارغ)
 - معالجة أخطاء error_handler مع إرسال رسالة للمستخدم
-- تقليل رسائل /start من ٣ إلى رسالة موحَّدة
+- تقليل رسائل /start من 3 إلى رسالة موحَّدة
 - إضافة جميع الأوامر في build_app بشكل صحيح
 - safety_monitor: إرسال تنبيه إذا اكتشف Kill Switch
 """
@@ -71,11 +71,11 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     coins     = tier_info["coins"]
     days_left = _sm.get_free_autotrade_days(user_id) if tier == "free" else 0
 
-    # رسالة موحَّدة (بدلاً من ٣ رسائل منفصلة)
+    # رسالة موحَّدة (بدلاً من 3 رسائل منفصلة)
     cmds_text = _build_commands_text(user_id, tier, tier_name)
 
     scan_info = (
-        "\n\n⏰ *المسح التلقائي — كل ٤ ساعات*\n"
+        "\n\n⏰ *المسح التلقائي — كل 4 ساعات*\n"
         "━━━━━━━━━━━━━━━━━━\n"
         "🌏 01:00 | 🌅 05:00 | 🌍 09:00\n"
         "📈 13:00 | 🗽 17:00 | 🌙 21:00 KSA\n"
@@ -120,10 +120,10 @@ def _build_commands_text(user_id: int, tier: str, tier_name: str) -> str:
 
     if _sm.can_use_command(user_id, "signal"):
         analysis = [
-            "/signal — إشارة تداول شاملة ٥ مصادر",
+            "/signal — إشارة تداول شاملة 5 مصادر",
             "/news — تحليل الأخبار بالذكاء الاصطناعي",
             "/regime — حالة السوق",
-            "/backtest — اختبار تاريخي ٣ سنوات",
+            "/backtest — اختبار تاريخي 3 سنوات",
             "/events — الأحداث الماكرو القادمة",
         ]
         sections.append(("📊 *التحليل — فضي+*", analysis))
@@ -164,7 +164,7 @@ def _build_commands_text(user_id: int, tier: str, tier_name: str) -> str:
             "🔒 *أوامر إضافية بالترقية:*",
             "🥈 فضي — signal/news/regime/backtest",
             "🥇 ذهبي — تحليل عميق/تخطيط/سيولة",
-            "💎 ماسي — شارت بصري/٣٠٠ عملة",
+            "💎 ماسي — شارت بصري/300 عملة",
             "",
             "📊 /upgrade — لعرض الباقات والأسعار",
         ]
@@ -186,17 +186,17 @@ async def cmd_about(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🤖 *رائد — Institutional Balanced Crypto AI*",
             "━━━━━━━━━━━━━━━━━━",
             "",
-            "🏗️ *المعمارية — ١٠ طبقات*",
-            "١. Data Layer — CoinGecko · Binance · DeFiLlama",
-            "٢. Data Validator",
-            "٣. Regime Detector — Market Regime",
-            "٤. Signal Layer + Strategy Router (٦ مدارس)",
-            "٥. Risk Engine — Kelly + VaR",
-            "٦. Human Override",
-            "٧. Execution Quality — Microstructure",
-            "٨. Kill Switch + Audit Logger",
-            "٩. Monitoring + Drift",
-            "١٠. Capital Allocation Engine",
+            "🏗️ *المعمارية — 10 طبقات*",
+            "1. Data Layer — CoinGecko · Binance · DeFiLlama",
+            "2. Data Validator",
+            "3. Regime Detector — Market Regime",
+            "4. Signal Layer + Strategy Router (6 مدارس)",
+            "5. Risk Engine — Kelly + VaR",
+            "6. Human Override",
+            "7. Execution Quality — Microstructure",
+            "8. Kill Switch + Audit Logger",
+            "9. Monitoring + Drift",
+            "10. Capital Allocation Engine",
             "",
             "📦 *المنصات*",
             "OKX · Binance · Bybit · Bitget · MEXC",
@@ -242,7 +242,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
         try:
             await update.effective_message.reply_text(
                 "⚠️ حدث خطأ غير متوقع. يرجى المحاولة مجدداً.\n"
-                "إذا استمر الخطأ، تواصل مع الدعم الفني."
+                "إذا استمر الخطأ, تواصل مع الدعم الفني."
             )
         except Exception:
             pass
@@ -391,7 +391,7 @@ async def post_shutdown(app: Application):
 
 
 # ════════════════════════════════════════════════════════════════
-# Safety Monitor — كل ٥ دقائق
+# Safety Monitor — كل 5 دقائق
 # ════════════════════════════════════════════════════════════════
 async def safety_monitor_job(context: ContextTypes.DEFAULT_TYPE):
     engine = context.bot_data.get("raed_engine")
@@ -451,7 +451,7 @@ def build_app() -> Application:
     # ── معالج الأخطاء ──
     app.add_error_handler(error_handler)
 
-    # ── Safety Monitor كل ٥ دقائق ──
+    # ── Safety Monitor كل 5 دقائق ──
     app.job_queue.run_repeating(
         safety_monitor_job,
         interval=300,
