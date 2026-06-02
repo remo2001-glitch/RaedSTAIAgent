@@ -295,7 +295,7 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = await update.message.reply_text(
         f"📋 جاري بناء {plan_label}...\n"
-        + ("⏳ قد يستغرق ١-٣ دقائق — يُرجى الانتظار بصبر" if scan_mode
+        + ("⏳ المسح الشامل قد يستغرق ٥-١٥ دقيقة — يُرجى الانتظار" if scan_mode
            else "⏳ قد يستغرق ١-٣ دقائق — يُرجى عدم تكرار الأمر")
     )
     try:
@@ -435,9 +435,12 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
             conf_warn = " ⚠️ دون حد الدخول" if (cand and conf < 0.65) else ""
             # تنسيق السعر الصحيح حسب حجمه
             price_str = _fmt_price(price_v) if price_v > 0 else "🔄 جاري الجلب"
+            # M#99: نوع الصفقة planmonth
+            _d4 = (cand or {}).get("direction","neutral")
+            _t4 = "📈 Spot/Long" if _d4=="long" else "📉 Short" if _d4=="short" else "⚪ انتظار"
             line = f"💎 *{sym_p}* — {price_str}"
             if cand:
-                line += f" | {dir_ar} | ثقة: {conf:.0%}{conf_warn}"
+                line += f" | {dir_ar} | ثقة: {conf:.0%}{conf_warn} | {_t4}"
             price_lines.append(line)
 
         lines += ["", "💰 *العملات المُحلَّلة*"] + price_lines
@@ -610,15 +613,15 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 entry_lines = []
                 if price > 0:
                     if signal.confidence >= 0.40:
-                        entry = max(fib_382, price * (1 - atr_v * 0.5))
-                        tp1   = price * (1 + atr_v * 1.5)
+                        entry = min(max(fib_382, price * (1 - atr_v * 0.5)), price * 0.999)
+                        tp1   = entry * (1 + atr_v * 1.5)
                         tp2   = price * (1 + atr_v * 2.5)
                         sl    = entry * (1 - atr_v * 1.2)
                         rr    = (tp1 - entry) / max(entry - sl, 0.0001)
                         entry_lines = [
                             f"  📍 دخول: {_fmt_price(entry)} | وقف: {_fmt_price(sl)} ({atr_v*120:.1f}%-)",
                             f"  🎯 هدف١: {_fmt_price(tp1)} (+{atr_v*150:.1f}%) | هدف٢: {_fmt_price(tp2)} (+{atr_v*250:.1f}%)",
-                            f"  📊 R/R: 1:{rr:.1f} | ATR: {atr_v*100:.1f}%",
+                            f"  📊 {('R/R: 1:' + f'{rr:.1f}') if rr >= 1.0 else '⚠️ R/R غير مناسب'} | ATR: {atr_v*100:.1f}%",
                         ]
                     elif signal.confidence >= 0.40 and signal.direction == "short":
                         entry = min(fib_618, price * (1 + atr_v * 0.3))
