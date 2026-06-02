@@ -88,86 +88,170 @@ def _calc_rsi(candles: list, period: int = 14) -> float:
 
 
 
-def _calc_price_forecast(candles: list, days: int = 30) -> dict:
+def _calc_price_forecast(candles: list, days: int = 30,
+                           fear_greed: int = 50,
+                           btc_dominance: float = 50.0,
+                           market_regime: str = "neutral") -> dict:
     """
-    النقطة ١٢: تنبؤ بالسعر للـ N يوم القادمة.
-    يستخدم: ATR Channels + EMA Trend + RSI momentum
+    النقطة ١٢: تنبؤ متقدم للسعر بـ N يوم.
+    المدارس المستخدمة:
+    - Elliott Wave تقريبي (ATR channels + Fibonacci extensions)
+    - Wyckoff (حجم + regime)
+    - Dow Theory (EMA20/50/200 alignment)
+    - Momentum (RSI + MACD تقديري)
+    - Sentiment (Fear&Greed + BTC Dominance)
     """
     if len(candles) < 30:
         return {}
     try:
-        closes = [float(c.get("close", 0)) for c in candles if c.get("close")]
-        highs  = [float(c.get("high",  0)) for c in candles if c.get("high")]
-        lows   = [float(c.get("low",   0)) for c in candles if c.get("low")]
+        closes  = [float(c.get("close", 0)) for c in candles if c.get("close")]
+        highs   = [float(c.get("high",  0)) for c in candles if c.get("high")]
+        lows    = [float(c.get("low",   0)) for c in candles if c.get("low")]
+        volumes = [float(c.get("volume", 0)) for c in candles if c.get("volume")]
         if not closes: return {}
 
-        price  = closes[-1]
-        atr    = _calc_atr(candles)
-        atr_pct = atr / price * 100 if price > 0 else 3.0
+        price    = closes[-1]
+        atr      = _calc_atr(candles)
+        atr_pct  = atr / price * 100 if price > 0 else 3.0
+        rsi      = _calc_rsi(candles)
 
-        # EMA Trend
-        ema20 = sum(closes[-20:]) / 20
-        ema50 = sum(closes[-50:]) / 50 if len(closes) >= 50 else ema20
-        trend = "bullish" if ema20 > ema50 and price > ema20 else                 "bearish" if ema20 < ema50 and price < ema20 else "neutral"
+        # ── Dow Theory: EMA Alignment ─────────────────────────────
+        ema20  = sum(closes[-20:]) / 20
+        ema50  = sum(closes[-50:]) / 50 if len(closes) >= 50 else ema20
+        ema200 = sum(closes[-200:]) / 200 if len(closes) >= 200 else ema50
+        dow_bull  = price > ema20 > ema50 > ema200   # اتجاه صاعد كامل
+        dow_bear  = price < ema20 < ema50 < ema200   # اتجاه هابط كامل
+        trend     = "bullish" if dow_bull else "bearish" if dow_bear else                     "bullish" if ema20 > ema50 else "bearish" if ema20 < ema50 else "neutral"
 
-        # RSI Momentum
-        rsi = _calc_rsi(candles)
-        momentum = 1.0  # محايد
-        if rsi < 30: momentum = 1.2   # ذروة بيع → ارتداد محتمل
-        elif rsi > 70: momentum = 0.8  # ذروة شراء → تراجع محتمل
-        elif trend == "bullish": momentum = 1.05
-        elif trend == "bearish": momentum = 0.95
+        # ── Wyckoff: تحليل الحجم ─────────────────────────────────
+        vol_avg = sum(volumes[-20:]) / 20 if volumes else 1
+        vol_now = volumes[-1] if volumes else vol_avg
+        vol_ratio = vol_now / vol_avg if vol_avg > 0 else 1.0
+        # ارتفاع السعر مع حجم عالٍ = تأكيد (Wyckoff markup)
+        wyckoff_confirm = vol_ratio > 1.2 and trend == "bullish"
 
-        # حساب المستهدفات
-        daily_move = atr_pct / 100
-        bull_case  = price * (1 + daily_move * days * 0.5 * momentum)
-        base_case  = price * (1 + daily_move * days * 0.2 * momentum)
-        bear_case  = price * (1 - daily_move * days * 0.3 / momentum)
+        # ── RSI Momentum ─────────────────────────────────────────
+        rsi_momentum = 1.0
+        if rsi < 25:   rsi_momentum = 1.25  # ذروة بيع شديدة → انتعاش قوي
+        elif rsi < 35: rsi_momentum = 1.10  # ذروة بيع → انتعاش
+        elif rsi > 75: rsi_momentum = 0.75  # ذروة شراء شديدة → تصحيح
+        elif rsi > 65: rsi_momentum = 0.90  # ذروة شراء → حذر
+        elif trend == "bullish": rsi_momentum = 1.05
+        elif trend == "bearish": rsi_momentum = 0.95
 
-        # مستويات Fibonacci للتنبؤ
+        # ── Sentiment: Fear&Greed + BTC Dominance ────────────────
+        sentiment_mult = 1.0
+        if fear_greed < 20:   sentiment_mult = 1.15  # خوف شديد = فرصة
+        elif fear_greed < 35: sentiment_mult = 1.05  # خوف = محتاط إيجابي
+        elif fear_greed > 75: sentiment_mult = 0.90  # جشع شديد = خطر
+        elif fear_greed > 60: sentiment_mult = 0.95  # جشع = حذر
+        # BTC Dominance: ارتفاع Dominance = Alt Coins تنخفض
+        if btc_dominance > 60 and trend == "bullish":
+            sentiment_mult *= 0.95  # Alt season ضعيف
+        elif btc_dominance < 45 and trend == "bullish":
+            sentiment_mult *= 1.05  # Alt season قوي
+
+        # ── Market Regime ─────────────────────────────────────────
+        regime_mult = 1.0
+        if "هابط" in market_regime or "bear" in market_regime.lower():
+            regime_mult = 0.85
+        elif "صاعد" in market_regime or "bull" in market_regime.lower():
+            regime_mult = 1.10
+
+        # ── Elliott Wave تقريبي: Fibonacci Extensions ─────────────
         recent_high = max(highs[-30:])
         recent_low  = min(lows[-30:])
-        fib_target1 = recent_low + (recent_high - recent_low) * 1.272
-        fib_target2 = recent_low + (recent_high - recent_low) * 1.618
+        diff        = recent_high - recent_low
+        # موجة 3 و 5 (الأكثر شيوعاً في Elliott)
+        fib_target1 = recent_low + diff * 1.272  # موجة 3
+        fib_target2 = recent_low + diff * 1.618  # موجة 5
+        fib_target3 = recent_low + diff * 2.618  # هدف موجة C
+        # دعم فيبوناتشي (retracement)
+        fib_support1 = recent_high - diff * 0.382
+        fib_support2 = recent_high - diff * 0.618
+
+        # ── الحساب النهائي المُرجَّح ──────────────────────────────
+        combined_mult = rsi_momentum * sentiment_mult * regime_mult
+        wyckoff_boost = 1.02 if wyckoff_confirm else 1.0
+        daily_move    = atr_pct / 100
+
+        bull_case = price * (1 + daily_move * days * 0.6 * combined_mult * wyckoff_boost)
+        base_case = price * (1 + daily_move * days * 0.25 * combined_mult)
+        bear_case = price * (1 - daily_move * days * 0.4 / combined_mult)
+
+        # ── حساب الثقة ───────────────────────────────────────────
+        confidence_factors = []
+        confidence_factors.append(0.3 if dow_bull or dow_bear else 0.15)
+        confidence_factors.append(0.2 if vol_ratio > 1.2 else 0.1)
+        confidence_factors.append(abs(rsi - 50) / 50 * 0.25)
+        confidence_factors.append(abs(fear_greed - 50) / 50 * 0.15)
+        confidence_factors.append(0.1 if market_regime != "neutral" else 0.05)
+        confidence = min(sum(confidence_factors), 0.95)
 
         return {
-            "trend":      trend,
-            "rsi":        rsi,
-            "atr_pct":    round(atr_pct, 2),
-            "bull_case":  round(bull_case, 8),
-            "base_case":  round(base_case, 8),
-            "bear_case":  round(bear_case, 8),
-            "fib_t1":     round(fib_target1, 8),
-            "fib_t2":     round(fib_target2, 8),
-            "confidence": round(abs(rsi - 50) / 50 * 0.5 + 0.5, 2),
+            "trend":        trend,
+            "rsi":          round(rsi, 1),
+            "atr_pct":      round(atr_pct, 2),
+            "fear_greed":   fear_greed,
+            "btc_dom":      btc_dominance,
+            "vol_ratio":    round(vol_ratio, 2),
+            "wyckoff":      wyckoff_confirm,
+            "bull_case":    round(bull_case, 8),
+            "base_case":    round(base_case, 8),
+            "bear_case":    round(bear_case, 8),
+            "fib_t1":       round(fib_target1, 8),
+            "fib_t2":       round(fib_target2, 8),
+            "fib_t3":       round(fib_target3, 8),
+            "fib_s1":       round(fib_support1, 8),
+            "fib_s2":       round(fib_support2, 8),
+            "confidence":   round(confidence, 2),
+            "combined_mult":round(combined_mult, 3),
         }
     except Exception:
         return {}
 
 
 def _format_forecast_ar(symbol: str, price: float, fc: dict, days: int = 30) -> str:
-    """تنسيق تنبؤ السعر للعرض."""
-    if not fc:
+    """
+    تنسيق تنبؤ السعر المتقدم للعرض.
+    يشمل: Elliott + Wyckoff + Dow + Sentiment + Fibonacci
+    """
+    if not fc or price <= 0:
         return ""
-    trend_ar = {"bullish": "📈 صاعد", "bearish": "📉 هابط", "neutral": "↔️ جانبي"}.get(fc.get("trend",""), "")
     p_fmt    = _fmt_price
+    trend_ar = {"bullish": "📈 صاعد", "bearish": "📉 هابط", "neutral": "↔️ جانبي"}.get(fc.get("trend",""), "↔️")
+    conf     = fc.get("confidence", 0)
+    conf_bar = "█" * int(conf * 10) + "░" * (10 - int(conf * 10))
+
+    bull = fc.get("bull_case", price)
+    base = fc.get("base_case", price)
+    bear = fc.get("bear_case", price)
+
+    bull_pct = (bull/price - 1)*100
+    base_pct = (base/price - 1)*100
+    bear_pct = (bear/price - 1)*100
+
     lines = [
-        f"",
-        f"🔮 *تنبؤ {symbol} — {days} يوم*",
-        f"━━━━━━━━━━━━━━━━━━",
-        f"• الاتجاه المتوقع: {trend_ar}",
-        f"• ATR: {fc.get('atr_pct',0):.1f}% | RSI: {fc.get('rsi',50):.0f}",
-        f"",
-        f"📊 سيناريوهات الـ {days} يوم القادمة:",
-        f"  🟢 متفائل:  {p_fmt(fc.get('bull_case',price))} (+{(fc.get('bull_case',price)/price-1)*100:.1f}%)",
-        f"  🟡 محتمل:  {p_fmt(fc.get('base_case',price))} (+{(fc.get('base_case',price)/price-1)*100:.1f}%)",
-        f"  🔴 متحفظ:  {p_fmt(fc.get('bear_case',price))} ({(fc.get('bear_case',price)/price-1)*100:.1f}%)",
-        f"",
-        f"📐 أهداف فيبوناتشي:",
-        f"  🎯 هدف ١:  {p_fmt(fc.get('fib_t1',0))} (Fib 1.272)",
-        f"  🎯 هدف ٢:  {p_fmt(fc.get('fib_t2',0))} (Fib 1.618)",
-        f"  ثقة التنبؤ: {fc.get('confidence',0):.0%}",
-        f"",
+        "",
+        f"🔮 *تنبؤ {symbol} — {days} يوم القادمة*",
+        "━━━━━━━━━━━━━━━━━━",
+        f"• الاتجاه: {trend_ar} | الثقة: {conf_bar} {conf:.0%}",
+        f"• RSI: {fc.get('rsi',50):.0f} | ATR: {fc.get('atr_pct',0):.1f}%",
+        f"• Fear&Greed: {fc.get('fear_greed',50)} | BTC Dom: {fc.get('btc_dom',50):.0f}%",
+        f"• {'🔊 حجم مرتفع (Wyckoff ✅)' if fc.get('wyckoff') else '🔇 حجم عادي'}",
+        "",
+        f"📊 *السيناريوهات الـ {days} يوم:*",
+        f"  🟢 متفائل (Elliott 5): {p_fmt(bull)} ({bull_pct:+.1f}%)",
+        f"  🟡 محتمل (Base):       {p_fmt(base)} ({base_pct:+.1f}%)",
+        f"  🔴 متحفظ (Bear):       {p_fmt(bear)} ({bear_pct:+.1f}%)",
+        "",
+        f"📐 *أهداف فيبوناتشي (Elliott):*",
+        f"  🎯 هدف ١ (1.272): {p_fmt(fc.get('fib_t1',0))}",
+        f"  🎯 هدف ٢ (1.618): {p_fmt(fc.get('fib_t2',0))}",
+        f"  🎯 هدف ٣ (2.618): {p_fmt(fc.get('fib_t3',0))}",
+        f"  🛡️ دعم ١ (0.382): {p_fmt(fc.get('fib_s1',0))}",
+        f"  🛡️ دعم ٢ (0.618): {p_fmt(fc.get('fib_s2',0))}",
+        "",
         f"⚠️ التنبؤ استرشادي — الأسواق غير متوقعة",
     ]
     return "\n".join(lines)
