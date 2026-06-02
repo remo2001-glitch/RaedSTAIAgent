@@ -419,6 +419,29 @@ async def cmd_live(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # /execute — تنفيذ فوري
 # ════════════════════════════════════════════════════════════════
 @require_tier("execute")
+
+async def callback_execmode(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """M#112: معالجة اختيار المستخدم real/virtual في execute."""
+    query   = update.callback_query
+    await query.answer()
+    data    = query.data  # execmode_real_BTC_buy_100.00_0.0000
+    parts   = data.split("_")
+    if len(parts) < 5: return
+    mode     = parts[1]        # real | virtual
+    symbol   = parts[2].upper()
+    direction= parts[3]
+    size_usd = float(parts[4])
+    lp       = float(parts[5]) if len(parts) > 5 else 0.0
+
+    # إعادة توجيه الأمر مع الوضع المحدد
+    context.args = [symbol, direction, str(size_usd), mode]
+    if lp > 0:
+        context.args += ["limit", str(lp)]
+    await query.edit_message_text(
+        f"{'💰 تنفيذ حقيقي' if mode=='real' else '🎮 محفظة افتراضية'} — جاري التقييم...")
+    update.message = query.message
+    await cmd_execute(update, context)
+
 async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine = _eng(context)
     if not engine:
@@ -455,7 +478,35 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🔴 التنفيذ متوقف — Kill Switch مفعّل"); return
 
     user_id  = update.effective_user.id
-    has_live = engine.user_has_live_trading(user_id)
+    has_live   = engine.user_has_live_trading(user_id)
+    force_mode = None  # None = يسأل, "real" = حقيقي, "virtual" = افتراضي
+    if context.args and len(context.args) > 0:
+        last_arg = context.args[-1].lower()
+        if last_arg in ("real","حقيقي"):   force_mode = "real"
+        elif last_arg in ("virtual","افتراضي","demo"): force_mode = "virtual"
+
+    # M#112: إذا لديه ربط حقيقي → سؤال قبل التنفيذ
+    if has_live and force_mode is None:
+        info_q    = engine.get_user_exchange(user_id)
+        ex_name_q = info_q.get("name","").upper() if info_q else "منصتك"
+        kb_mode   = InlineKeyboardMarkup([[
+            InlineKeyboardButton(f"✅ تداول حقيقي ({ex_name_q})",
+                                 callback_data=f"execmode_real_{symbol}_{direction}_{size_usd:.2f}_{limit_price:.4f}"),
+            InlineKeyboardButton("🎮 افتراضي",
+                                 callback_data=f"execmode_virtual_{symbol}_{direction}_{size_usd:.2f}_{limit_price:.4f}"),
+        ]])
+        await update.message.reply_text(
+            f"⚡ *كيف تريد تنفيذ الصفقة؟*\n\n"
+            f"• {symbol} | {'شراء' if direction=='buy' else 'بيع'} | ${size_usd:,.2f}\n\n"
+            f"اختر نوع التنفيذ:",
+            parse_mode="Markdown",
+            reply_markup=kb_mode)
+        return  # ننتظر callback
+
+    # إذا اختار virtual أو لا يوجد ربط → محفظة افتراضية
+    if force_mode == "virtual" or not has_live:
+        has_live = False
+
     msg = await update.message.reply_text(
         f"🔍 جاري تقييم {symbol} ({direction}) بـ ${size_usd:,.0f}...\n"
         f"الوضع: {'💰 حقيقي' if has_live else '🎮 افتراضي'}")
@@ -594,8 +645,8 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"🪙 {symbol} | {'🟢 شراء' if is_buy else '🔴 بيع'}\n"
                 f"💰 الحجم: ${final_size:,.2f}\n"
                 f"📈 نوع الأمر: {order_type_ar}\n"
-                f"🛑 وقف الخسارة: ${sl_price:,.4f} ({risk.stop_loss_pct:.1f}٪-)\n"
-                f"🎯 هدف الربح:   ${tp_price:,.4f} ({risk.take_profit_pct:.1f}٪+)\n"
+                f"🛑 وقف الخسارة: ${sl_price:,.4f} ({risk.stop_loss_pct:.1f}%-)\n"
+                f"🎯 هدف الربح:   ${tp_price:,.4f} ({risk.take_profit_pct:.1f}%+)\n"
                 f"📊 R/R: 1:{rr_ratio:.1f}\n"
                 f"🏦 المنصة: {best_ex.get('name','').upper()} (حجم ${vol_m:.0f}M)"
                 + balance_warn + protect_note +
@@ -617,8 +668,8 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🪙 {symbol} | {'🟢 شراء' if is_buy else '🔴 بيع'}",
             f"💰 الحجم: ${final_size:,.2f}",
             f"📈 سعر الدخول: ${ep:,.4f}",
-            f"🛑 وقف الخسارة: ${sl_price:,.4f} ({risk.stop_loss_pct:.1f}٪)",
-            f"🎯 هدف الربح: ${tp_price:,.4f} ({risk.take_profit_pct:.1f}٪)",
+            f"🛑 وقف الخسارة: ${sl_price:,.4f} ({risk.stop_loss_pct:.1f}%)",
+            f"🎯 هدف الربح: ${tp_price:,.4f} ({risk.take_profit_pct:.1f}%)",
             f"⏰ أقصى مدة: {risk.max_hold_hours} ساعة",
             "",
             "💡 للتداول الحقيقي: /live connect [منصة] [key] [secret]",
@@ -650,7 +701,7 @@ async def cmd_trades(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("⚠️ خطأ في Order Manager"); return
 
         trades = om.get_all_trades(user_id)[:10]
-        # النقطة ١/٧: بحث في Redis إذا لم توجد في الذاكرة
+        # النقطة 1/7: بحث في Redis إذا لم توجد في الذاكرة
         if not trades and om and hasattr(om, "_load_trades_from_redis"):
             for d in om._load_trades_from_redis(user_id)[:10]:
                 try:
@@ -1047,7 +1098,7 @@ async def cmd_risk(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "⚖️ *حالة Risk Engine*",
             "━━━━━━━━━━━━━━━━━━",
             f"💰 المحفظة: ${report.get('portfolio',0):,.0f}",
-            f"📉 Drawdown: {report.get('drawdown_pct',0):.1f}٪",
+            f"📉 Drawdown: {report.get('drawdown_pct',0):.1f}%",
             f"💸 PnL اليوم: ${report.get('today_pnl',0):+,.2f}",
             f"📊 صفقات مفتوحة: {report.get('open_positions',0)}",
             f"📅 تعرض الأحداث: {ev_mult:.0%}",

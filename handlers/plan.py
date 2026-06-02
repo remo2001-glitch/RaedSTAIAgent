@@ -93,7 +93,7 @@ def _calc_price_forecast(candles: list, days: int = 30,
                            btc_dominance: float = 50.0,
                            market_regime: str = "neutral") -> dict:
     """
-    النقطة ١٢: تنبؤ متقدم للسعر بـ N يوم.
+    النقطة 12: تنبؤ متقدم للسعر بـ N يوم.
     المدارس المستخدمة:
     - Elliott Wave تقريبي (ATR channels + Fibonacci extensions)
     - Wyckoff (حجم + regime)
@@ -246,11 +246,11 @@ def _format_forecast_ar(symbol: str, price: float, fc: dict, days: int = 30) -> 
         f"  🔴 متحفظ (Bear):       {p_fmt(bear)} ({bear_pct:+.1f}%)",
         "",
         f"📐 *أهداف فيبوناتشي (Elliott):*",
-        f"  🎯 هدف ١ (1.272): {p_fmt(fc.get('fib_t1',0))}",
-        f"  🎯 هدف ٢ (1.618): {p_fmt(fc.get('fib_t2',0))}",
-        f"  🎯 هدف ٣ (2.618): {p_fmt(fc.get('fib_t3',0))}",
-        f"  🛡️ دعم ١ (0.382): {p_fmt(fc.get('fib_s1',0))}",
-        f"  🛡️ دعم ٢ (0.618): {p_fmt(fc.get('fib_s2',0))}",
+        f"  🎯 هدف 1 (1.272): {p_fmt(fc.get('fib_t1',0))}",
+        f"  🎯 هدف 2 (1.618): {p_fmt(fc.get('fib_t2',0))}",
+        f"  🎯 هدف 3 (2.618): {p_fmt(fc.get('fib_t3',0))}",
+        f"  🛡️ دعم 1 (0.382): {p_fmt(fc.get('fib_s1',0))}",
+        f"  🛡️ دعم 2 (0.618): {p_fmt(fc.get('fib_s2',0))}",
         "",
         f"⚠️ التنبؤ استرشادي — الأسواق غير متوقعة",
     ]
@@ -295,12 +295,12 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = await update.message.reply_text(
         f"📋 جاري بناء {plan_label}...\n"
-        + ("⏳ المسح الشامل قد يستغرق ٥-١٥ دقيقة — يُرجى الانتظار" if scan_mode
-           else "⏳ قد يستغرق ١-٣ دقائق — يُرجى عدم تكرار الأمر")
+        + ("⏳ المسح الشامل قد يستغرق 5-15 دقيقة — يُرجى الانتظار" if scan_mode
+           else "⏳ قد يستغرق 1-3 دقائق — يُرجى عدم تكرار الأمر")
     )
     try:
 
-        # ── ١. بيانات أساسية متوازية ──────────────────────────
+        # ── 1. بيانات أساسية متوازية ──────────────────────────
         fear, onchain, btc_c = await asyncio.gather(
             engine.data_layer.get_fear_greed(),
             engine.data_layer.get_onchain(),
@@ -319,13 +319,13 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
             regime = RegimeResult(Regime.UNKNOWN, 0.3, "⚪ غير محدد",
                                    ["reduce_size"], {}, "reduce_size")
 
-        # ── ٢. OHLCV لجميع العملات متوازية ───────────────────
+        # ── 2. OHLCV لجميع العملات متوازية ───────────────────
         ohlcv_all = await asyncio.gather(
             *[engine.data_layer.get_ohlcv(sym, "1d", 200) for sym in symbols],
             return_exceptions=True,
         )
 
-        # ── ٣. أخبار مرة واحدة لجميع العملات ─────────────────
+        # ── 3. أخبار مرة واحدة لجميع العملات ─────────────────
         news_raw = await engine.data_layer.get_news(
             currencies=",".join(symbols), limit=10) or []
         try:
@@ -335,7 +335,7 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
             news_an = {}
         news_sentiment = float(news_an.get("sentiment_score") or 0)
 
-        # ── ٤. بناء المرشحين ──────────────────────────────────
+        # ── 4. بناء المرشحين ──────────────────────────────────
         # في scan_mode: نجلب top_coins ونفلتر أفضلها
         if scan_mode:
             from core.state_manager import state_manager as _sm_pm
@@ -421,7 +421,7 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # البحث في candidates أولاً
             cand = next((c for c in candidates if c.get("symbol") == sym_p), None)
             price_v = float((cand or {}).get("price") or 0)
-            # إذا لم يكن في candidates، جلب السعر مباشرة
+            # إذا لم يكن في candidates, جلب السعر مباشرة
             if price_v <= 0:
                 try:
                     pd = await engine.data_layer.get_price(sym_p)
@@ -456,24 +456,24 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if regime.regime in (Regime.BEAR_TREND, Regime.DISTRIBUTION):
             week_plan = [
-                f"• أسبوع ١: احتفظ بـ {cash_pct:.0%} سيولة (${cash_amount:,.0f}) — انتظر RSI يرتد فوق 30",
-                "• أسبوع ٢: مراقبة مستويات الدعم ودخول تدريجي عند أول إشارة RSI",
-                "• أسبوع ٣: راجع الإشارات — إذا Fear & Greed < 25 ابدأ التجميع التدريجي",
-                "• أسبوع ٤: تقييم: هل تشكّل قاع؟ قرار الدخول الكامل",
+                f"• أسبوع 1: احتفظ بـ {cash_pct:.0%} سيولة (${cash_amount:,.0f}) — انتظر RSI يرتد فوق 30",
+                "• أسبوع 2: مراقبة مستويات الدعم ودخول تدريجي عند أول إشارة RSI",
+                "• أسبوع 3: راجع الإشارات — إذا Fear & Greed < 25 ابدأ التجميع التدريجي",
+                "• أسبوع 4: تقييم: هل تشكّل قاع؟ قرار الدخول الكامل",
             ]
         elif regime.regime in (Regime.BULL_TREND, Regime.ACCUMULATION):
             week_plan = [
-                f"• أسبوع ١: دخول مبكر — {invest_pct:.0%} من المحفظة (${invest_amount:,.0f})",
-                "• أسبوع ٢: مضاعفة المراكز الرابحة عند تأكيد الاتجاه",
-                "• أسبوع ٣: رفع وقف الخسارة للتعادل على جميع المراكز",
-                "• أسبوع ٤: جني جزء من الأرباح (30-50%) والاحتفاظ بالباقي",
+                f"• أسبوع 1: دخول مبكر — {invest_pct:.0%} من المحفظة (${invest_amount:,.0f})",
+                "• أسبوع 2: مضاعفة المراكز الرابحة عند تأكيد الاتجاه",
+                "• أسبوع 3: رفع وقف الخسارة للتعادل على جميع المراكز",
+                "• أسبوع 4: جني جزء من الأرباح (30-50%) والاحتفاظ بالباقي",
             ]
         else:
             week_plan = [
-                "• أسبوع ١: مراقبة — لا دخول حتى تتضح الإشارات",
-                "• أسبوع ٢: دخول جزئي (25%) إذا RSI < 35 وFear < 35",
-                "• أسبوع ٣: مراجعة وتعديل وقف الخسارة",
-                "• أسبوع ٤: تقييم النتائج وقرار الاستمرار",
+                "• أسبوع 1: مراقبة — لا دخول حتى تتضح الإشارات",
+                "• أسبوع 2: دخول جزئي (25%) إذا RSI < 35 وFear < 35",
+                "• أسبوع 3: مراجعة وتعديل وقف الخسارة",
+                "• أسبوع 4: تقييم النتائج وقرار الاستمرار",
             ]
 
         lines += ["", "📅 *جدول الشهر المقترح*"] + week_plan + [
@@ -510,11 +510,11 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
         plan_label = "خطة السوق العامة — BTC & ETH"
     msg = await update.message.reply_text(
         f"📅 جاري بناء {plan_label}...\n"
-        "⏳ قد يستغرق ١-٣ دقائق — يُرجى الانتظار"
+        "⏳ قد يستغرق 1-3 دقائق — يُرجى الانتظار"
     )
     try:
 
-        # ── ١. بيانات أساسية + OHLCV — كلها متوازية ─────────
+        # ── 1. بيانات أساسية + OHLCV — كلها متوازية ─────────
         gathered = await asyncio.gather(
             engine.data_layer.get_fear_greed(),
             engine.data_layer.get_onchain(),
@@ -547,7 +547,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
             regime = RegimeResult(Regime.UNKNOWN, 0.3, "⚪ غير محدد",
                                    ["reduce_size"], {}, "reduce_size")
 
-        # ── ٢. تحليل الأخبار مرة واحدة ────────────────────────
+        # ── 2. تحليل الأخبار مرة واحدة ────────────────────────
         try:
             news_an = await engine.news_engine.analyze(news_raw, symbols)
             news_an = news_an or {}
@@ -555,7 +555,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
             news_an = {}
         news_sentiment = float(news_an.get("sentiment_score") or 0)
 
-        # ── ٣. أسعار لجميع العملات — متوازية ─────────────────
+        # ── 3. أسعار لجميع العملات — متوازية ─────────────────
         price_results = await asyncio.gather(
             *[engine.data_layer.get_price(sym) for sym in symbols],
             return_exceptions=True,
@@ -620,7 +620,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         rr    = (tp1 - entry) / max(entry - sl, 0.0001)
                         entry_lines = [
                             f"  📍 دخول: {_fmt_price(entry)} | وقف: {_fmt_price(sl)} ({atr_v*120:.1f}%-)",
-                            f"  🎯 هدف١: {_fmt_price(tp1)} (+{atr_v*150:.1f}%) | هدف٢: {_fmt_price(tp2)} (+{atr_v*250:.1f}%)",
+                            f"  🎯 هدف1: {_fmt_price(tp1)} (+{atr_v*150:.1f}%) | هدف2: {_fmt_price(tp2)} (+{atr_v*250:.1f}%)",
                             f"  📊 {('R/R: 1:' + f'{rr:.1f}') if rr >= 1.0 else '⚠️ R/R غير مناسب'} | ATR: {atr_v*100:.1f}%",
                         ]
                     elif signal.confidence >= 0.40 and signal.direction == "short":
@@ -661,7 +661,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 lines.append(f"⚠️ {sym}: {str(e)[:50]}")
                 lines.append("")
 
-        # ── ٤. الأحداث والجدول ────────────────────────────────
+        # ── 4. الأحداث والجدول ────────────────────────────────
         events_text = engine.event_risk.format_upcoming_ar(hours=168)
         # إصلاح تنسيق "بعد 20ساعة" → "بعد 20 ساعة"
         events_text = re.sub(r'(بعد\s*)(\d+)(ساعة)', r'بعد  ساعة', events_text)
@@ -703,11 +703,11 @@ async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = await update.message.reply_text(
         "💼 جاري تحليل المحفظة...\n"
-        "⏳ قد يستغرق ١-٣ دقائق — يُرجى الانتظار"
+        "⏳ قد يستغرق 1-3 دقائق — يُرجى الانتظار"
     )
     try:
 
-        # ── ١. طلبات البيانات الأساسية — متوازية ─────────────
+        # ── 1. طلبات البيانات الأساسية — متوازية ─────────────
         fear, btc_c, onchain, top_coins = await asyncio.gather(
             engine.data_layer.get_fear_greed(),
             engine.data_layer.get_ohlcv("BTC", "1d", 200),
@@ -730,7 +730,7 @@ async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         ev_mult, _ = engine.event_risk.get_exposure_multiplier()
 
-        # ── ٢. جلب الأخبار العامة مرة واحدة (لا داخل الحلقة) ─
+        # ── 2. جلب الأخبار العامة مرة واحدة (لا داخل الحلقة) ─
         symbols_str = ",".join(
             (c.get("symbol") or "").upper()
             for c in top_coins[:5]
@@ -746,7 +746,7 @@ async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
             news_an_general = {}
         news_sentiment = float(news_an_general.get("sentiment_score") or 0)
 
-        # ── ٣. OHLCV لجميع العملات — متوازية ─────────────────
+        # ── 3. OHLCV لجميع العملات — متوازية ─────────────────
         valid_coins = [
             c for c in top_coins[:5]
             if (c.get("symbol") or "").upper()
@@ -764,7 +764,7 @@ async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return_exceptions=True,
         )
 
-        # ── ٤. بناء المرشحين ──────────────────────────────────
+        # ── 4. بناء المرشحين ──────────────────────────────────
         candidates = []
         for i, coin in enumerate(valid_coins):
             sym     = (coin.get("symbol") or "").upper()
@@ -792,7 +792,7 @@ async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.warning(f"portfolio {sym}: {e}")
 
-        # ── ٥. توزيع المحفظة ──────────────────────────────────
+        # ── 5. توزيع المحفظة ──────────────────────────────────
         portfolio_val = float(engine.risk_engine.cfg.get("portfolio_size") or 10000)
         allocation    = engine.capital_engine.allocate(
             candidates, portfolio_val, regime, ev_mult)
@@ -801,7 +801,7 @@ async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = _clean(engine.capital_engine.format_ar(allocation, regime))
         text += (
             f"\n\n⚖️ *حالة المخاطر*\n"
-            f"• Drawdown: {risk_st.get('drawdown_pct',0):.1f}٪\n"
+            f"• Drawdown: {risk_st.get('drawdown_pct',0):.1f}%\n"
             f"• PnL اليوم: ${risk_st.get('today_pnl',0):+,.2f}\n"
             f"• صفقات مفتوحة: {risk_st.get('open_positions',0)}"
         )
@@ -841,21 +841,21 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "",
             "💰 *المحفظة*",
             f"• القيمة: ${risk_st.get('portfolio',0):,.0f}",
-            f"• Drawdown: {risk_st.get('drawdown_pct',0):.1f}٪",
+            f"• Drawdown: {risk_st.get('drawdown_pct',0):.1f}%",
             f"• PnL اليوم: ${risk_st.get('today_pnl',0):+,.2f}",
             f"• صفقات مفتوحة: {risk_st.get('open_positions',0)}",
-            f"• حد الخسارة اليومية: {risk_st.get('daily_loss_used',0):.0f}٪ مُستهلك",
+            f"• حد الخسارة اليومية: {risk_st.get('daily_loss_used',0):.0f}% مُستهلك",
             "",
             "📈 *الأداء الإجمالي*",
             f"• إجمالي الصفقات: {pnl.get('trades',0)}",
             f"• صافي الربح: ${pnl.get('total_pnl',0):+,.2f}",
-            f"• نسبة الفوز: {pnl.get('win_rate',0):.1f}٪",
+            f"• نسبة الفوز: {pnl.get('win_rate',0):.1f}%",
             f"• متوسط الربح: ${pnl.get('avg_win',0):,.2f}",
             f"• متوسط الخسارة: ${abs(pnl.get('avg_loss',0)):,.2f}",
             "",
             "🔬 *حالة النموذج*",
             f"• معدل فوز: {drift_st.current_win_rate:.0%}",
-            f"• الانحراف: {drift_st.drift_pct:.1f}٪",
+            f"• الانحراف: {drift_st.drift_pct:.1f}%",
             f"• {drift_st.recommendation_ar}",
             "",
             "📅 *الأحداث*",
@@ -881,14 +881,14 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if has_trades:
                     raed_pnl_pct = (pnl.get("total_pnl", 0) / max(portfolio_val, 1)) * 100
                     lines += [
-                        f"• رائد (24h): {raed_pnl_pct:+.2f}٪",
-                        f"• BTC  (24h): {btc_change:+.2f}٪",
-                        f"• الفارق: {raed_pnl_pct - btc_change:+.2f}٪ {'✅ رائد أفضل' if raed_pnl_pct > btc_change else '📊 BTC أفضل'}",
+                        f"• رائد (24h): {raed_pnl_pct:+.2f}%",
+                        f"• BTC  (24h): {btc_change:+.2f}%",
+                        f"• الفارق: {raed_pnl_pct - btc_change:+.2f}% {'✅ رائد أفضل' if raed_pnl_pct > btc_change else '📊 BTC أفضل'}",
                     ]
                 else:
                     lines += [
                         f"• لا توجد صفقات مُنفَّذة بعد",
-                        f"• BTC (24h): {btc_change:+.2f}٪",
+                        f"• BTC (24h): {btc_change:+.2f}%",
                         f"• 💡 ابدأ بـ /signal لتفعيل تتبع الأداء",
                     ]
         except Exception:

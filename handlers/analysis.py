@@ -211,9 +211,15 @@ def _build_professional_block(
     # شروط الدخول (للانتظار فقط)
     entry_conds = []
     if conf < 0.65 or direction == "neutral":
-        rsi_t = 35 if is_bear else 45
+        # M#117: شرط RSI بناءً على القيمة الحالية
+        if rsi_val < 40:
+            _rsi_cond = f"1. RSI يتجاوز 40 صعوداً + إغلاق فوق {_fmt_price(ema50_val)}"
+        elif rsi_val < 55:
+            _rsi_cond = f"1. RSI يتجاوز 55 + إغلاق فوق {_fmt_price(ema50_val)}"
+        else:
+            _rsi_cond = f"1. انتظر تصحيح RSI تحت 60 ثم ارتداد"
         entry_conds = [
-            f"1. RSI > {rsi_t} + إغلاق فوق {_fmt_price(ema50_val * 0.995)}",
+            _rsi_cond,
             "2. الثقة الإجمالية ≥ 65%",
             f"3. كسر EMA50 ({_fmt_price(ema50_val)})",
         ]
@@ -377,7 +383,7 @@ async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sym_str  = ", ".join(symbols)
     msg = await update.message.reply_text(
         f"📰 جاري جلب وتحليل الأخبار لـ {sym_str}...\n"
-        "⏳ قد يستغرق ١٠-٢٠ ثانية — يُرجى الانتظار"
+        "⏳ قد يستغرق 10-20 ثانية — يُرجى الانتظار"
     )
 
     try:
@@ -457,7 +463,7 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "━━━━━━━━━━━━━━━━━━",
             f"📊 إجمالي TVL: ${tvl/1e9:.2f}B",
             f"{fear_emoji} Fear & Greed: {fear_val} — {fear.get('label_ar', 'محايد')}",
-            f"📈 تغيير TVL 24h: {tvl_change:+.2f}٪",
+            f"📈 تغيير TVL 24h: {tvl_change:+.2f}%",
         ]
 
         # بيانات شبكة Bitcoin
@@ -556,8 +562,8 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ), parse_mode="Markdown"); return
 
     msg = await update.message.reply_text(
-        f"📡 جاري تحليل {symbol} عبر ٥ مصادر...\n"
-        "⏳ قد يستغرق ٢٠-٣٠ ثانية — يُرجى الانتظار"
+        f"📡 جاري تحليل {symbol} عبر 5 مصادر...\n"
+        "⏳ قد يستغرق 20-30 ثانية — يُرجى الانتظار"
     )
 
     try:
@@ -701,7 +707,7 @@ async def cmd_backtest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     msg = await update.message.reply_text(
         f"⏳ جاري Backtest لـ {symbol} — {strategy_ar[strategy]}\n"
-        "🔬 ٣ سنوات بيانات حقيقية — قد يستغرق ٣٠-٦٠ ثانية"
+        "🔬 3 سنوات بيانات حقيقية — قد يستغرق 30-60 ثانية"
     )
 
     try:
@@ -849,7 +855,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    msg = await update.message.reply_text(f"🧠 جاري التحليل العميق لـ {symbol}...\n⏳ قد يستغرق ١-٣ دقائق — يُرجى الانتظار")
+    msg = await update.message.reply_text(f"🧠 جاري التحليل العميق لـ {symbol}...\n⏳ قد يستغرق 1-3 دقائق — يُرجى الانتظار")
 
     try:
         price_d, candles, fear, btc_dom = await asyncio.gather(
@@ -880,8 +886,22 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         market_cap = float(price_d.get("market_cap") or 0)
 
         if price <= 0:
-            await msg.edit_text(f"❌ لم أجد سعراً لـ {symbol}. تحقق من الرمز")
-            return
+            # M#113: بحث تلقائي في CoinGecko
+            try:
+                new_id = await engine.data_layer._search_coingecko(symbol)
+                if new_id:
+                    price_d2 = await engine.data_layer.get_price(symbol)
+                    price = float((price_d2 or {}).get("price") or 0)
+            except Exception:
+                pass
+            if price <= 0:
+                await msg.edit_text(
+                    f"⚠️ لم أجد سعراً لـ *{symbol}*\n\n"
+                    f"• تأكد من صحة الرمز (مثال: BTC, ETH, SOL)\n"
+                    f"• العملة قد تكون جديدة أو غير مدعومة\n"
+                    f"• جرّب: /chart {symbol} للتحليل البصري",
+                    parse_mode="Markdown")
+                return
 
         rsi = _calc_rsi(candles)
 
@@ -923,9 +943,9 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 p5 = []
             if len(p5) >= 2 and p5[-1] > p5[0]:
-                candles_summary = "آخر ٥ شموع: اتجاه صاعد"
+                candles_summary = "آخر 5 شموع: اتجاه صاعد"
             elif len(p5) >= 2:
-                candles_summary = "آخر ٥ شموع: اتجاه هابط"
+                candles_summary = "آخر 5 شموع: اتجاه هابط"
             else:
                 candles_summary = "بيانات الشموع غير كافية"
 
@@ -959,8 +979,8 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "",
                 "📍 *مناطق الدخول والخروج*",
                 f"• دخول مقترح: {_fmt_price(entry)}",
-                f"• هدف ١: {_fmt_price(tp1)} ({atr_pct*150:.1f}%+)",
-                f"• هدف ٢: {_fmt_price(tp2)} ({atr_pct*250:.1f}%+)",
+                f"• هدف 1: {_fmt_price(tp1)} ({atr_pct*150:.1f}%+)",
+                f"• هدف 2: {_fmt_price(tp2)} ({atr_pct*250:.1f}%+)",
                 f"• وقف الخسارة: {_fmt_price(sl)} ({atr_pct*120:.1f}%-)",
             ]
         elif rsi > 65:
@@ -1271,7 +1291,7 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             entry = price * 1.01; tp1 = price * 0.96; tp2 = price * 0.92; sl = price * 1.04
         else:
             direction = "⚪ انتظار"
-            entry = price; tp1 = price * 1.05; tp2 = price * 1.08; sl = price * 0.96
+            entry = price * 0.985; tp1 = price * 1.05; tp2 = price * 1.08; sl = price * 0.96  # M#109
 
         # regime_desc محسوبة أعلاه
 
@@ -1281,7 +1301,7 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             bear_buy_warning = "\n⚠️ *تنبيه:* إشارة شراء في سوق هابط — تحقق من تأكيد الاتجاه قبل الدخول"
         if abs(change_24h) > 15:
             sign_ar = "ارتفاع" if change_24h > 0 else "انخفاض"
-            bear_buy_warning += f"\n🚨 *تحذير:* {sign_ar} حاد {abs(change_24h):.1f}٪ في 24 ساعة — خطر الدخول مرتفع"
+            bear_buy_warning += f"\n🚨 *تحذير:* {sign_ar} حاد {abs(change_24h):.1f}% في 24 ساعة — خطر الدخول مرتفع"
 
         change_sign = "+" if change_24h >= 0 else ""
         lines = [
@@ -1295,8 +1315,8 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "",
             "📍 *مناطق الدخول والخروج*",
             f"• نقطة الدخول: {_fmt_price(entry)}",
-            f"• هدف ١:       {_fmt_price(tp1)} ({(tp1/price-1)*100:+.1f}%)",
-            f"• هدف ٢:       {_fmt_price(tp2)} ({(tp2/price-1)*100:+.1f}%)",
+            f"• هدف 1:       {_fmt_price(tp1)} ({(tp1/price-1)*100:+.1f}%)",
+            f"• هدف 2:       {_fmt_price(tp2)} ({(tp2/price-1)*100:+.1f}%)",
             f"• وقف الخسارة: {_fmt_price(sl)} ({(sl/price-1)*100:+.1f}%)",
         ]
         if support > 0 and resistance > 0:
@@ -1337,17 +1357,17 @@ async def cmd_upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "",
         "🆓 *مجاني — مجاناً*",
         "• /quicksignal — تحليل أولي سريع",
-        "• تداول آلي مجاني ٣٠ يوم",
+        "• تداول آلي مجاني 30 يوم",
         "• مسح تلقائي للفرص",
-        "• ١٥ عملة في المسح",
+        "• 15 عملة في المسح",
         "",
         "🥈 *فضي — $9/شهر*",
         "• كل المجاني +",
-        "• /signal — إشارة شاملة ٥ مصادر",
+        "• /signal — إشارة شاملة 5 مصادر",
         "• /news — تحليل الأخبار بالذكاء الاصطناعي",
         "• /regime — حالة السوق",
-        "• /backtest — اختبار تاريخي ٣ سنوات",
-        "• ٣٥ عملة في المسح",
+        "• /backtest — اختبار تاريخي 3 سنوات",
+        "• 35 عملة في المسح",
         "",
         "🥇 *ذهبي — $29/شهر ⭐ الأكثر طلباً*",
         "• كل الفضي +",
@@ -1355,14 +1375,14 @@ async def cmd_upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /liquidity — تحليل السيولة المتقدم",
         "• /onchain — تحليل On-Chain",
         "• /planweek و /planmonth — تخطيط ذكي",
-        "• ١٠٠ عملة في المسح",
+        "• 100 عملة في المسح",
         "",
         "💎 *ماسي — $99/شهر*",
         "• كل الذهبي +",
         "• /chart — تحليل شارت بصري",
         "• تحليل كمي متقدم",
-        "• ٣٠٠ عملة في المسح",
-        "• دعم مباشر ٢٤/٧",
+        "• 300 عملة في المسح",
+        "• دعم مباشر 24/7",
         "",
         "━━━━━━━━━━━━━━━━━━",
     ]
