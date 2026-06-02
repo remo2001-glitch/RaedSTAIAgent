@@ -457,13 +457,15 @@ class MicrostructureLayer:
             # عرض أعلى/أدنى أمر (ملاحظة #26)
             lines += ["", "📋 *جدران الأوامر*"]
             if buy_walls:
-                top_bid = buy_walls[0]
-                lines.append(f"• أعلى أمر شراء (Bid): ${top_bid['price']:,.2f} — ${top_bid['value_usd']/1e6:.2f}M")
+                top_bid   = buy_walls[0]
+                bid_count = len(buy_walls)
+                lines.append(f"• أعلى أمر شراء (Bid): ${top_bid['price']:,.2f} — ${top_bid['value_usd']/1e6:.2f}M | {bid_count} أمر")
             else:
                 lines.append("• أعلى أمر شراء (Bid): غير متاح")
             if sell_walls:
-                top_ask = sell_walls[0]
-                lines.append(f"• أدنى أمر بيع (Ask):  ${top_ask['price']:,.2f} — ${top_ask['value_usd']/1e6:.2f}M")
+                top_ask   = sell_walls[0]
+                ask_count = len(sell_walls)
+                lines.append(f"• أدنى أمر بيع (Ask):  ${top_ask['price']:,.2f} — ${top_ask['value_usd']/1e6:.2f}M | {ask_count} أمر")
             else:
                 lines.append("• أدنى أمر بيع (Ask):  غير متاح")
 

@@ -69,7 +69,24 @@ _CG_MAP = {
     "KAVA":"kava","BAND":"band-protocol","API3":"api3",
     "REN":"republic-protocol","CELO":"celo",
     # إضافات مطلوبة — عملات كانت تفشل بـ ID خاطئ
-    "CFX":"conflux-token","ZRO":"layerzero","ASTER":"aster-network",    # ── إضافات ملاحظات #36,#38,#44 ──────────────────────────────
+    "CFX":"conflux-token",
+    # ── إضافات M#105 + عملات 2024/2025 ──────────────────────
+    "GPS":"goplus-security",
+    "GOAT":"goat",
+    "VIRTUAL":"virtual-protocol",
+    "ZEREBRO":"zerebro",
+    "AI16Z":"ai16z",
+    "GRIFFAIN":"griffain",
+    "FARTCOIN":"fartcoin",
+    "SONIC":"sonic-3",
+    "MELANIA":"melania-meme",
+    "SPX":"spx6900",
+    "BOME":"book-of-meme",
+    "SLERF":"slerf",
+    "MYRO":"myro",
+    "RETARDIO":"retardio",
+    "GIGA":"gigachad-memecoin",
+"ZRO":"layerzero","ASTER":"aster-network",    # ── إضافات ملاحظات #36,#38,#44 ──────────────────────────────
     "RSR":"reserve-rights-token",
     "QNT":"quant-network",
     "BLUR":"blur",
@@ -1171,6 +1188,54 @@ class DataLayer:
         result = best_exchange or (exchanges[0] if exchanges else "okx")
         logger.info(f"Best exchange for {sym_upper}: {result} vol=${best_volume:,.0f}")
         return result
+
+
+    async def _search_coingecko(self, symbol: str) -> str:
+        """
+        M#104/#105: البحث في CoinGecko عن ID العملة تلقائياً.
+        يُعيد الـ CoinGecko ID الصحيح أو "" إذا لم يجد.
+        """
+        try:
+            url  = f"https://api.coingecko.com/api/v3/search?query={symbol.upper()}"
+            data = await _fetch(self.session, url,
+                                headers={"User-Agent":"Mozilla/5.0"}, retries=2)
+            if not isinstance(data, dict): return ""
+            coins = data.get("coins", [])
+            if not coins: return ""
+            # البحث عن تطابق دقيق في الرمز أولاً
+            sym_upper = symbol.upper()
+            for coin in coins[:10]:
+                if coin.get("symbol","").upper() == sym_upper:
+                    cg_id = coin.get("id","")
+                    if cg_id:
+                        # حفظ في الـ map للمرات القادمة
+                        self._CG_MAP[sym_upper] = cg_id
+                        logger.info(f"_search_coingecko: {sym_upper} → {cg_id}")
+                        return cg_id
+            # إذا لم يجد تطابق دقيق → أقرب نتيجة
+            if coins:
+                cg_id = coins[0].get("id","")
+                if cg_id:
+                    self._CG_MAP[sym_upper] = cg_id
+                    return cg_id
+        except Exception as e:
+            logger.debug(f"_search_coingecko ({symbol}): {e}")
+        return ""
+
+    async def get_coingecko_id(self, symbol: str) -> str:
+        """
+        يُعيد CoinGecko ID من الـ map أو يبحث تلقائياً.
+        """
+        sym = symbol.upper()
+        # فحص الـ map أولاً
+        if sym in self._CG_MAP:
+            return self._CG_MAP[sym]
+        # بحث تلقائي
+        cg_id = await self._search_coingecko(sym)
+        if cg_id:
+            return cg_id
+        # fallback: استخدام الرمز بالأحرف الصغيرة
+        return sym.lower()
 
     async def get_onchain(self, protocol: str = "all") -> Dict:
         key = f"onchain:{protocol}"

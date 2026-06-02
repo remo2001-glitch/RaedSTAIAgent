@@ -121,11 +121,25 @@ def _build_blocked_message(user_tier: str, required_tier: str, command: str) -> 
     else:
         upgrade_to = req_name
 
+    # بدائل متاحة لكل أمر محجوب
+    alternatives = {
+        "analyze":    "• جرّب: /signal (فضي+) أو /quicksignal (مجاني)",
+        "backtest":   "• جرّب: /signal للإشارة مباشرة",
+        "events":     "• جرّب: /regime لحالة السوق",
+        "planweek":   "• جرّب: /signal لإشارة العملة",
+        "planmonth":  "• جرّب: /planweek (ذهبي+)",
+        "chart":      "• جرّب: /quicksignal للتحليل السريع",
+        "liquidity":  "• جرّب: /signal للإشارة مع المستويات",
+        "onchain":    "• جرّب: /regime لحالة السوق",
+    }
+    alt_txt = alternatives.get(command, "")
+
     return (
-        f"🔒 *هذا الأمر غير متاح في باقتك*\n\n"
-        f"• باقتك الحالية: {curr_name}\n"
-        f"• الأمر `/{command}` متاح من: {req_name} وأعلى\n\n"
-        f"⬆️ للترقية إلى {upgrade_to}: /upgrade"
+        f"🔒 *{curr_name} — هذا الأمر غير متاح*\n\n"
+        f"• الأمر `/{command}` متاح من: {req_name} وأعلى\n"
+        + (f"\n{alt_txt}\n" if alt_txt else "\n") +
+        f"⬆️ الترقية إلى {upgrade_to}: /upgrade\n"
+        f"📋 مزايا باقتك: /premium"
     )
 
 

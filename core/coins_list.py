@@ -430,6 +430,16 @@ COINS_RANKED = [
     (398, "DGB",    "digibyte"),
     (399, "DODO",   "dodo"),
     (400, "DOME",   "everdome"),
+    (401, "GPS",     "goplus-security"),
+    (402, "HYPE",    "hyperliquid"),
+    (403, "VIRTUAL", "virtual-protocol"),
+    (404, "GOAT",    "goat"),
+    (405, "WIF",     "dogwifcoin"),
+    (406, "BOME",    "book-of-meme"),
+    (407, "POPCAT",  "popcat"),
+    (408, "MOG",     "mog-coin"),
+    (409, "SPX",     "spx6900"),
+    (410, "TRUMP",   "official-trump"),
 ]
 
 
