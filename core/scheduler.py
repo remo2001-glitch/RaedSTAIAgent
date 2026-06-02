@@ -110,6 +110,7 @@ class Scheduler:
                 await self._check_weekly(now)
                 await self._check_monthly(now)
                 await self._check_coins_update(now)
+                await self._check_month_end_review(now)
                 # فحص Limit Orders كل 30 ثانية
                 if tick % 1 == 0:
                     await self._check_all_limit_orders()
@@ -119,6 +120,52 @@ class Scheduler:
             except Exception as e:
                 logger.error(f"Scheduler loop error: {e}")
             await asyncio.sleep(30)
+
+
+    async def _check_month_end_review(self, now: datetime):
+        """
+        النقطة ٩: مراجعة الصفقات في آخر يوم من كل شهر.
+        يُرسل تقرير التعلم لكل مستخدم نشط.
+        """
+        import calendar
+        last_day = calendar.monthrange(now.year, now.month)[1]
+        if now.day != last_day or now.hour != REPORT_HOUR_UTC or now.minute > 1:
+            return
+        if not hasattr(self, "_last_review_ts"):
+            self._last_review_ts = 0.0
+        if time.time() - self._last_review_ts < 86400 * 25:
+            return
+        self._last_review_ts = time.time()
+        asyncio.create_task(self._send_monthly_review())
+
+    async def _send_monthly_review(self):
+        """يُرسل تقرير التعلم الشهري لكل مستخدم."""
+        try:
+            engine = getattr(self, "_engine", None)
+            if not engine: return
+            for user_id, info in getattr(engine, "_live_users", {}).items():
+                om = info.get("order_manager")
+                if not om or not hasattr(om, "get_lessons_summary"): continue
+                summary = om.get_lessons_summary(user_id)
+                if summary.get("total", 0) == 0: continue
+                best  = summary.get("best", {})
+                worst = summary.get("worst", {})
+                msg = (
+                    f"📚 *التقرير الشهري — الدروس المستفادة*\n"
+                    f"━━━━━━━━━━━━━━━━━━\n\n"
+                    f"📊 إجمالي الصفقات: {summary['total']}\n"
+                    f"✅ رابحة: {summary['wins']} | ❌ خاسرة: {summary['losses']}\n"
+                    f"🎯 نسبة النجاح: {summary['win_rate']:.1f}%\n\n"
+                    f"🏆 أفضل صفقة: {best.get('symbol','-')} "
+                    f"{float(best.get('pnl_pct',0)):+.1f}%\n"
+                    f"📉 أسوأ صفقة: {worst.get('symbol','-')} "
+                    f"{float(worst.get('pnl_pct',0)):+.1f}%\n\n"
+                    f"💡 رائد تعلم من هذه الصفقات لتحسين توصياته القادمة"
+                )
+                await self._notify_user(user_id, msg)
+            logger.info("📚 تقرير المراجعة الشهرية أُرسل")
+        except Exception as e:
+            logger.error(f"monthly_review: {e}")
 
     async def _check_coins_update(self, now):
         """يُحدِّث قائمة العملات شهرياً."""

@@ -61,7 +61,8 @@ class OrderManager:
                           size_usd: float, entry_price: float,
                           stop_loss_pct: float, take_profit_pct: float,
                           order_type: str = "MARKET",
-                          user_id: int = 0) -> Optional[LiveTrade]:
+                          user_id: int = 0,
+                          limit_price: float = 0.0) -> Optional[LiveTrade]:
         """
         يفتح صفقة حقيقية ويُسجّلها.
         """
@@ -72,10 +73,11 @@ class OrderManager:
             return None
 
         # تنفيذ الأمر
+        exec_price = limit_price if (order_type.upper()=="LIMIT" and limit_price>0)                      else (entry_price if order_type.lower()=="limit" else 0)
         result = await self.exchange.place_order(
             symbol=symbol, side=side,
             qty=qty, order_type=order_type,
-            price=entry_price if order_type.lower() == "limit" else 0,
+            price=exec_price,
         )
 
         if not result.success:
@@ -105,6 +107,7 @@ class OrderManager:
             user_id=user_id,
         )
         self._trades[trade_id] = trade
+        self._save_trade_to_redis(trade) if hasattr(self,"_save_trade_to_redis") else None
         logger.info(f"✅ صفقة مفتوحة: {trade_id} | {side} {symbol} ${size_usd:,.0f}")
         return trade
 
@@ -146,6 +149,9 @@ class OrderManager:
         trade.closed_at   = time.time()
         trade.close_reason= reason
 
+        if hasattr(self, "_save_trade_to_redis"):
+            self._save_trade_to_redis(trade)
+            self.record_lesson(trade)
         logger.info(
             f"🔒 صفقة مغلقة: {trade_id} | "
             f"PnL: {pnl_pct:+.2f}% (${pnl_usd:+,.2f}) | {reason}")
@@ -343,6 +349,70 @@ class OrderManager:
 
             except Exception as e:
                 logger.warning(f"trailing_protect {trade.trade_id}: {e}")
+
+
+    def _get_redis(self):
+        try:
+            if hasattr(self,"_rc") and self._rc: return self._rc
+            import os, redis as _r
+            url = os.environ.get("REDIS_URL","")
+            if not url: return None
+            self._rc = _r.from_url(url, decode_responses=True, socket_timeout=3)
+            self._rc.ping()
+            return self._rc
+        except Exception: return None
+
+    def _save_trade_to_redis(self, trade):
+        try:
+            import json, time as _t
+            r = self._get_redis()
+            if not r: return
+            data = {k: getattr(trade,k,None) for k in [
+                "trade_id","symbol","side","entry_price","qty","size_usd",
+                "stop_loss","take_profit","status","user_id","opened_at",
+                "pnl_usd","pnl_pct","close_reason","order_type","limit_price","auto_protect"
+            ]}
+            r.setex(f"raed:trade:{trade.user_id}:{trade.trade_id}", 86400*30,
+                    json.dumps(data, ensure_ascii=False, default=str))
+        except Exception as e: pass
+
+    def _load_trades_from_redis(self, user_id: int) -> list:
+        try:
+            import json
+            r = self._get_redis()
+            if not r: return []
+            keys = r.keys(f"raed:trade:{user_id}:*")
+            trades = [json.loads(r.get(k)) for k in keys if r.get(k)]
+            return sorted(trades, key=lambda x: x.get("opened_at",0), reverse=True)
+        except Exception: return []
+
+    def get_lessons_summary(self, user_id: int) -> dict:
+        try:
+            import json
+            r = self._get_redis()
+            if not r: return {}
+            keys = r.keys(f"raed:lesson:{user_id}:*")
+            lessons = [json.loads(r.get(k)) for k in keys if r.get(k)]
+            if not lessons: return {}
+            wins = [l for l in lessons if float(l.get("pnl_pct",0)) > 0]
+            return {"total":len(lessons),"wins":len(wins),"losses":len(lessons)-len(wins),
+                    "win_rate":len(wins)/len(lessons)*100,
+                    "best":max(lessons,key=lambda x:float(x.get("pnl_pct",0)),default={}),
+                    "worst":min(lessons,key=lambda x:float(x.get("pnl_pct",0)),default={})}
+        except Exception: return {}
+
+    def record_lesson(self, trade, lesson_type="auto"):
+        try:
+            import json, time as _t
+            r = self._get_redis()
+            if not r: return
+            lesson = {"trade_id":trade.trade_id,"symbol":trade.symbol,"side":trade.side,
+                      "entry_price":trade.entry_price,"exit_price":trade.exit_price,
+                      "pnl_pct":trade.pnl_pct,"close_reason":trade.close_reason,
+                      "lesson_type":lesson_type,"ts":_t.time(),"user_id":trade.user_id}
+            r.setex(f"raed:lesson:{trade.user_id}:{int(_t.time())}", 86400*365,
+                    json.dumps(lesson, ensure_ascii=False))
+        except Exception: pass
 
     def start_monitoring(self, notify_fn=None):
         """
