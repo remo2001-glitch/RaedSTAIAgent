@@ -1,7 +1,7 @@
 """
-📡 رائد — Data Layer (الطبقة ١) — النسخة المُحكمة
+📡 رائد — Data Layer (الطبقة 1) — النسخة المُحكمة
 CoinGecko · Binance · DeFiLlama · CryptoPanic
-- retry تلقائي ٣ محاولات
+- retry تلقائي 3 محاولات
 - fallback لكل مصدر
 - لا تُعيد أبداً None — دائماً [] أو {}
 - CoinGecko intervals مدعومة فقط: daily / hourly
@@ -225,16 +225,34 @@ _CG_MAP = {
     "SAND":"the-sandbox","MANA":"decentraland","AXS":"axie-infinity",
     "CHZ":"chiliz","GALA":"gala","ENJ":"enjincoin",
     "RUNE":"thorchain","KAVA":"kava","ZIL":"zilliqa",
+    # M#113: عملات مفقودة + 2024/2025
+    "CHR": "chromaway",
+    "CHROME": "chromaway",
+    "ALICE": "my-neighbor-alice",
+    "LAZIO": "lazio-fan-token",
+    "PORTO": "porto-fan-token",
+    "OG": "og-fan-token",
+    "PRIME": "echelon-prime",
+    "TNSR": "tensor",
+    "WEN": "wen-4",
+    "MEW": "cat-in-a-dogs-world",
+    "KMNO": "kamino",
+    "W": "wormhole",
+    "OMNI": "omni-network",
+    "REZ": "renzo",
+    "ETHFI": "ether-fi",
+    "SAGA": "saga-2",
+
 }
 def _cg_id(symbol: str) -> str:
     sym = symbol.upper()
-    # ١. فحص _CG_MAP المحلي أولاً
+    # 1. فحص _CG_MAP المحلي أولاً
     if sym in _CG_MAP:
         return _CG_MAP[sym]
-    # ٢. فحص coins_list
+    # 2. فحص coins_list
     if _RANKED_CG_MAP and sym in _RANKED_CG_MAP:
         return _RANKED_CG_MAP[sym]
-    # ٣. fallback: lowercase
+    # 3. fallback: lowercase
     return sym.lower()
 
 # ─── تحويل interval لـ CoinGecko ─────────────────────────────
@@ -476,7 +494,7 @@ class DataLayer:
             return candles
 
         logger.error(f"get_ohlcv فشل لـ {symbol} — يُعيد []")
-        return []   # دائماً List، أبداً None
+        return []   # دائماً List, أبداً None
 
     async def _ohlcv_binance(self, symbol: str, interval: str,
                                limit: int) -> List[Dict]:
@@ -572,7 +590,7 @@ class DataLayer:
         return candles
 
     # ═══════════════════════════════════════════════════════════
-    # 3. بيانات تاريخية ٣ سنوات — يُعيد دائماً List
+    # 3. بيانات تاريخية 3 سنوات — يُعيد دائماً List
     # ═══════════════════════════════════════════════════════════
     async def get_historical_prices(self, symbol: str,
                                      days: int = 1095) -> List[Dict]:
@@ -842,7 +860,7 @@ class DataLayer:
 
         items = []
 
-        # ── ١. CoinGecko News (بديل CryptoPanic) ────────────────
+        # ── 1. CoinGecko News (بديل CryptoPanic) ────────────────
         try:
             cg_news = await self._news_coingecko()
             if cg_news:
@@ -850,7 +868,7 @@ class DataLayer:
         except Exception as e:
             logger.debug(f"CoinGecko news: {e}")
 
-        # ── ٢. RSS — دائماً يعمل بغض النظر عن CryptoPanic ─────
+        # ── 2. RSS — دائماً يعمل بغض النظر عن CryptoPanic ─────
         # نُمرر العملات للفلترة الذكية
         symbols_list = [s.strip().upper() for s in currencies.split(",") if s.strip()]
         rss = await self._rss_news(filter_symbols=symbols_list)

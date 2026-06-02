@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 
 class EventSeverity(Enum):
     LOW      = "low"       # تأثير محدود
-    MEDIUM   = "medium"    # تأثير متوسط — تقليل ٣٠٪
-    HIGH     = "high"      # تأثير كبير — تقليل ٦٠٪
+    MEDIUM   = "medium"    # تأثير متوسط — تقليل 30%
+    HIGH     = "high"      # تأثير كبير — تقليل 60%
     CRITICAL = "critical"  # صدمة محتملة — تجنب كامل
 
 
@@ -29,9 +29,9 @@ SEVERITY_AR = {
 }
 
 SEVERITY_EXPOSURE = {
-    EventSeverity.LOW:      0.80,   # تقليل ٢٠٪
-    EventSeverity.MEDIUM:   0.50,   # تقليل ٥٠٪
-    EventSeverity.HIGH:     0.25,   # تقليل ٧٥٪
+    EventSeverity.LOW:      0.80,   # تقليل 20%
+    EventSeverity.MEDIUM:   0.50,   # تقليل 50%
+    EventSeverity.HIGH:     0.25,   # تقليل 75%
     EventSeverity.CRITICAL: 0.00,   # لا تداول
 }
 
@@ -71,9 +71,9 @@ def _get_recurring_events() -> List[MarketEvent]:
 
     events = []
 
-    # ── FOMC (كل ٦ أسابيع تقريباً) ─────────────────────────
+    # ── FOMC (كل 6 أسابيع تقريباً) ─────────────────────────
     # نُضيف نموذج للتوضيح — في الإنتاج يُجلب من API
-    next_fomc = _next_occurrence_of_weekday(3, hour_utc=18)  # أربعاء ٦م UTC
+    next_fomc = _next_occurrence_of_weekday(3, hour_utc=18)  # أربعاء 6م UTC
     events.append(MarketEvent(
         name="FOMC Meeting", name_ar="اجتماع الفيدرالي الأمريكي",
         severity=EventSeverity.HIGH,
@@ -148,7 +148,31 @@ class EventRiskFilter:
             if window_start <= now <= window_end:
                 active.append(event)
 
+        # M#115: فحص الأحداث القادمة في 168 ساعة
+        upcoming_high = [
+            e for e in all_events
+            if e.event_time > now
+            and e.event_time - now <= 168 * 3600
+            and e.severity in (EventSeverity.HIGH, EventSeverity.CRITICAL)
+        ]
+
         if not active:
+            if upcoming_high:
+                # يوجد أحداث عالية المخاطر قادمة — لا نقول "لا أحداث"!
+                soonest  = min(upcoming_high, key=lambda e: e.event_time)
+                hrs_away = (soonest.event_time - now) / 3600
+                return EventRiskState(
+                    active_events=[],
+                    max_severity=None,
+                    exposure_multiplier=0.7,
+                    trading_allowed=True,
+                    next_clear_time=self._next_event_window(all_events, now),
+                    message_ar=(
+                        f"⚠️ حدث عالي المخاطر قادم خلال {hrs_away:.0f} ساعة:\n"
+                        f"• {soonest.name_ar}\n"
+                        f"💡 تقليل الحجم والمخاطرة حتى انتهاء الحدث"
+                    ),
+                )
             return EventRiskState(
                 active_events=[],
                 max_severity=None,
@@ -224,7 +248,7 @@ class EventRiskFilter:
         """
         يُحلل الأخبار ويكشف الأحداث الماكرو الحقيقية فقط.
         الأخبار العادية (مهما كانت) لا تُوقف التداول.
-        فقط الأحداث الحرجة الحقيقية (اختراق، حظر، انهيار) تؤثر.
+        فقط الأحداث الحرجة الحقيقية (اختراق, حظر, انهيار) تؤثر.
         """
         # CRITICAL فقط: أحداث تُهدد السوق فعلاً
         keywords_critical = [
@@ -357,9 +381,9 @@ def _event_recommendation(severity: EventSeverity, in_hours: float) -> str:
         return "لا تفتح مراكز جديدة"
     elif in_hours <= 6:
         if severity == EventSeverity.HIGH:
-            return "قلّل حجم المراكز 50٪ قبل الحدث"
+            return "قلّل حجم المراكز 50% قبل الحدث"
         elif severity == EventSeverity.MEDIUM:
-            return "قلّل حجم المراكز 30٪ قبل الحدث"
+            return "قلّل حجم المراكز 30% قبل الحدث"
     elif in_hours <= 24:
         if severity == EventSeverity.HIGH:
             return "استعد بتقليل التعرض قبل 6 ساعات من الحدث"
