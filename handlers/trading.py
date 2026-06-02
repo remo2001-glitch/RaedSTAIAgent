@@ -195,6 +195,12 @@ async def cmd_live(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"• Futures: {'✅' if futures_ok else '❌ /live futures on'}",
                     f"• Margin: {'✅' if margin_ok else '❌ /live margin on'}",
                 ]
+                if trades:
+                    lines += ["", "📋 *صفقاتك المفتوحة:*"]
+                    for _t in trades[:3]:
+                        lines.append(f"  • {_t.symbol}: هدف ${_t.take_profit:,.4f} | وقف ${_t.stop_loss:,.4f}")
+                if balance.total > 0 and not trades:
+                    lines += ["", "💡 معظم رأس المال متاح — جرب /signal لفرص جديدة"]
                 lines.append("\nللفصل: /live off")
             else:
                 # عرض تفاصيل المحفظة الافتراضية
@@ -568,7 +574,14 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             kb = build_confirm_keyboard(symbol, trade_dir, final_size, best_ex.get("name",""))
             # M#90: عرض نوع الأمر (Market أو Limit)
-            order_type_ar = f"⏳ Limit @ ${limit_price:,.4f}" if limit_price > 0 else "⚡ Market (سعر فوري)"
+            if limit_price > 0:
+                is_b = direction == "long"
+                if (is_b and price <= limit_price*1.005) or (not is_b and price >= limit_price*0.995):
+                    order_type_ar = f"⚡ Market (السعر ${price:,.4f} أفضل من Limit)"
+                else:
+                    order_type_ar = f"⏳ Limit @ ${limit_price:,.4f} (السعر الحالي: ${price:,.4f})"
+            else:
+                order_type_ar = "⚡ Market (تنفيذ فوري)"
             # M#92: auto_protect للذهبي وأعلى
             from core.state_manager import state_manager as _sm2
             user_tier   = _sm2.get_tier(user_id)
@@ -637,8 +650,25 @@ async def cmd_trades(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("⚠️ خطأ في Order Manager"); return
 
         trades = om.get_all_trades(user_id)[:10]
+        # النقطة ١/٧: بحث في Redis إذا لم توجد في الذاكرة
+        if not trades and om and hasattr(om, "_load_trades_from_redis"):
+            for d in om._load_trades_from_redis(user_id)[:10]:
+                try:
+                    from core.order_manager import LiveTrade as _LT2
+                    trades.append(_LT2(
+                        trade_id=d.get("trade_id",""), symbol=d.get("symbol",""),
+                        side=d.get("side","Buy"), entry_price=float(d.get("entry_price",0)),
+                        qty=float(d.get("qty",0)), size_usd=float(d.get("size_usd",0)),
+                        stop_loss=float(d.get("stop_loss",0)),
+                        take_profit=float(d.get("take_profit",0)),
+                        status=d.get("status","CLOSED"),
+                        pnl_usd=float(d.get("pnl_usd",0)),
+                        pnl_pct=float(d.get("pnl_pct",0)),
+                        user_id=int(d.get("user_id",user_id)),
+                    ))
+                except Exception: pass
         if not trades:
-            await update.message.reply_text("📋 لا توجد صفقات بعد"); return
+            await update.message.reply_text("📋 لا توجد صفقات مُسجَّلة بعد\n💡 جرّب /execute لتنفيذ صفقة"); return
 
         lines = ["📋 *آخر الصفقات الحقيقية*","━━━━━━━━━━━━━━━━━━",""]
         for t in trades:
@@ -841,10 +871,19 @@ async def handle_trade_callback(update: Update,
             except Exception as _be:
                 logger.warning(f"balance check: {_be}")
 
+            is_buy_ord = (side == "Buy")
+            if limit_p > 0:
+                if (is_buy_ord and price <= limit_p*1.005) or (not is_buy_ord and price >= limit_p*0.995):
+                    actual_ot, actual_ep = "MARKET", price
+                else:
+                    actual_ot, actual_ep = "LIMIT", limit_p
+            else:
+                actual_ot, actual_ep = "MARKET", price
             trade = await om.open_trade(
                 symbol=symbol, side=side, size_usd=size_usd,
-                entry_price=price, stop_loss_pct=5.0, take_profit_pct=10.0,
-                order_type="MARKET", user_id=user_id)
+                entry_price=actual_ep, stop_loss_pct=5.0, take_profit_pct=10.0,
+                order_type=actual_ot, user_id=user_id,
+                limit_price=limit_p if actual_ot=="LIMIT" else 0.0)
 
             if trade:
                 icon = "🟢" if side == "Buy" else "🔴"

@@ -87,6 +87,91 @@ def _calc_rsi(candles: list, period: int = 14) -> float:
         return 50.0
 
 
+
+def _calc_price_forecast(candles: list, days: int = 30) -> dict:
+    """
+    النقطة ١٢: تنبؤ بالسعر للـ N يوم القادمة.
+    يستخدم: ATR Channels + EMA Trend + RSI momentum
+    """
+    if len(candles) < 30:
+        return {}
+    try:
+        closes = [float(c.get("close", 0)) for c in candles if c.get("close")]
+        highs  = [float(c.get("high",  0)) for c in candles if c.get("high")]
+        lows   = [float(c.get("low",   0)) for c in candles if c.get("low")]
+        if not closes: return {}
+
+        price  = closes[-1]
+        atr    = _calc_atr(candles)
+        atr_pct = atr / price * 100 if price > 0 else 3.0
+
+        # EMA Trend
+        ema20 = sum(closes[-20:]) / 20
+        ema50 = sum(closes[-50:]) / 50 if len(closes) >= 50 else ema20
+        trend = "bullish" if ema20 > ema50 and price > ema20 else                 "bearish" if ema20 < ema50 and price < ema20 else "neutral"
+
+        # RSI Momentum
+        rsi = _calc_rsi(candles)
+        momentum = 1.0  # محايد
+        if rsi < 30: momentum = 1.2   # ذروة بيع → ارتداد محتمل
+        elif rsi > 70: momentum = 0.8  # ذروة شراء → تراجع محتمل
+        elif trend == "bullish": momentum = 1.05
+        elif trend == "bearish": momentum = 0.95
+
+        # حساب المستهدفات
+        daily_move = atr_pct / 100
+        bull_case  = price * (1 + daily_move * days * 0.5 * momentum)
+        base_case  = price * (1 + daily_move * days * 0.2 * momentum)
+        bear_case  = price * (1 - daily_move * days * 0.3 / momentum)
+
+        # مستويات Fibonacci للتنبؤ
+        recent_high = max(highs[-30:])
+        recent_low  = min(lows[-30:])
+        fib_target1 = recent_low + (recent_high - recent_low) * 1.272
+        fib_target2 = recent_low + (recent_high - recent_low) * 1.618
+
+        return {
+            "trend":      trend,
+            "rsi":        rsi,
+            "atr_pct":    round(atr_pct, 2),
+            "bull_case":  round(bull_case, 8),
+            "base_case":  round(base_case, 8),
+            "bear_case":  round(bear_case, 8),
+            "fib_t1":     round(fib_target1, 8),
+            "fib_t2":     round(fib_target2, 8),
+            "confidence": round(abs(rsi - 50) / 50 * 0.5 + 0.5, 2),
+        }
+    except Exception:
+        return {}
+
+
+def _format_forecast_ar(symbol: str, price: float, fc: dict, days: int = 30) -> str:
+    """تنسيق تنبؤ السعر للعرض."""
+    if not fc:
+        return ""
+    trend_ar = {"bullish": "📈 صاعد", "bearish": "📉 هابط", "neutral": "↔️ جانبي"}.get(fc.get("trend",""), "")
+    p_fmt    = _fmt_price
+    lines = [
+        f"",
+        f"🔮 *تنبؤ {symbol} — {days} يوم*",
+        f"━━━━━━━━━━━━━━━━━━",
+        f"• الاتجاه المتوقع: {trend_ar}",
+        f"• ATR: {fc.get('atr_pct',0):.1f}% | RSI: {fc.get('rsi',50):.0f}",
+        f"",
+        f"📊 سيناريوهات الـ {days} يوم القادمة:",
+        f"  🟢 متفائل:  {p_fmt(fc.get('bull_case',price))} (+{(fc.get('bull_case',price)/price-1)*100:.1f}%)",
+        f"  🟡 محتمل:  {p_fmt(fc.get('base_case',price))} (+{(fc.get('base_case',price)/price-1)*100:.1f}%)",
+        f"  🔴 متحفظ:  {p_fmt(fc.get('bear_case',price))} ({(fc.get('bear_case',price)/price-1)*100:.1f}%)",
+        f"",
+        f"📐 أهداف فيبوناتشي:",
+        f"  🎯 هدف ١:  {p_fmt(fc.get('fib_t1',0))} (Fib 1.272)",
+        f"  🎯 هدف ٢:  {p_fmt(fc.get('fib_t2',0))} (Fib 1.618)",
+        f"  ثقة التنبؤ: {fc.get('confidence',0):.0%}",
+        f"",
+        f"⚠️ التنبؤ استرشادي — الأسواق غير متوقعة",
+    ]
+    return "\n".join(lines)
+
 def _est_return(signal, regime) -> float:
     from core.regime_detector import Regime
     base = float(signal.confidence or 0) * 15
