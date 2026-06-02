@@ -212,9 +212,9 @@ def _build_professional_block(
     entry_conds = []
     if conf < 0.65 or direction == "neutral":
         # M#117: شرط RSI بناءً على القيمة الحالية
-        if rsi_val < 40:
+        if rsi < 40:
             _rsi_cond = f"1. RSI يتجاوز 40 صعوداً + إغلاق فوق {_fmt_price(ema50_val)}"
-        elif rsi_val < 55:
+        elif rsi < 55:
             _rsi_cond = f"1. RSI يتجاوز 55 + إغلاق فوق {_fmt_price(ema50_val)}"
         else:
             _rsi_cond = f"1. انتظر تصحيح RSI تحت 60 ثم ارتداد"
@@ -858,13 +858,23 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text(f"🧠 جاري التحليل العميق لـ {symbol}...\n⏳ قد يستغرق 1-3 دقائق — يُرجى الانتظار")
 
     try:
-        price_d, candles, fear, btc_dom = await asyncio.gather(
-            engine.data_layer.get_price(symbol),
-            engine.data_layer.get_ohlcv(symbol, "1d", 250),
-            engine.data_layer.get_fear_greed(),
-            engine.data_layer.get_btc_dominance(),
-            return_exceptions=True
-        )
+        # M#119: timeout صارم لمنع التجمد
+        try:
+            price_d, candles, fear, btc_dom = await asyncio.wait_for(
+                asyncio.gather(
+                    engine.data_layer.get_price(symbol),
+                    engine.data_layer.get_ohlcv(symbol, "1d", 250),
+                    engine.data_layer.get_fear_greed(),
+                    engine.data_layer.get_btc_dominance(),
+                    return_exceptions=True
+                ), timeout=45.0
+            )
+        except asyncio.TimeoutError:
+            await msg.edit_text(
+                f"⏱️ انتهت مهلة تحليل *{symbol}*\n\n"
+                f"جرّب: /quicksignal {symbol}",
+                parse_mode="Markdown")
+            return
         price_d = price_d if isinstance(price_d, dict) else {}
         candles = candles if isinstance(candles, list) else []
         fear    = fear    if isinstance(fear, dict)    else {"value": 50}
@@ -1191,13 +1201,23 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🔍 جاري التحليل الأولي لـ {symbol}...")
 
     try:
-        price_d, candles, fear, btc_dom = await asyncio.gather(
-            engine.data_layer.get_price(symbol),
-            engine.data_layer.get_ohlcv(symbol, "1d", 250),
-            engine.data_layer.get_fear_greed(),
-            engine.data_layer.get_btc_dominance(),
-            return_exceptions=True
-        )
+        # M#119: timeout صارم لمنع التجمد
+        try:
+            price_d, candles, fear, btc_dom = await asyncio.wait_for(
+                asyncio.gather(
+                    engine.data_layer.get_price(symbol),
+                    engine.data_layer.get_ohlcv(symbol, "1d", 250),
+                    engine.data_layer.get_fear_greed(),
+                    engine.data_layer.get_btc_dominance(),
+                    return_exceptions=True
+                ), timeout=45.0
+            )
+        except asyncio.TimeoutError:
+            await msg.edit_text(
+                f"⏱️ انتهت مهلة تحليل *{symbol}*\n\n"
+                f"جرّب: /quicksignal {symbol}",
+                parse_mode="Markdown")
+            return
 
         price_d = price_d if isinstance(price_d, dict) else {}
         candles = candles if isinstance(candles, list) else []
