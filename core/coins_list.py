@@ -23,7 +23,7 @@ TIER_LIMITS = {
 }
 
 # ─── القائمة الثابتة (تُحدَّث شهرياً) ─────────────────────────────────────────
-# الترتيب: (رقم الترتيب، الرمز، CoinGecko ID)
+# الترتيب: (رقم الترتيب, الرمز, CoinGecko ID)
 COINS_RANKED = [
     (  1, "BTC",   "bitcoin"),
     (  2, "ETH",   "ethereum"),
@@ -75,7 +75,7 @@ COINS_RANKED = [
     ( 48, "PYTH",  "pyth-network"),
     ( 49, "JUP",   "jupiter-ag"),
     ( 50, "JTO",   "jito-governance-token"),
-    # ٥١-٩٠ (فضي)
+    # 51-90 (فضي)
     ( 51, "GRT",   "the-graph"),
     ( 52, "FLOW",  "flow"),
     ( 53, "AXS",   "axie-infinity"),
@@ -116,7 +116,7 @@ COINS_RANKED = [
     ( 88, "SCRT",  "secret"),
     ( 89, "EVMOS", "evmos"),
     ( 90, "STRK",  "starknet"),
-    # ٩١-١٥٠ (ذهبي)
+    # 91-150 (ذهبي)
     ( 91, "ONDO",  "ondo-finance"),
     ( 92, "W",     "wormhole"),
     ( 93, "EIGEN", "eigenlayer"),
@@ -177,7 +177,7 @@ COINS_RANKED = [
     (148, "BAL",   "balancer"),
     (149, "DYDX",  "dydx"),
     (150, "PERP",  "perpetual-protocol"),
-    # ١٥١-٣٠٠ (ماسي)
+    # 151-300 (ماسي)
     (151, "BGB",   "bitget-token"),
     (152, "OKB",   "okb"),
     (153, "KCS",   "kucoin-shares"),
@@ -328,7 +328,7 @@ COINS_RANKED = [
     (298, "POOL",  "pooltogether"),
     (299, "GTC",   "gitcoin"),
     (300, "FARM",  "harvest-finance"),
-    # ٣٠١-٤٠٠ (ماسي — إضافة لتغطية 350 عملة)
+    # 301-400 (ماسي — إضافة لتغطية 350 عملة)
     (301, "ZRO",    "zro"),
     (302, "ASTER",  "aster-network"),
     (303, "RSR",    "reserve-rights-token"),
@@ -379,7 +379,7 @@ COINS_RANKED = [
     (348, "SPELL",  "spell-token"),
     (349, "SUN",    "sun-token"),
     (350, "SYN",    "synapse-2"),
-    # ٣٥١-٤٠٠ (ادمن + احتياط)
+    # 351-400 (ادمن + احتياط)
     (351, "THETA",  "theta-token"),
     (352, "TLM",    "alien-worlds"),
     (353, "TRU",    "truefi"),
@@ -566,7 +566,7 @@ async def update_coins_list_from_api(session) -> bool:
     """
     global RANKED_SYMBOLS, RANKED_CG_MAP
 
-    # محاولة ١: CoinGecko top 500
+    # محاولة 1: CoinGecko top 500
     try:
         import aiohttp
         url = "https://api.coingecko.com/api/v3/coins/markets"
@@ -614,7 +614,7 @@ async def update_coins_list_from_api(session) -> bool:
     except Exception as e:
         logger.warning(f"CoinGecko update failed: {e}")
 
-    # محاولة ٢: CoinMarketCap (إذا فشل CoinGecko)
+    # محاولة 2: CoinMarketCap (إذا فشل CoinGecko)
     try:
         cmc_key = os.environ.get("CMC_API_KEY", "")
         if cmc_key:

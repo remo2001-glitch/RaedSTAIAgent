@@ -1,7 +1,7 @@
 """
-📐 رائد — Strategy Router (الطبقة ٤)
-📡 Signal Layer (الطبقة ٣)
-💼 Portfolio Allocation Engine (الطبقة ١٠)
+📐 رائد — Strategy Router (الطبقة 4)
+📡 Signal Layer (الطبقة 3)
+💼 Portfolio Allocation Engine (الطبقة 10)
 """
 
 import math
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 # ══════════════════════════════════════════════════════════════
-# SIGNAL LAYER (الطبقة ٣)
+# SIGNAL LAYER (الطبقة 3)
 # ══════════════════════════════════════════════════════════════
 
 @dataclass
@@ -37,7 +37,7 @@ class SignalResult:
 
 class SignalLayer:
     """
-    يجمع إشارات من ٥ مصادر مستقلة:
+    يجمع إشارات من 5 مصادر مستقلة:
     تقني + On-Chain + أخبار + Backtest + ماكرو
     ويُنتج ثقة مُرجَّحة.
     """
@@ -60,7 +60,7 @@ class SignalLayer:
         if not onchain_data or not isinstance(onchain_data, dict):
             onchain_data = {}
 
-        # ── ١. تحليل تقني ──
+        # ── 1. تحليل تقني ──
         try:
             tech = self._technical_signal(candles)
         except Exception as e:
@@ -69,19 +69,19 @@ class SignalLayer:
                     "ema_align": False, "macd_hist": 0, "bb_pos": 0.5,
                     "vol_ratio": 1.0}
 
-        # ── ٢. On-Chain ──
+        # ── 2. On-Chain ──
         try:
             oc_score = self._onchain_signal(onchain_data)
         except Exception:
             oc_score = 0.5
 
-        # ── ٣. الأخبار (sentiment -1 to +1 → 0 to 1) ──
+        # ── 3. الأخبار (sentiment -1 to +1 → 0 to 1) ──
         news_score = (news_sentiment + 1) / 2
 
-        # ── ٤. Backtest ──
+        # ── 4. Backtest ──
         bt_score = min(backtest_win_rate, 1.0)
 
-        # ── ٥. ماكرو ──
+        # ── 5. ماكرو ──
         macro_score = self._macro_signal(macro_data, regime)
 
         # ── ترجيح ──
@@ -310,7 +310,7 @@ class SignalLayer:
 
 
 # ══════════════════════════════════════════════════════════════
-# STRATEGY ROUTER (الطبقة ٤)
+# STRATEGY ROUTER (الطبقة 4)
 # ══════════════════════════════════════════════════════════════
 
 class Strategy(Enum):
@@ -387,7 +387,7 @@ class StrategyRouter:
 
 
 # ══════════════════════════════════════════════════════════════
-# PORTFOLIO ALLOCATION ENGINE (الطبقة ١٠)
+# PORTFOLIO ALLOCATION ENGINE (الطبقة 10)
 # ══════════════════════════════════════════════════════════════
 
 @dataclass
@@ -405,9 +405,9 @@ class PortfolioEngine:
     التقلب · السيولة · الارتباط · العائد المتوقع · الـ Regime
     """
 
-    MAX_SINGLE     = 0.25   # 25٪ أقصى لعملة واحدة
+    MAX_SINGLE     = 0.25   # 25% أقصى لعملة واحدة
     MAX_POSITIONS  = 5
-    MIN_POSITION   = 0.05   # 5٪ حد أدنى لأي صفقة
+    MIN_POSITION   = 0.05   # 5% حد أدنى لأي صفقة
 
     def allocate(self, candidates: List[SignalResult],
                  portfolio_value: float,
@@ -491,7 +491,7 @@ class PortfolioEngine:
         for a in allocations:
             lines.append(
                 f"#{a.priority} {a.symbol}: ${a.allocation_usd:,.0f} "
-                f"({a.allocation_pct}٪) — {a.weight_reason}")
+                f"({a.allocation_pct}%) — {a.weight_reason}")
         return "\n".join(lines)
 
 

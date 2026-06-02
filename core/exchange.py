@@ -549,7 +549,7 @@ class OKXExchange(BaseExchange):
         """
         asset_up = asset.upper()
 
-        # ١. Trading Account (Unified)
+        # 1. Trading Account (Unified)
         try:
             data = await self._async_request(
                 f"{self._base}/api/v5/account/balance", "GET",
@@ -570,7 +570,7 @@ class OKXExchange(BaseExchange):
         except Exception as e:
             logger.warning(f"OKX Trading balance error: {e}")
 
-        # ٢. Funding Account (كثير من المستخدمين رصيدهم هنا)
+        # 2. Funding Account (كثير من المستخدمين رصيدهم هنا)
         try:
             data2 = await self._async_request(
                 f"{self._base}/api/v5/asset/balances", "GET",

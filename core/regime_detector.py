@@ -1,5 +1,5 @@
 """
-📊 رائد — Market Regime Detector (ضمن طبقة ٣)
+📊 رائد — Market Regime Detector (ضمن طبقة 3)
 يشخّص الحالة الحالية للسوق ويوجّه Strategy Router.
 """
 
@@ -273,10 +273,10 @@ class RegimeDetector:
             f"{result.description_ar}\n"
             f"الثقة: {result.confidence:.0%} — (مدى يقين النموذج من تشخيص الاتجاه الحالي)\n\n"
             f"📈 *المؤشرات*\n"
-            f"• ATR: {m.get('atr_pct',0):.1f}٪ | ADX: {m.get('adx',0):.0f}\n"
+            f"• ATR: {m.get('atr_pct',0):.1f}% | ADX: {m.get('adx',0):.0f}\n"
             f"• RSI: {m.get('rsi',0):.0f} | حجم: {vol_ratio:.1f}x\n"
-            f"• السعر vs EMA50: {m.get('price_vs_ema50',0):+.1f}٪\n"
-            f"• Fear & Greed: {m.get('fear_greed',50)} | هيمنة BTC: {m.get('btc_dominance',50):.0f}٪\n\n"
+            f"• السعر vs EMA50: {m.get('price_vs_ema50',0):+.1f}%\n"
+            f"• Fear & Greed: {m.get('fear_greed',50)} | هيمنة BTC: {m.get('btc_dominance',50):.0f}%\n\n"
             f"🎯 *الاستراتيجية الموصى بها*\n"
             f"• {strategies_txt}\n"
             f"• الإجراء: {_action_ar(result.action)}"
@@ -288,7 +288,7 @@ class RegimeDetector:
 def _action_ar(action: str) -> str:
     return {
         "trade_normal":   "✅ تداول بحجم طبيعي",
-        "reduce_size":    "⚠️ تقليل الحجم ٥٠٪",
+        "reduce_size":    "⚠️ تقليل الحجم 50%",
         "avoid":          "🚫 تجنب الدخول الآن",
         "wait_reversal":  "⏳ انتظر — RSI في ذروة بيع (احتمال ارتداد)",
         "reduce_exposure": "📉 قلل التعرض للسوق",

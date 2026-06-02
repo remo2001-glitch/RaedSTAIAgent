@@ -1,5 +1,5 @@
 """
-⚖️ رائد — Risk Engine (الطبقة ٥)
+⚖️ رائد — Risk Engine (الطبقة 5)
 مستقل تماماً — لا يمكن تجاوزه من الاستراتيجية أو التنفيذ.
 يطبّق: Position Sizing · Drawdown · Correlation · Exposure · Kelly
 """
@@ -43,16 +43,16 @@ class RiskAssessment:
 DEFAULT_RISK_CONFIG = {
     # حدود المحفظة
     "portfolio_size":       10_000,   # USD إجمالي رأس المال
-    "max_risk_per_trade":   0.02,     # 2٪ من المحفظة لكل صفقة
-    "max_daily_loss":       0.03,   # 3٪ خسارة يومية قصوى
-    "max_drawdown":         0.12,   # 12٪ حد أقصى للـ Drawdown
+    "max_risk_per_trade":   0.02,     # 2% من المحفظة لكل صفقة
+    "max_daily_loss":       0.03,   # 3% خسارة يومية قصوى
+    "max_drawdown":         0.12,   # 12% حد أقصى للـ Drawdown
     "max_open_positions":   5,        # أقصى صفقات مفتوحة
-    "max_single_exposure":  0.20,     # 20٪ من المحفظة لعملة واحدة
-    "max_sector_exposure":  0.40,     # 40٪ لقطاع واحد
+    "max_single_exposure":  0.20,     # 20% من المحفظة لعملة واحدة
+    "max_sector_exposure":  0.40,     # 40% لقطاع واحد
     "min_confidence":       0.60,   # عُدِّل: 65% → 60%     # عتبة الثقة الدنيا
     # Stop/Target افتراضي
-    "default_stop_pct":     0.05,     # 5٪
-    "default_target_pct":   0.10,     # 10٪
+    "default_stop_pct":     0.05,     # 5%
+    "default_target_pct":   0.10,     # 10%
     "min_rr_ratio":         1.5,      # نسبة Risk/Reward دنيا
     # تعديلات الحالة
     "volatility_scale":     True,     # تقليل الحجم عند ارتفاع التقلب
@@ -62,7 +62,7 @@ DEFAULT_RISK_CONFIG = {
 
 class RiskEngine:
     """
-    يمرر كل صفقة محتملة عبر ٧ فحوصات مستقلة.
+    يمرر كل صفقة محتملة عبر 7 فحوصات مستقلة.
     إذا فشل أي فحص حاسم → الرفض الفوري.
     """
 
@@ -90,37 +90,37 @@ class RiskEngine:
         portfolio = portfolio_value or self._cur_value
         reasons, warnings = [], []
 
-        # ── فحص ٠: رافعة التداول الآلي
+        # ── فحص 0: رافعة التداول الآلي
         if is_autotrade and trade_type in ("futures_long", "futures_short"):
             if leverage > self.MAX_AUTO_LEVERAGE:
                 msg = "الرافعة " + str(leverage) + "X تتجاوز حد الأوتوتريد (" + str(self.MAX_AUTO_LEVERAGE) + "X) — نفّذ يدوياً"
                 return self._reject(msg, 0, confidence)
 
-        # ── فحص ١: الثقة ──────────────────────────────────────
+        # ── فحص 1: الثقة ──────────────────────────────────────
         if confidence < self.cfg["min_confidence"]:
             return self._reject(f"الثقة {confidence:.0%} أقل من الحد {self.cfg['min_confidence']:.0%}",
                                 0, 0)
 
-        # ── فحص ٢: الخسارة اليومية ────────────────────────────
+        # ── فحص 2: الخسارة اليومية ────────────────────────────
         today_loss = self._get_today_loss()
         if today_loss <= -self.cfg["max_daily_loss"] * portfolio:
             return self._reject(
                 f"تم بلوغ حد الخسارة اليومية {abs(today_loss):,.0f}$", 0, 0)
 
-        # ── فحص ٣: Drawdown ───────────────────────────────────
+        # ── فحص 3: Drawdown ───────────────────────────────────
         drawdown = self._current_drawdown(portfolio)
         if drawdown >= self.cfg["max_drawdown"]:
             return self._reject(
                 f"Drawdown بلغ {drawdown:.0%} — يتجاوز الحد {self.cfg['max_drawdown']:.0%}",
                 drawdown, 0)
 
-        # ── فحص ٤: عدد الصفقات المفتوحة ──────────────────────
+        # ── فحص 4: عدد الصفقات المفتوحة ──────────────────────
         open_count = len(self._open_pos)
         if open_count >= self.cfg["max_open_positions"]:
             return self._reject(
                 f"عدد الصفقات المفتوحة {open_count} بلغ الحد الأقصى", drawdown, confidence)
 
-        # ── فحص ٥: التعرض لعملة واحدة ─────────────────────────
+        # ── فحص 5: التعرض لعملة واحدة ─────────────────────────
         existing_exposure = self._open_pos.get(symbol, {}).get("size_usd", 0)
         max_exp = self.cfg["max_single_exposure"] * portfolio
         if existing_exposure >= max_exp:
@@ -142,16 +142,16 @@ class RiskEngine:
         # الحجم الأساسي = أصغر القيمتين
         raw_size = min(base_risk / stop_cfg, kelly_size)
 
-        # ── فحص ٦: تعديل التقلب ───────────────────────────────
+        # ── فحص 6: تعديل التقلب ───────────────────────────────
         vol_scale = 1.0
         if self.cfg["volatility_scale"] and atr_pct > 0:
             # كلما ارتفع ATR% كلما قلّ الحجم
             target_atr = 3.0   # ATR% المرجعي
             vol_scale  = min(target_atr / max(atr_pct, 0.1), 1.0)
             if vol_scale < 0.8:
-                warnings.append(f"الحجم مُخفَّض {1-vol_scale:.0%} بسبب تقلب عالٍ (ATR {atr_pct:.1f}٪)")
+                warnings.append(f"الحجم مُخفَّض {1-vol_scale:.0%} بسبب تقلب عالٍ (ATR {atr_pct:.1f}%)")
 
-        # ── فحص ٧: تعديل الـ Regime ───────────────────────────
+        # ── فحص 7: تعديل الـ Regime ───────────────────────────
         regime_scale = {
             "bull_trend": 1.0, "accumulation": 0.9,
             "sideways":   0.7, "distribution": 0.6,
@@ -299,10 +299,10 @@ class RiskEngine:
                 f"💰 الحجم المعتمد: ${a.approved_size:,.0f}",
             ]
             if a.reduction_pct > 0:
-                lines.append(f"📉 تخفيض: {a.reduction_pct:.0f}٪ من الطلب الأصلي")
+                lines.append(f"📉 تخفيض: {a.reduction_pct:.0f}% من الطلب الأصلي")
             lines += [
-                f"🛑 وقف الخسارة: {a.stop_loss_pct:.1f}٪",
-                f"🎯 هدف الربح:   {a.take_profit_pct:.1f}٪",
+                f"🛑 وقف الخسارة: {a.stop_loss_pct:.1f}%",
+                f"🎯 هدف الربح:   {a.take_profit_pct:.1f}%",
                 f"⏰ أقصى مدة:    {a.max_hold_hours} ساعة",
                 f"🌡️ درجة المخاطرة: {a.risk_score:.0%}",
             ]

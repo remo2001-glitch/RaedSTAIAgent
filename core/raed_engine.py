@@ -41,15 +41,15 @@ class RaedEngine:
         self._session: Optional[aiohttp.ClientSession] = None
         self.auto_trade_enabled = False
 
-        # ── الطبقة ٢: Data Validation ─────────────────────────
+        # ── الطبقة 2: Data Validation ─────────────────────────
         self.data_validator   = DataValidator()
 
-        # ── الطبقة ٣: Signal + Regime ─────────────────────────
+        # ── الطبقة 3: Signal + Regime ─────────────────────────
         self.regime_detector  = RegimeDetector()
         self.signal_layer     = SignalLayer()
         self.strategy_router  = StrategyRouter()
 
-        # ── الطبقة ٥: Risk Engine ──────────────────────────────
+        # ── الطبقة 5: Risk Engine ──────────────────────────────
         risk_cfg = {
             "portfolio_size":      config.get("PORTFOLIO_SIZE", 10_000),
             "max_risk_per_trade":  config.get("MAX_RISK_PER_TRADE", 0.02),
@@ -61,18 +61,18 @@ class RaedEngine:
         }
         self.risk_engine      = RiskEngine(risk_cfg)
 
-        # ── الطبقة ٦+٨+٩: Kill Switch + Override + Audit ──────
+        # ── الطبقة 6+8+9: Kill Switch + Override + Audit ──────
         self.kill_switch      = KillSwitch()
         self.human_override   = HumanOverrideLayer(timeout_minutes=15)
         self.audit_logger     = AuditLogger()
 
-        # ── الطبقة ٧: Microstructure ───────────────────────────
+        # ── الطبقة 7: Microstructure ───────────────────────────
         self.microstructure   = MicrostructureLayer()
 
         # ── Event Risk Filter ───────────────────────────────────
         self.event_risk       = EventRiskFilter()
 
-        # ── الطبقة ١٠: Capital Allocation ──────────────────────
+        # ── الطبقة 10: Capital Allocation ──────────────────────
         self.capital_engine   = CapitalAllocationEngine()
 
         # ── أدوات التحليل ──────────────────────────────────────
@@ -222,8 +222,8 @@ class RaedEngine:
     async def find_best_exchange(self, user_id: int, symbol: str) -> Optional[dict]:
         """
         يختار أفضل منصة للتنفيذ بناءً على:
-        ١. المنصات المرتبطة بالمستخدم فعلاً
-        ٢. حجم التداول 24h (الأعلى = الأفضل سيولة)
+        1. المنصات المرتبطة بالمستخدم فعلاً
+        2. حجم التداول 24h (الأعلى = الأفضل سيولة)
         يُعيد: {"exchange": obj, "name": str, "volume_24h": float}
         """
         user_exchanges = self._user_exchanges
@@ -455,14 +455,14 @@ class RaedEngine:
     async def _run_4h_scan(self, session: str = "", ksa_hour: int = 0) -> str:
         """
         المسح الرباعي الشامل — يعمل كل 4 ساعات:
-        ١. تحليل حالة السوق
-        ٢. مسح أفضل ٥ عملات
-        ٣. اقتناص الفرص القوية
-        ٤. تنفيذ آلي إذا autotrade مفعّل + إشارة ≥ 65%
-        ٥. تقرير موجز للمستخدم
+        1. تحليل حالة السوق
+        2. مسح أفضل 5 عملات
+        3. اقتناص الفرص القوية
+        4. تنفيذ آلي إذا autotrade مفعّل + إشارة ≥ 65%
+        5. تقرير موجز للمستخدم
         """
         try:
-            # ١. حالة السوق
+            # 1. حالة السوق
             btc_c    = await self.data_layer.get_ohlcv("BTC", "1d", 200)
             fear     = await self.data_layer.get_fear_greed()
             btc_c    = btc_c or []
@@ -472,8 +472,8 @@ class RaedEngine:
 
             regime = self.regime_detector.detect(btc_c, fear_greed=fear_val)
 
-            # ٢. مسح العملات حسب الباقة
-            # افتراضي: 30 للمجاني، 150 للمدفوع
+            # 2. مسح العملات حسب الباقة
+            # افتراضي: 30 للمجاني, 150 للمدفوع
             # نُحدد أقصى حد من جميع المستخدمين النشطين
             max_coins = 150 if any(
                 _sm_singleton.is_premium(uid)
@@ -521,7 +521,7 @@ class RaedEngine:
                         "price":      price,
                     })
 
-                    # ٣. إشارات قوية ≥ 65%
+                    # 3. إشارات قوية ≥ 65%
                     if signal.confidence >= 0.65:
                         strong_signals.append({
                             "symbol":     sym,
@@ -533,7 +533,7 @@ class RaedEngine:
                 except Exception:
                     continue
 
-            # ٤. تنفيذ آلي للإشارات القوية
+            # 4. تنفيذ آلي للإشارات القوية
             executed = []
             if getattr(self, "auto_trade_enabled", False) and strong_signals:
                 for s in strong_signals[:2]:   # أقصى صفقتان
@@ -567,7 +567,7 @@ class RaedEngine:
                     except Exception as e:
                         logger.warning(f"Auto execute {s['symbol']}: {e}")
 
-            # ٥. بناء التقرير
+            # 5. بناء التقرير
             if not strong_signals and not executed:
                 # لا شيء مهم — تقرير موجز فقط
                 best = sorted(all_signals,
@@ -603,7 +603,7 @@ class RaedEngine:
                         f"| ثقة: {e['confidence']:.0%}"
                     )
                     lines.append(
-                        f"  SL: {e['stop_loss']:.1f}٪ | TP: {e['take_profit']:.1f}٪"
+                        f"  SL: {e['stop_loss']:.1f}% | TP: {e['take_profit']:.1f}%"
                     )
                 lines.append("")
 
@@ -642,15 +642,15 @@ class RaedEngine:
                 f"💰 *الأداء*\n"
                 f"• إجمالي الصفقات: {summary.get('trades', 0)}\n"
                 f"• صافي الربح/الخسارة: ${summary.get('total_pnl', 0):+,.2f}\n"
-                f"• نسبة الفوز: {summary.get('win_rate', 0):.1f}٪\n"
+                f"• نسبة الفوز: {summary.get('win_rate', 0):.1f}%\n"
                 f"• متوسط الربح: ${summary.get('avg_win', 0):,.2f}\n"
                 f"• متوسط الخسارة: ${abs(summary.get('avg_loss', 0)):,.2f}\n\n"
                 f"⚖️ *المخاطر*\n"
-                f"• Drawdown: {risk_st.get('drawdown_pct', 0):.1f}٪\n"
+                f"• Drawdown: {risk_st.get('drawdown_pct', 0):.1f}%\n"
                 f"• صفقات مفتوحة: {risk_st.get('open_positions', 0)}\n\n"
                 f"🔬 *النموذج*\n"
                 f"• معدل الفوز: {drift.current_win_rate:.0%}\n"
-                f"• الانحراف: {drift.drift_pct:.1f}٪\n"
+                f"• الانحراف: {drift.drift_pct:.1f}%\n"
                 f"• {drift.recommendation_ar}\n\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
                 f"🤖 رائد التداول الذكي"
@@ -668,7 +668,7 @@ class RaedEngine:
                 f"💰 *ملخص الشهر*\n"
                 f"• إجمالي الصفقات: {summary.get('trades', 0)}\n"
                 f"• صافي الربح/الخسارة: ${summary.get('total_pnl', 0):+,.2f}\n"
-                f"• نسبة الفوز: {summary.get('win_rate', 0):.1f}٪\n\n"
+                f"• نسبة الفوز: {summary.get('win_rate', 0):.1f}%\n\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
                 f"🤖 رائد التداول الذكي"
             )

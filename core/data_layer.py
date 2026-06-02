@@ -820,7 +820,7 @@ class DataLayer:
         """يجلب أخبار CoinGecko العامة."""
         try:
             data = await _fetch(self.session,
-                "https://api.coingecko.com/api/v3/news",
+                "https://cryptopanic.com/api/v1/posts/?auth_token=&public=true&kind=news",
                 headers=_H_CG, params={"page": "1"})
             if isinstance(data, dict) and "data" in data:
                 items = []

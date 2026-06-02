@@ -1,5 +1,5 @@
 """
-💼 رائد — Capital Allocation Engine (الطبقة ١٠) — النسخة الكاملة
+💼 رائد — Capital Allocation Engine (الطبقة 10) — النسخة الكاملة
 يوزع رأس المال بين الأصول بناء على:
 التقلب · السيولة · الارتباط · العائد المتوقع · الـ Regime · Event Risk
 """
@@ -38,7 +38,7 @@ class PortfolioState:
     positions:        List[AssetAllocation]
     regime_exposure:  float          # نسبة التعرض الكلية بحسب الـ Regime
     diversification:  float          # درجة التنويع 0–1
-    portfolio_var:    float          # Value at Risk 95٪
+    portfolio_var:    float          # Value at Risk 95%
     max_drawdown_est: float          # تقدير أقصى Drawdown
     rebalance_needed: bool
 
@@ -53,10 +53,10 @@ class CapitalAllocationEngine:
     """
 
     # ── حدود التوزيع ──────────────────────────────────────────
-    MAX_SINGLE_ASSET   = 0.25    # 25٪ أقصى لأصل واحد
-    MIN_SINGLE_ASSET   = 0.03    # 3٪ حد أدنى
-    MAX_CORRELATED_GRP = 0.40    # 40٪ أقصى لمجموعة مترابطة
-    CASH_RESERVE_MIN   = 0.10    # 10٪ احتياطي نقدي دائم
+    MAX_SINGLE_ASSET   = 0.25    # 25% أقصى لأصل واحد
+    MIN_SINGLE_ASSET   = 0.03    # 3% حد أدنى
+    MAX_CORRELATED_GRP = 0.40    # 40% أقصى لمجموعة مترابطة
+    CASH_RESERVE_MIN   = 0.10    # 10% احتياطي نقدي دائم
     MAX_POSITIONS      = 6
 
     # ── مجموعات الارتباط (عملات تتحرك معاً) ──────────────────
@@ -99,7 +99,7 @@ class CapitalAllocationEngine:
         if not candidates or portfolio_value <= 0:
             return self._empty_state(portfolio_value)
 
-        # ── ١. التعرض الكلي ─────────────────────────────────
+        # ── 1. التعرض الكلي ─────────────────────────────────
         regime_exposure = self.REGIME_MAX_EXPOSURE.get(regime.regime, 0.50)
         total_exposure  = regime_exposure * event_multiplier
         total_exposure  = max(total_exposure, 0.0)
@@ -107,7 +107,7 @@ class CapitalAllocationEngine:
         # احتياطي نقدي إلزامي
         max_deploy = portfolio_value * total_exposure * (1 - self.CASH_RESERVE_MIN)
 
-        # ── ٢. تصفية وترتيب المرشحين ────────────────────────
+        # ── 2. تصفية وترتيب المرشحين ────────────────────────
         qualified = [c for c in candidates
                       if c.get("confidence", 0) >= 0.65
                       and c.get("direction", "neutral") != "neutral"]
@@ -116,7 +116,7 @@ class CapitalAllocationEngine:
         if not qualified:
             return self._empty_state(portfolio_value)
 
-        # ── ٣. حساب الوزن لكل أصل ───────────────────────────
+        # ── 3. حساب الوزن لكل أصل ───────────────────────────
         weighted = []
         for asset in qualified:
             w = self._compute_weight(asset, qualified)
@@ -127,10 +127,10 @@ class CapitalAllocationEngine:
         if total_weight <= 0:
             return self._empty_state(portfolio_value)
 
-        # ── ٤. حدود الارتباط ────────────────────────────────
+        # ── 4. حدود الارتباط ────────────────────────────────
         weighted = self._apply_correlation_caps(weighted)
 
-        # ── ٥. تحويل لمبالغ ─────────────────────────────────
+        # ── 5. تحويل لمبالغ ─────────────────────────────────
         allocations = []
         deployed    = 0.0
 
@@ -145,7 +145,7 @@ class CapitalAllocationEngine:
                 usd     = max(0, max_deploy - deployed)
                 raw_pct = usd / portfolio_value
 
-            if usd < 50:   # أقل من ٥٠$ لا قيمة له
+            if usd < 50:   # أقل من 50$ لا قيمة له
                 continue
 
             deployed += usd
@@ -165,7 +165,7 @@ class CapitalAllocationEngine:
             )
             allocations.append(alloc)
 
-        # ── ٦. مقاييس المحفظة ───────────────────────────────
+        # ── 6. مقاييس المحفظة ───────────────────────────────
         diversification = self._diversification_score(allocations)
         var_95          = self._portfolio_var(allocations, portfolio_value)
         max_dd_est      = var_95 * 2.5   # تقريب بسيط
@@ -191,7 +191,7 @@ class CapitalAllocationEngine:
         liq      = asset.get("liquidity_score", 0.7)
 
         # تعديل التقلب (inverse volatility)
-        vol_adj = 3.0 / atr_pct    # ATR 3٪ مرجعي
+        vol_adj = 3.0 / atr_pct    # ATR 3% مرجعي
         vol_adj = min(max(vol_adj, 0.3), 2.0)
 
         # تعديل السيولة
@@ -250,7 +250,7 @@ class CapitalAllocationEngine:
 
     def _portfolio_var(self, allocs: List[AssetAllocation],
                         portfolio: float) -> float:
-        """تقدير VaR 95٪ (تبسيط بدون matrix ارتباط)."""
+        """تقدير VaR 95% (تبسيط بدون matrix ارتباط)."""
         if not allocs:
             return 0
         # VaR ≈ 1.65 × volatility المُرجَّحة
@@ -285,7 +285,7 @@ class CapitalAllocationEngine:
         if liq > 0.8: parts.append("سيولة ممتازة")
         elif liq < 0.5: parts.append("سيولة محدودة")
         exp = asset.get("expected_return", 0)
-        if exp > 10: parts.append(f"عائد متوقع {exp:.0f}٪")
+        if exp > 10: parts.append(f"عائد متوقع {exp:.0f}%")
         return " · ".join(parts)
 
     # ═══════════════════════════════════════════════════════════
@@ -320,7 +320,7 @@ class CapitalAllocationEngine:
             f"• حالة السوق: {regime.description_ar}",
             f"• التعرض الكلي: {state.regime_exposure:.0%}",
             f"• التنويع: {state.diversification:.0%}",
-            f"• VaR 95٪: ${state.portfolio_var:,.0f}",
+            f"• VaR 95%: ${state.portfolio_var:,.0f}",
             f"• أقصى Drawdown متوقع: ${state.max_drawdown_est:,.0f}",
             f"{'⚠️ إعادة توازن مطلوبة' if state.rebalance_needed else '✅ المحفظة متوازنة'}",
             f"",
@@ -330,7 +330,7 @@ class CapitalAllocationEngine:
             sharpe_str = f"Sharpe {pos.sharpe_estimate:.1f}" if pos.sharpe_estimate != 0 else ""
             lines.append(
                 f"#{pos.rank} {pos.symbol}: ${pos.allocation_usd:,.0f} "
-                f"({pos.allocation_pct}٪)"
+                f"({pos.allocation_pct}%)"
                 + (f" — {sharpe_str}" if sharpe_str else "")
             )
             if pos.rationale_ar:

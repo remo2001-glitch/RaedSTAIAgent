@@ -2,8 +2,8 @@
 ⏰ رائد — Scheduler المتكامل v2
 جدول المسح والتقارير:
 • كل 4 ساعات: مسح شامل + اقتناص فرص + تنفيذ آلي
-• كل اثنين ١ ظهر (السعودية): تقرير أسبوعي
-• يوم ٣ من كل شهر ١ ظهر: تقرير شهري
+• كل اثنين 1 ظهر (السعودية): تقرير أسبوعي
+• يوم 3 من كل شهر 1 ظهر: تقرير شهري
 
 توقيت المسح الرباعي (بتوقيت السعودية UTC+3):
   01:00 | 05:00 | 09:00 | 13:00 | 17:00 | 21:00
@@ -24,7 +24,7 @@ from typing import Callable, Optional
 logger = logging.getLogger(__name__)
 
 # ── ثوابت التوقيت ────────────────────────────────────────────
-REPORT_HOUR_UTC   = 10    # ١ ظهر السعودية
+REPORT_HOUR_UTC   = 10    # 1 ظهر السعودية
 REPORT_MINUTE_UTC = 0
 WEEKLY_WEEKDAY    = 0     # الاثنين
 MONTHLY_DAY       = 3
@@ -124,7 +124,7 @@ class Scheduler:
 
     async def _check_month_end_review(self, now: datetime):
         """
-        النقطة ٩: مراجعة الصفقات في آخر يوم من كل شهر.
+        النقطة 9: مراجعة الصفقات في آخر يوم من كل شهر.
         يُرسل تقرير التعلم لكل مستخدم نشط.
         """
         import calendar
@@ -289,7 +289,7 @@ class Scheduler:
             hour=REPORT_HOUR_UTC, minute=0, second=0, microsecond=0)
         hours = max(0, (nxt - now).total_seconds() / 3600)
         return (f"التقرير الأسبوعي: "
-                f"{nxt.strftime('%Y-%m-%d')} الاثنين ١ ظهراً — بعد {hours:.0f} ساعة")
+                f"{nxt.strftime('%Y-%m-%d')} الاثنين 1 ظهراً — بعد {hours:.0f} ساعة")
 
     def next_monthly_ar(self) -> str:
         now = datetime.now(timezone.utc)
@@ -309,10 +309,10 @@ class Scheduler:
                 nxt = now.replace(year=y, month=m, day=MONTHLY_DAY,
                                    hour=REPORT_HOUR_UTC, minute=0, second=0)
             except ValueError:
-                return "التقرير الشهري: يوم ٣ من الشهر القادم ١ ظهراً"
+                return "التقرير الشهري: يوم 3 من الشهر القادم 1 ظهراً"
         hours = max(0, (nxt - now).total_seconds() / 3600)
         return (f"التقرير الشهري: "
-                f"{nxt.strftime('%Y-%m-%d')} يوم ٣ ١ ظهراً — بعد {hours:.0f} ساعة")
+                f"{nxt.strftime('%Y-%m-%d')} يوم 3 1 ظهراً — بعد {hours:.0f} ساعة")
 
 
 # ── Helper ────────────────────────────────────────────────────

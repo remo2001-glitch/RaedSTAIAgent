@@ -54,7 +54,7 @@ class UserProfile:
     @property
     def coin_limit(self) -> int:
         limits = {"free": 15, "silver": 35, "gold": 100,
-                  "diamond": 300, "admin": 300}
+                  "diamond": 350, "admin": 9999}
         return limits.get(self.tier, 15)
 
     @property

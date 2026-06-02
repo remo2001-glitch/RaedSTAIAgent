@@ -513,7 +513,7 @@ class OrderManager:
             pnl_icon = "📈" if trade.pnl_usd >= 0 else "📉"
             lines += [
                 f"• سعر الخروج: ${trade.exit_price:,.4f}",
-                f"• {pnl_icon} PnL: {trade.pnl_pct:+.2f}٪ (${trade.pnl_usd:+,.2f})",
+                f"• {pnl_icon} PnL: {trade.pnl_pct:+.2f}% (${trade.pnl_usd:+,.2f})",
                 f"• السبب: {trade.close_reason}",
             ]
         return "\n".join(lines)

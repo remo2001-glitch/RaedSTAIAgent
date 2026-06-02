@@ -1,9 +1,9 @@
 """
-🔬 رائد — Microstructure Layer (الطبقة ٧)
+🔬 رائد — Microstructure Layer (الطبقة 7)
 يُحلل السيولة وجودة التنفيذ
-١. Binance Order Book (حقيقي)
-٢. CoinGecko (حجم تداول حقيقي) — fallback
-٣. تقديرات آمنة — fallback نهائي
+1. Binance Order Book (حقيقي)
+2. CoinGecko (حجم تداول حقيقي) — fallback
+3. تقديرات آمنة — fallback نهائي
 """
 
 import time
@@ -66,7 +66,7 @@ class MicrostructureLayer:
 
         import aiohttp
 
-        # ── ١. OKX Public API (أفضل مصدر متاح من Railway) ────
+        # ── 1. OKX Public API (أفضل مصدر متاح من Railway) ────
         try:
             if self.session:
                 okx_sym = f"{symbol.upper()}-USDT"
@@ -90,7 +90,7 @@ class MicrostructureLayer:
         except Exception as e:
             logger.debug(f"OKX analyze ({symbol}): {e}")
 
-        # ── ٢. Bybit Public API ────────────────────────────────
+        # ── 2. Bybit Public API ────────────────────────────────
         try:
             if self.session:
                 url = (f"https://api.bybit.com/v5/market/orderbook"
@@ -114,7 +114,7 @@ class MicrostructureLayer:
         except Exception as e:
             logger.debug(f"Bybit analyze ({symbol}): {e}")
 
-        # ── ٣. Binance (محجوب على Railway غالباً) ─────────────
+        # ── 3. Binance (محجوب على Railway غالباً) ─────────────
         for ep in ["https://api.binance.com", "https://api1.binance.com"]:
             try:
                 url = f"{ep}/api/v3/depth?symbol={symbol.upper()}USDT&limit=50"
@@ -130,7 +130,7 @@ class MicrostructureLayer:
             except Exception as e:
                 logger.debug(f"Binance {ep} ({symbol}): {e}")
 
-        # ── ٤. CoinGecko — حجم تداول تقديري ──────────────────
+        # ── 4. CoinGecko — حجم تداول تقديري ──────────────────
         try:
             from core.data_layer import _cg_id, _fetch, _H_CG
             cg = _cg_id(symbol)
@@ -161,7 +161,7 @@ class MicrostructureLayer:
                             depth_limit: int = 100) -> OrderFlowSignal:
         """يكشف جدران الشراء والبيع — OKX أولاً ثم Bybit ثم Binance."""
 
-        # ── ١. OKX (الأفضل من Railway) ──────────────────────────
+        # ── 1. OKX (الأفضل من Railway) ──────────────────────────
         try:
             if self.session:
                 url = f"https://www.okx.com/api/v5/market/books?instId={symbol.upper()}-USDT&sz={depth_limit}"
@@ -178,7 +178,7 @@ class MicrostructureLayer:
         except Exception as e:
             logger.debug(f"detect_walls OKX ({symbol}): {e}")
 
-        # ── ٢. Bybit ────────────────────────────────────────────
+        # ── 2. Bybit ────────────────────────────────────────────
         try:
             if self.session:
                 url = f"https://api.bybit.com/v5/market/orderbook?category=spot&symbol={symbol.upper()}USDT&limit={depth_limit}"
@@ -195,7 +195,7 @@ class MicrostructureLayer:
         except Exception as e:
             logger.debug(f"detect_walls Bybit ({symbol}): {e}")
 
-        # ── ٣. Binance (قد يكون محجوباً على Railway) ───────────
+        # ── 3. Binance (قد يكون محجوباً على Railway) ───────────
         BN_ENDPOINTS = [
             "https://api.binance.com",
             "https://api1.binance.com",
@@ -437,7 +437,7 @@ class MicrostructureLayer:
             f"الحكم: {'✅ قابل للتداول' if profile.is_tradeable else '⛔ غير موصى بالتداول'}",
             "",
             "📊 *Order Book*",
-            f"• Spread: {profile.spread_pct:.5f}٪",
+            f"• Spread: {profile.spread_pct:.5f}%",
         ]
 
         if profile.bid_depth_usd > 0:
@@ -448,7 +448,7 @@ class MicrostructureLayer:
                 f"({'🟢 ضغط شراء قوي' if profile.imbalance > 0.60 else '🟢 ضغط شراء خفيف' if profile.imbalance > 0.52 else '🔴 ضغط بيع قوي' if profile.imbalance < 0.40 else '🔴 ضغط بيع خفيف' if profile.imbalance < 0.48 else '⚪ متوازن'})",
             ]
 
-        lines.append(f"• Slippage متوقع: {profile.estimated_slippage_pct:.3f}٪")
+        lines.append(f"• Slippage متوقع: {profile.estimated_slippage_pct:.3f}%")
 
         # أكبر أوامر الشراء والبيع (من walls إذا متاحة)
         if walls is not None and not isinstance(walls, Exception) and not isinstance(walls, bool):
@@ -550,7 +550,7 @@ class MicrostructureLayer:
             score      = min(1.0, total / 1e6 * 0.5 + (1 - min(spread, 1)) * 0.5)
             warnings_  = []
             if spread > 0.5:
-                warnings_.append(f"spread مرتفع: {spread:.2f}٪")
+                warnings_.append(f"spread مرتفع: {spread:.2f}%")
             return LiquidityProfile(
                 symbol=symbol,
                 bid_price=best_bid, ask_price=best_ask, mid_price=mid_price,

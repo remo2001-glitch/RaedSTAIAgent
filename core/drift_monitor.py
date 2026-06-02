@@ -40,7 +40,7 @@ class DriftMonitor:
         self.baseline       = baseline_win_rate
         self._outcomes:     List[bool] = []    # True=win, False=loss
         self._timestamps:   List[float] = []
-        self._rolling_window = 50              # آخر ٥٠ إشارة
+        self._rolling_window = 50              # آخر 50 إشارة
 
     def record_outcome(self, was_correct: bool):
         self._outcomes.append(was_correct)
@@ -74,11 +74,11 @@ class DriftMonitor:
             needs = True
         elif drift >= self.DRIFT_MODERATE:
             level = "moderate"
-            rec   = "🟠 تراجع متوسط — تقليل الحجم ٥٠٪ وإعادة معايرة النموذج"
+            rec   = "🟠 تراجع متوسط — تقليل الحجم 50% وإعادة معايرة النموذج"
             needs = True
         elif drift >= self.DRIFT_MILD:
             level = "mild"
-            rec   = "🟡 تراجع خفيف — مراقبة مستمرة، تقليل الحجم ٢٠٪"
+            rec   = "🟡 تراجع خفيف — مراقبة مستمرة, تقليل الحجم 20%"
             needs = False
         else:
             level = "none"
@@ -113,7 +113,7 @@ class DriftMonitor:
             f"━━━━━━━━━━━━━━━━━━\n"
             f"معدل الفوز الحالي: {bar} {state.current_win_rate:.0%}\n"
             f"المعيار الأساسي:   {state.baseline_win_rate:.0%}\n"
-            f"الانحراف:          {state.drift_pct:.1f}٪\n"
+            f"الانحراف:          {state.drift_pct:.1f}%\n"
             f"الإشارات المُقيَّمة: {state.signals_evaluated}\n\n"
             f"{state.recommendation_ar}"
         )

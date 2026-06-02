@@ -1,6 +1,6 @@
 """
 📊 رائد — Backtest Engine
-٣ سنوات بيانات حقيقية من CoinGecko (مجاني)
+3 سنوات بيانات حقيقية من CoinGecko (مجاني)
 يقيس: Win Rate · Sharpe · Max Drawdown · Profit Factor · Calmar
 """
 
@@ -42,7 +42,7 @@ class BacktestEngine:
     """
     يُطبق استراتيجية على البيانات التاريخية ويقيس الأداء الفعلي.
     يدعم: Trend Following · Mean Reversion · Breakout
-    بيانات: CoinGecko Daily OHLCV (مجاني — ٣٦٥ يوم/طلب × ٣ طلبات = ٣ سنوات)
+    بيانات: CoinGecko Daily OHLCV (مجاني — 365 يوم/طلب × 3 طلبات = 3 سنوات)
     """
 
     MIN_PERIODS  = 60    # أقل حد للبيانات المقبولة
@@ -334,11 +334,11 @@ class BacktestEngine:
         quality = "ممتاز" if sharpe > 1.5 else "جيد" if sharpe > 0.8 else "مقبول" if sharpe > 0.3 else "ضعيف"
         return (
             f"نتائج الـ Backtest لـ {symbol} ({data_source}) تُظهر أداءً {quality}. "
-            f"معدل فوز {wr:.0%} على {n} صفقة، "
-            f"عائد سنوي {annual:.1f}٪، "
-            f"أقصى Drawdown {dd:.1f}٪، "
+            f"معدل فوز {wr:.0%} على {n} صفقة, "
+            f"عائد سنوي {annual:.1f}%, "
+            f"أقصى Drawdown {dd:.1f}%, "
             f"Sharpe {sharpe:.2f}. "
-            f"التوقعية المتوسطة للصفقة {exp:+.2f}٪. "
+            f"التوقعية المتوسطة للصفقة {exp:+.2f}%. "
             f"مستوى الثقة بالنتائج: {conf:.0%}."
         )
 
@@ -413,23 +413,23 @@ class BacktestEngine:
             f"",
             f"📈 *الأداء*",
             f"• إجمالي الصفقات: {r.total_trades}",
-            f"• نسبة الفوز:     {r.win_rate:.1f}٪",
-            f"• العائد الكلي:   {r.total_return:+.1f}٪",
-            f"• العائد السنوي:  {r.annual_return:+.1f}٪",
+            f"• نسبة الفوز:     {r.win_rate:.1f}%",
+            f"• العائد الكلي:   {r.total_return:+.1f}%",
+            f"• العائد السنوي:  {r.annual_return:+.1f}%",
             f"",
             f"⚖️ *إدارة المخاطر*",
-            f"• أقصى Drawdown: {r.max_drawdown:.1f}٪",
+            f"• أقصى Drawdown: {r.max_drawdown:.1f}%",
             f"• Sharpe Ratio:  {r.sharpe_ratio:.2f}",
             f"• Calmar Ratio:  {r.calmar_ratio:.2f}",
             f"• Profit Factor: {r.profit_factor:.2f}",
             f"",
             f"🎯 *تفاصيل الصفقات*",
-            f"• متوسط الربح: {r.avg_win:+.2f}٪",
-            f"• متوسط الخسارة: {r.avg_loss:.2f}٪",
-            f"• أفضل صفقة: {r.best_trade:+.2f}٪",
-            f"• أسوأ صفقة: {r.worst_trade:+.2f}٪",
+            f"• متوسط الربح: {r.avg_win:+.2f}%",
+            f"• متوسط الخسارة: {r.avg_loss:.2f}%",
+            f"• أفضل صفقة: {r.best_trade:+.2f}%",
+            f"• أسوأ صفقة: {r.worst_trade:+.2f}%",
             f"• متوسط مدة الاحتفاظ: {r.avg_hold_days:.1f} يوم",
-            f"• التوقعية: {r.expectancy:+.2f}٪/صفقة",
+            f"• التوقعية: {r.expectancy:+.2f}%/صفقة",
             f"",
             f"🔬 *موثوقية النتائج: {r.confidence_score:.0%}*",
             f"",

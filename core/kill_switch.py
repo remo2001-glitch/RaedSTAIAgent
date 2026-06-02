@@ -1,7 +1,7 @@
 """
-🔴 رائد — Kill Switch (الطبقة ٨)
-👤 Human Override / Approval Layer (الطبقة ٦)
-📋 Audit Logger (الطبقة ٩)
+🔴 رائد — Kill Switch (الطبقة 8)
+👤 Human Override / Approval Layer (الطبقة 6)
+📋 Audit Logger (الطبقة 9)
 """
 
 import json
@@ -362,7 +362,7 @@ class AuditLogger:
             f"━━━━━━━━━━━━━━━━━━\n"
             f"📈 إجمالي الصفقات: {s['trades']}\n"
             f"💰 صافي الربح/الخسارة: ${s['total_pnl']:+,.2f}\n"
-            f"✅ نسبة الفوز: {s['win_rate']:.1f}٪\n"
+            f"✅ نسبة الفوز: {s['win_rate']:.1f}%\n"
             f"📈 متوسط الربح: ${s['avg_win']:,.2f}\n"
             f"📉 متوسط الخسارة: ${abs(s['avg_loss']):,.2f}\n"
             f"━━━━━━━━━━━━━━━━━━\n"
