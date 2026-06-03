@@ -418,9 +418,17 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if len(candles) < 30:
                 continue
             try:
-                # signal_layer لا يحتاج microstructure
+                # إصلاح #321: تنظيف candles من القيم المعطوبة
+                candles_clean = [
+                    c for c in candles
+                    if (float(c.get("close", 0) or 0) > 0 and
+                        float(c.get("high",  0) or 0) > 0 and
+                        float(c.get("low",   0) or 0) > 0)
+                ]
+                if len(candles_clean) < 30:
+                    candles_clean = candles  # نستخدم الأصلية إذا بعد التنظيف قليلة
                 signal = engine.signal_layer.generate(
-                    symbol=sym, candles=candles, onchain_data=onchain,
+                    symbol=sym, candles=candles_clean, onchain_data=onchain,
                     news_sentiment=news_sentiment,
                     backtest_win_rate=0.55,
                     macro_data={"fear_greed": fear_val},
@@ -450,6 +458,28 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 })
             except Exception as e:
                 logger.warning(f"plan_month {sym}: {e}")
+                # إصلاح #321: fallback بدلاً من تخطي العملة
+                try:
+                    price_d2 = _prices_all[i] if not isinstance(_prices_all[i], Exception) else {}
+                    price2   = float((price_d2 or {}).get("price") or 0)
+                    if price2 > 0 and len(candles) >= 14:
+                        # إشارة بسيطة من RSI فقط
+                        from core.signal_layer import TradingSignal
+                        _rsi_fb = _calc_rsi(candles)
+                        _dir_fb = "long" if _rsi_fb < 35 else "short" if _rsi_fb > 70 else "neutral"
+                        _conf_fb = 0.40 + abs(_rsi_fb - 50) / 200
+                        candidates.append({
+                            "symbol":          sym,
+                            "confidence":      round(_conf_fb, 2),
+                            "direction":       _dir_fb,
+                            "atr_pct":         _calc_atr(candles),
+                            "liquidity_score": 0.6,
+                            "expected_return": 0.03 if _dir_fb == "long" else -0.02,
+                            "price":           price2,
+                        })
+                        logger.info(f"plan_month {sym}: fallback signal RSI={_rsi_fb:.0f}")
+                except Exception as _fe:
+                    logger.debug(f"plan_month {sym} fallback failed: {_fe}")
 
         ev_mult, ev_reason = engine.event_risk.get_exposure_multiplier()
         portfolio_val = float(engine.risk_engine.cfg.get("portfolio_size") or 10000)
