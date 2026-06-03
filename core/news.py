@@ -36,6 +36,26 @@ SENTIMENT_LABELS = {
 
 
 
+# إصلاح #192: كلمات مفتاحية كريبتو إلزامية
+_CRYPTO_KEYWORDS = {
+    "bitcoin", "btc", "ethereum", "eth", "crypto", "blockchain",
+    "defi", "nft", "stablecoin", "usdt", "usdc", "binance", "coinbase",
+    "altcoin", "token", "wallet", "mining", "satoshi", "web3",
+    "solana", "sol", "ripple", "xrp", "cardano", "ada", "polkadot",
+    "dot", "avalanche", "avax", "chainlink", "link", "uniswap",
+    "sec crypto", "cftc", "digital asset", "digital currency",
+    "كريبتو", "بيتكوين", "إيثيريوم", "بلوكتشين", "عملة رقمية",
+    "تشفير", "منصة تداول", "عملات", "ديفاي",
+}
+
+def _is_crypto_news(title: str) -> bool:
+    """يتحقق أن الخبر يخص الكريبتو — إصلاح #192."""
+    if not title:
+        return False
+    t = title.lower()
+    return any(kw in t for kw in _CRYPTO_KEYWORDS)
+
+
 def _translate_news_title(title: str) -> str:
     """ترجمة المصطلحات الشائعة في عناوين الأخبار."""
     if not title:
@@ -43,39 +63,23 @@ def _translate_news_title(title: str) -> str:
     arabic_chars = sum(1 for c in title if "؀" <= c <= "ۿ")
     if arabic_chars > len(title) * 0.3:
         return title
-    # إصلاح #122/#129: ترجمة شاملة مع دعم الجمع الإنجليزي
     replacements = {
         "Bitcoin": "بيتكوين", "Ethereum": "إيثيريوم", "SEC": "هيئة SEC",
         "ETF": "صندوق ETF", "approval": "موافقة", "approved": "وافقت",
-        "approvals": "موافقات",
         "fraud": "احتيال", "charges": "تهم قانونية", "billion": "مليار",
         "million": "مليون", "record": "رقم قياسي", "outflow": "تدفق خروج",
-        "outflows": "تدفقات خروج", "inflow": "تدفق دخول",
-        "inflows": "تدفقات دخول", "rally": "ارتفاع", "rallies": "ارتفاعات",
-        "crashes": "انهيارات", "crash": "انهيار",
-        "surges": "قفزات", "surge": "قفزة", "ban": "حظر", "bans": "حظر",
-        "hack": "اختراق", "hacks": "اختراقات",
-        "exchanges": "منصات تداول", "exchange": "منصة تداول",
-        "institutional": "مؤسسي", "adoption": "تبني",
-        "regulations": "تنظيمات", "regulation": "تنظيم",
-        "lawsuits": "دعاوى قضائية", "lawsuit": "دعوى قضائية",
-        "treasury": "خزينة", "analysts": "محللون", "analyst": "محلل",
-        "markets": "أسواق", "market": "سوق", "global": "عالمي",
+        "inflow": "تدفق دخول", "rally": "ارتفاع", "crash": "انهيار",
+        "surge": "قفزة", "ban": "حظر", "hack": "اختراق",
+        "exchange": "منصة تداول", "institutional": "مؤسسي",
+        "adoption": "تبني", "regulation": "تنظيم",
+        "lawsuit": "دعوى قضائية", "treasury": "خزينة",
+        "analyst": "محلل", "market": "سوق", "global": "عالمي",
         "crypto": "كريبتو", "blockchain": "بلوكتشين",
-        "trading": "تداول", "indicators": "مؤشرات", "indicator": "مؤشر",
-        "losses": "خسائر", "loss": "خسارة", "gains": "مكاسب", "gain": "مكسب",
-        "warning": "تحذير", "warnings": "تحذيرات",
-        "bullish": "صعودي", "bearish": "هبوطي",
+        "trading": "تداول", "indicator": "مؤشر",
     }
-    import re as _re
     result = title
-    # الجمع أولاً (قبل المفرد لتجنب استبدال جزئي)
-    for en, ar in sorted(replacements.items(), key=lambda x: -len(x[0])):
-        result = _re.sub(r'(?<![\w\u0600-\u06FF])' + _re.escape(en) + r'(?![\w\u0600-\u06FF])',
-                         ar, result, flags=_re.IGNORECASE)
-    # تنظيف أي جمع إنجليزي متبقٍّ بعد ترجمة جذره (مثل انهيارes → انهيارات)
-    result = _re.sub(r"([\u0600-\u06FF]+)(?:es|s)\b", lambda m: m.group(1) + "ات"
-                     if m.group(1)[-1] not in "ات" else m.group(1), result)
+    for en, ar in replacements.items():
+        result = result.replace(en, ar).replace(en.lower(), ar)
     return result
 
 
@@ -195,6 +199,8 @@ class NewsEngine:
         if len(items) < 5:
             items.extend(await self._fetch_rss(limit=15))
 
+        # إصلاح #192: فلتر الأخبار غير الكريبتو
+        items = [i for i in items if _is_crypto_news(i.get("title", ""))]
         items = items[:limit]
         self._cache[cache_key] = (items, time.time())
         return items
@@ -517,6 +523,9 @@ class NewsEngine:
         extra = []
         for item in items:
             t = str(item.get("title", ""))
+            # إصلاح #192: تخطي الأخبار غير الكريبتو
+            if not _is_crypto_news(t):
+                continue
             t = _translate_news_title(t)  # ترجمة M#59
             if t[:50].lower() not in shown and t:
                 extra.append(t)
@@ -716,13 +725,11 @@ class NewsEngine:
         else:                p_str = f"${price:.8f}"
 
         # 6. بناء التحليل
+        # إصلاح #175: حذف سطور الهيدر — cmd_analyze يعرضها بالفعل
+        # نبدأ مباشرةً من التحليل النوعي بدون تكرار البيانات
         lines = [
-            f"📊 تحليل {symbol}",
-            f"السعر: {p_str} ({change_24h:+.2f}%)",
-            f"الاتجاه: {trend}",
             f"RSI {rsi:.0f}: {rsi_text}",
             f"Fear & Greed {fear_greed}: {fg_text}",
-            f"السوق: {regime_desc}",
         ]
 
         # 7. إضافة تحليل التناقض إذا وُجد

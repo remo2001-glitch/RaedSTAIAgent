@@ -469,48 +469,64 @@ class MicrostructureLayer:
             else:
                 lines.append("• أدنى أمر بيع (Ask):  غير متاح")
 
-            # إصلاح #136: جدران حقيقية فقط من buy/sell_walls
-            bw  = getattr(walls, "buy_walls",  []) or []
-            sw  = getattr(walls, "sell_walls", []) or []
-            net = getattr(walls, "net_pressure", 0)
-            real_sup = bw[0]["price"] if bw else 0
-            real_res = sw[0]["price"] if sw else 0
+            # إصلاح #136/#196: جدران حقيقية فقط + ضغط من imbalance
+            bw_real  = getattr(walls, "buy_walls",  []) or []
+            sw_real  = getattr(walls, "sell_walls", []) or []
+            real_sup = bw_real[0]["price"] if bw_real else 0
+            real_res = sw_real[0]["price"] if sw_real else 0
+            # إصلاح #196: الضغط من imbalance (أدق من net_pressure)
+            _imb   = getattr(profile, "imbalance", 0.5)
+            net_ar = ("🟢 ضغط شراء" if _imb > 0.55 else
+                      "🔴 ضغط بيع"  if _imb < 0.45 else "⚪ متوازن")
             if real_sup > 0 or real_res > 0:
-                net_ar = ("🟢 ضغط شراء" if net > 0.1 else
-                          "🔴 ضغط بيع"  if net < -0.1 else "⚪ متوازن")
                 lines += ["", "🧱 *مستويات الدعم والمقاومة*"]
                 if real_sup > 0:
-                    lines.append(f"• دعم (جدار شراء):   ${real_sup:,.4f}")
+                    # إصلاح #198: أرقام عشرية حسب قيمة السعر
+                    _d = 2 if real_sup >= 100 else 4 if real_sup >= 1 else 6
+                    lines.append(f"• دعم (جدار شراء):   ${real_sup:,.{_d}f}")
                 if real_res > 0:
-                    lines.append(f"• مقاومة (جدار بيع): ${real_res:,.4f}")
+                    _d = 2 if real_res >= 100 else 4 if real_res >= 1 else 6
+                    lines.append(f"• مقاومة (جدار بيع): ${real_res:,.{_d}f}")
                 lines.append(f"• الضغط: {net_ar}")
         else:
-            lines += ["", "📋 *جدران السوق:* غير متاحة (Binance مطلوب)"]
+            lines += ["", "📋 *جدران السوق:* غير متاحة"]
 
-        # تحذير حسب المصدر
+        # إصلاح #150/#161: مصدر واحد فقط
         if profile.source == "coingecko":
             lines += [
                 "",
-                "⚠️ *ملاحظة مهمة:* الأرقام أعلاه هي حجم تداول تقديري",
-                "وليست Order Book حقيقي — للدقة اربط منصتك: /live connect",
+                "⚠️ *ملاحظة:* بيانات تقديرية — ليست Order Book حقيقي",
             ]
         elif profile.source in ("okx", "bybit"):
             lines += ["", f"📡 المصدر: Order Book حقيقي من {profile.source.upper()}"]
         elif profile.source == "fallback":
-            lines += ["", "⚠️ المصدر: بيانات افتراضية — تحقق من الاتصال"]
+            lines += ["", "⚠️ المصدر: بيانات افتراضية"]
         else:
             lines += ["", f"📡 المصدر: {source_label}"]
         return "\n".join(lines)
 
+    # حدود دنيا للجدران حسب العملة (#195)
+    _WALL_MIN_USD = {
+        "BTC":  150_000,   # $150K لـ BTC
+        "ETH":   50_000,   # $50K لـ ETH
+        "BNB":   20_000,
+        "SOL":   15_000,
+        "XRP":   10_000,
+    }
+    _WALL_MIN_DEFAULT = 5_000   # $5K للعملات الأخرى
+
     def _compute_walls_from_levels(self, symbol: str,
                                    bids: list, asks: list) -> "OrderFlowSignal":
-        """يحسب الجدران من bids/asks مُهيَّكلة [[price, size], ...]"""
+        """يحسب الجدران من bids/asks مُهيَّكلة [[price, size], ...]
+        إصلاح #195: حد أدنى مطلق حسب العملة"""
         try:
             buy_walls, sell_walls = [], []
             all_sizes = [float(b[0])*float(b[1]) for b in bids[:20]] + \
                         [float(a[0])*float(a[1]) for a in asks[:20]]
             avg = (sum(all_sizes)/len(all_sizes)) if all_sizes else 1
-            threshold = avg * 5.0
+            # إصلاح #195: الأكبر بين avg×5 والحد الأدنى المطلق
+            min_wall = self._WALL_MIN_USD.get(symbol.upper(), self._WALL_MIN_DEFAULT)
+            threshold = max(avg * 5.0, min_wall)
             for b in bids[:20]:
                 p, s = float(b[0]), float(b[1])
                 if p * s > threshold:

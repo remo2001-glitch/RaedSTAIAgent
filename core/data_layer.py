@@ -305,9 +305,8 @@ async def _fetch(session: aiohttp.ClientSession, url: str,
                     logger.warning(f"Rate limit [{url[:55]}] انتظار {wait:.0f}ث")
                     await asyncio.sleep(wait)
                 elif r.status == 451:
-                    # إصلاح #124: 451 = محجوب نهائياً — لا فائدة من retry
-                    logger.warning(f"HTTP 451 [{url[:55]}] — محجوب (Railway IP). تخطٍّ فوري")
-                    return None   # break فوري بدل إضاعة وقت في retries
+                    logger.warning(f"HTTP 451 [{url[:55]}] — محجوب. تخطٍّ فوري")
+                    return None
                 elif r.status in (403, 401):
                     logger.warning(f"HTTP {r.status} [{url[:55]}] محاولة {attempt+1}/{retries}")
                     await asyncio.sleep(backoff * (attempt + 1))
@@ -757,22 +756,33 @@ class DataLayer:
     async def _hist_coingecko(self, symbol: str, days: int) -> List[Dict]:
         """
         CoinGecko fallback — price + volume + H/L ديناميكي واقعي.
-        H/L محسوب من التقلب الفعلي (std) بدلاً من نسبة ثابتة.
+        إصلاح #200: 3 طلبات بـ from/to صريح → ~1000 نقطة فعلية
+        CoinGecko يُعيد 200 نقطة/طلب عند days=365
+        3 طلبات × 200 ≈ 600 نقطة (بدلاً من 200)
         """
+        import time as _time
         cg      = _cg_id(symbol)
         results = []
-        chunks  = [365, 365, max(days - 730, 30)] if days > 730 else [days]
 
-        for chunk in chunks:
-            if chunk <= 0:
-                continue
+        # حساب نطاقات زمنية صريحة (from/to) بدلاً من days
+        now     = int(_time.time())
+        # 3 دُفعات: آخر سنة، السنة قبلها، السنة الثالثة
+        ranges  = [
+            (now - 365*24*3600,       now),
+            (now - 730*24*3600,       now - 365*24*3600),
+            (now - 1095*24*3600,      now - 730*24*3600),
+        ]
+        if days <= 365:
+            ranges = [(now - days*24*3600, now)]
+
+        for from_ts, to_ts in ranges:
             data = await _fetch(
                 self.session,
-                f"https://api.coingecko.com/api/v3/coins/{cg}/market_chart",
+                f"https://api.coingecko.com/api/v3/coins/{cg}/market_chart/range",
                 headers=_H_CG,
                 params={"vs_currency": "usd",
-                        "days": str(chunk),
-                        "interval": "daily"},
+                        "from": str(from_ts),
+                        "to":   str(to_ts)},
             )
             if isinstance(data, dict):
                 prices = data.get("prices", [])

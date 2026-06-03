@@ -87,6 +87,11 @@ class RaedEngine:
         # ── Scheduler (يُشغَّل بعد إنشاء send_fn) ──────────────
         self.scheduler: Optional[Scheduler] = None
 
+        # ── Semaphore للأوامر الثقيلة (#178) ──────────────────
+        # يمنع تراكم الطلبات عند تزامن عدة مستخدمين
+        # 3 طلبات ثقيلة في آن واحد كحد أقصى
+        self._heavy_semaphore: Optional[asyncio.Semaphore] = None
+
         # ── تعدد المستخدمين — كل مستخدم له إعدادات منفصلة ────
         self._user_portfolios: dict = {}   # {user_id: float}
         self._user_prefs:      dict = {}   # {user_id: dict}
@@ -162,6 +167,9 @@ class RaedEngine:
 
         # ── استرجاع ربطات المنصات المحفوظة من Redis ──────────
         await self._restore_exchanges_from_redis()
+
+        # تهيئة semaphore داخل event loop (#178)
+        self._heavy_semaphore = asyncio.Semaphore(3)
 
         groq_k = self.config.get("GROQ_API_KEY", "")
         logger.info(
@@ -443,6 +451,16 @@ class RaedEngine:
     # ═══════════════════════════════════════════════════════════
     # Kill Switch Hook
     # ═══════════════════════════════════════════════════════════
+    async def acquire_heavy(self):
+        """
+        context manager للأوامر الثقيلة (#178).
+        يضمن عدم تزامن أكثر من 3 طلبات في آن واحد.
+        استخدام: async with await engine.acquire_heavy(): ...
+        """
+        if self._heavy_semaphore is None:
+            self._heavy_semaphore = asyncio.Semaphore(3)
+        return self._heavy_semaphore
+
     async def _on_kill_switch(self, state):
         self.auto_trade_enabled = False
         self.audit_logger.log_event("kill_switch_auto_disable_trade", {
