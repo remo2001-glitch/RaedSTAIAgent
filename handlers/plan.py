@@ -401,15 +401,14 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except asyncio.TimeoutError:
             _prices_all = [{} for _ in symbols]
 
+        # إصلاح #280/#287: معالجة أوسع — microstructure اختيارية
         candidates = []
         for i, sym in enumerate(symbols):
             candles = ohlcv_all[i] if isinstance(ohlcv_all[i], list) else []
             if len(candles) < 30:
                 continue
             try:
-                liq    = await asyncio.wait_for(
-                    engine.microstructure.analyze(sym, 1000), timeout=5.0
-                )
+                # signal_layer لا يحتاج microstructure
                 signal = engine.signal_layer.generate(
                     symbol=sym, candles=candles, onchain_data=onchain,
                     news_sentiment=news_sentiment,
@@ -417,6 +416,16 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     macro_data={"fear_greed": fear_val},
                     regime=regime,
                 )
+                # microstructure اختيارية — لا توقف العملية
+                liq_score = 0.7
+                try:
+                    liq = await asyncio.wait_for(
+                        engine.microstructure.analyze(sym, 1000), timeout=8.0
+                    )
+                    liq_score = liq.liquidity_score if liq else 0.7
+                except Exception:
+                    pass  # نكمل بدون سيولة
+
                 # السعر من الجلب المتوازي
                 price_d = _prices_all[i] if not isinstance(_prices_all[i], Exception) else {}
                 price   = float((price_d or {}).get("price") or 0)
@@ -425,7 +434,7 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "confidence":      signal.confidence,
                     "direction":       signal.direction,
                     "atr_pct":         _calc_atr(candles),
-                    "liquidity_score": liq.liquidity_score if liq else 0.7,
+                    "liquidity_score": liq_score,
                     "expected_return": _est_return(signal, regime),
                     "price":           price,
                 })
@@ -758,6 +767,34 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
         events_text = re.sub(r'(بعد\s*)(\d+)(ساعة)', r'بعد  ساعة', events_text)
         events_text = re.sub(r'(بعد\s*)(\d+)(يوم)', r'بعد  يوم', events_text)
         sched_text  = engine.scheduler.next_weekly_ar() if engine.scheduler else ""
+
+        # إصلاح #293/#252: week_plan ديناميكي في planweek
+        _rsi_pw  = float((getattr(regime,"metrics",{}) or {}).get("rsi", 50) or 50)
+        _fg_pw   = fear_val
+        if regime.regime.value in ("bear_trend", "distribution"):
+            _rsi_lbl = f"حالياً {_rsi_pw:.0f} — انتظر > 30" if _rsi_pw < 30 else "محقق ✅"
+            _fg_lbl  = f"محقق ✅" if _fg_pw < 25 else f"حالياً {_fg_pw} — انتظر < 25"
+            week_lines = [
+                f"• أسبوع 1: لا دخول — RSI يرتد فوق 30 ({_rsi_lbl})",
+                f"• أسبوع 2: دخول تدريجي عند ارتداد RSI فوق 35",
+                f"• أسبوع 3: Fear & Greed < 25 → ابدأ التجميع ({_fg_lbl})",
+                f"• أسبوع 4: تقييم القاع — قرار الدخول الكامل",
+            ]
+        elif regime.regime.value in ("bull_trend", "accumulation"):
+            week_lines = [
+                "• أسبوع 1: دخول مبكر عند أول تراجع",
+                "• أسبوع 2: مضاعفة المراكز الرابحة",
+                "• أسبوع 3: رفع وقف الخسارة للتعادل",
+                "• أسبوع 4: جني 30-50% من الأرباح",
+            ]
+        else:
+            week_lines = [
+                f"• أسبوع 1: مراقبة — RSI حالياً {_rsi_pw:.0f}",
+                "• أسبوع 2: دخول جزئي (25%) إذا RSI > 35 وFear < 35",
+                "• أسبوع 3: مراجعة وتعديل وقف الخسارة",
+                "• أسبوع 4: تقييم النتائج وقرار الاستمرار",
+            ]
+        lines += ["", "📅 *خطة الأسبوع المقترحة*"] + week_lines + [""]
 
         lines += ["📅 *أحداث الأسبوع*"]
         # نُزيل العنوان المكرر من format_upcoming_ar
