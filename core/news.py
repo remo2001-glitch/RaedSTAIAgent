@@ -109,7 +109,26 @@ def _translate_news_title(title: str) -> str:
         ("holds","يحتفظ"),("hold","يحتفظ"),
         ("sees","يرى"),("said","قال"),("says","يقول"),
         ("scores","يحقق"),("score","يحقق"),
+        # إصلاح #328/#329: كلمات إضافية شائعة
+        ("slumps","يتراجع بحدة"),("slump","تراجع حاد"),
+        ("warns","يحذر"),("warn","يحذر"),("warning","تحذير"),
+        ("wave","موجة"),("failures","إخفاقات"),("failure","إخفاق"),
+        ("five-year","خمس سنوات"),("year-old","سنة قديم"),
+        ("tokenized","مرمَّز"),("debuts","تُطلق"),("debut","إطلاق"),
+        ("pays","يدفع"),("rewards","مكافآت"),("reward","مكافأة"),
+        ("card","بطاقة"),("visa","فيزا"),("gold","ذهب"),
+        ("stablecoin","عملة مستقرة"),("stablecoins","عملات مستقرة"),
+        ("low","منخفض"),("price","سعر"),("as","مع"),
+        ("charles","تشارلز"),("a ",""),  # حذف أداة التعريف الإنجليزية
+        ("an ",""),("the ",""),
     ]
+
+    # معالجة أنماط خاصة بعد القاموس
+    import re as _re2
+    # تحويل "X-Year-Old" → "X سنة"
+    result = _re2.sub(r'(\d+)-[Yy]ear-[Oo]ld', lambda m: f"{m.group(1)} سنة", result)
+    # تحويل "X-Year" → "X سنة"
+    result = _re2.sub(r'(\d+)-[Yy]ear', lambda m: f"{m.group(1)} سنة", result)
     result = title
     for en, ar in replacements:
         result = _re.sub(
