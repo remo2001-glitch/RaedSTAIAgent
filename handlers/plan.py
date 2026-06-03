@@ -112,8 +112,8 @@ def _calc_price_forecast(candles: list, days: int = 30,
 
         price    = closes[-1]
         atr      = _calc_atr(candles)
-        # إصلاح #144: _calc_atr تُعيد % بالفعل — لا حاجة للقسمة على price
-        atr_pct  = atr  # النسبة المئوية مباشرةً (مثل 2.7 = 2.7%)
+        # إصلاح #144: _calc_atr تُعيد % بالفعل — لا قسمة إضافية
+        atr_pct  = atr if atr > 0 else 3.0
         rsi      = _calc_rsi(candles)
 
         # ── Dow Theory: EMA Alignment ─────────────────────────────
@@ -172,13 +172,23 @@ def _calc_price_forecast(candles: list, days: int = 30,
         fib_support2 = recent_high - diff * 0.618
 
         # ── الحساب النهائي المُرجَّح ──────────────────────────────
+        # إصلاح #182: Random Walk — التقلب يتناسب مع sqrt(days) لا days
+        # هذا مبدأ إحصائي صحيح ويمنع التضخيم المبالغ فيه
         combined_mult = rsi_momentum * sentiment_mult * regime_mult
         wyckoff_boost = 1.02 if wyckoff_confirm else 1.0
         daily_move    = atr_pct / 100
+        time_factor   = (days ** 0.5)   # sqrt(30) ≈ 5.5 بدلاً من 30
 
-        bull_case = price * (1 + daily_move * days * 0.6 * combined_mult * wyckoff_boost)
-        base_case = price * (1 + daily_move * days * 0.25 * combined_mult)
-        bear_case = price * (1 - daily_move * days * 0.4 / combined_mult)
+        bull_case_raw = price * (1 + daily_move * time_factor * 0.6 * combined_mult * wyckoff_boost)
+        base_case_raw = price * (1 + daily_move * time_factor * 0.25 * combined_mult)
+        bear_case_raw = price * (1 - daily_move * time_factor * 0.4 / combined_mult)
+
+        # حد أقصى للتغيير: ±50% لـ 30 يوم (واقعي حتى لـ BTC)
+        max_change = 0.50
+        bull_case = min(bull_case_raw, price * (1 + max_change))
+        base_case = max(min(base_case_raw, price * (1 + max_change * 0.5)),
+                        price * (1 - max_change * 0.3))
+        bear_case = max(bear_case_raw, price * (1 - max_change))
 
         # ── حساب الثقة ───────────────────────────────────────────
         confidence_factors = []
@@ -299,6 +309,9 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
         + ("⏳ المسح الشامل قد يستغرق 5-15 دقيقة — يُرجى الانتظار" if scan_mode
            else "⏳ قد يستغرق 1-3 دقائق — يُرجى عدم تكرار الأمر")
     )
+    # إصلاح #178: semaphore للأوامر الثقيلة
+    _heavy_sem_w = await engine.acquire_heavy()
+    await _heavy_sem_w.acquire()
     try:
 
         # ── 1. بيانات أساسية متوازية ──────────────────────────
@@ -458,8 +471,8 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if regime.regime in (Regime.BEAR_TREND, Regime.DISTRIBUTION):
             week_plan = [
                 f"• أسبوع 1: احتفظ بـ {cash_pct:.0%} سيولة (${cash_amount:,.0f}) — انتظر RSI يرتد فوق 30",
-                "• أسبوع 2: مراقبة مستويات الدعم ودخول تدريجي عند ارتداد RSI فوق 35",
-                "• أسبوع 3: راجع الإشارات — إذا Fear & Greed < 20 ابدأ التجميع التدريجي",
+                "• أسبوع 2: مراقبة مستويات الدعم ودخول تدريجي عند أول إشارة RSI",
+                "• أسبوع 3: راجع الإشارات — إذا Fear & Greed < 25 ابدأ التجميع التدريجي",
                 "• أسبوع 4: تقييم: هل تشكّل قاع؟ قرار الدخول الكامل",
             ]
         elif regime.regime in (Regime.BULL_TREND, Regime.ACCUMULATION):
@@ -477,22 +490,6 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "• أسبوع 4: تقييم النتائج وقرار الاستمرار",
             ]
 
-        # تنبؤ 30 يوم (#139)
-        try:
-            _fca_c = ohlcv_all[0] if isinstance(ohlcv_all[0], list) else []
-            if len(_fca_c) >= 30:
-                _fca = _calc_price_forecast(
-                    _fca_c, days=30, fear_greed=fear_val,
-                    btc_dominance=float((regime.metrics or {}).get("btc_dominance",50) or 50),
-                    market_regime=regime.description_ar,
-                )
-                _fca_cand = next((c for c in candidates if c.get("symbol")==symbols[0]), {})
-                _fca_p    = float(_fca_cand.get("price", 0) or 0)
-                if _fca and _fca_p > 0:
-                    lines.append(_format_forecast_ar(symbols[0], _fca_p, _fca, days=30))
-        except Exception as _fcae:
-            logger.debug(f"planmonth forecast: {_fcae}")
-
         lines += ["", "📅 *جدول الشهر المقترح*"] + week_plan + [
             "",
             "⚠️ خطة استرشادية — القرار النهائي للمستخدم",
@@ -508,6 +505,11 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ خطأ في بناء الخطة الشهرية")
     finally:
         context.user_data["planmonth_running"] = False
+        # إصلاح #178: تحرير semaphore
+        try:
+            _heavy_sem_m.release()
+        except Exception:
+            pass
 
 
 @require_tier("planweek")
@@ -529,6 +531,9 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📅 جاري بناء {plan_label}...\n"
         "⏳ قد يستغرق 1-3 دقائق — يُرجى الانتظار"
     )
+    # إصلاح #178: semaphore للأوامر الثقيلة
+    _heavy_sem_m = await engine.acquire_heavy()
+    await _heavy_sem_m.acquire()
     try:
 
         # ── 1. بيانات أساسية + OHLCV — كلها متوازية ─────────
@@ -629,18 +634,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 entry_lines = []
                 if price > 0:
-                    if signal.confidence >= 0.40 and signal.direction == "short":
-                        # إشارة بيع — إصلاح #146: short أولاً
-                        entry = min(fib_618, price * (1 + atr_v * 0.3))
-                        tp1   = price * (1 - atr_v * 1.5)
-                        sl    = entry * (1 + atr_v * 1.2)
-                        rr    = (entry - tp1) / max(sl - entry, 0.0001)
-                        entry_lines = [
-                            f"  📍 Short Limit: {_fmt_price(entry)} | وقف: {_fmt_price(sl)} (+{atr_v*120:.1f}%)",
-                            f"  🎯 هدف: {_fmt_price(tp1)} (-{atr_v*150:.1f}%) | R/R: 1:{rr:.1f}",
-                        ]
-                    elif signal.confidence >= 0.40 and signal.direction in ("long", "neutral"):
-                        # إشارة شراء أو محايد بثقة كافية
+                    if signal.confidence >= 0.40:
                         entry = min(max(fib_382, price * (1 - atr_v * 0.5)), price * 0.999)
                         tp1   = entry * (1 + atr_v * 1.5)
                         tp2   = price * (1 + atr_v * 2.5)
@@ -651,20 +645,25 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             f"  🎯 هدف1: {_fmt_price(tp1)} (+{atr_v*150:.1f}%) | هدف2: {_fmt_price(tp2)} (+{atr_v*250:.1f}%)",
                             f"  📊 {('R/R: 1:' + f'{rr:.1f}') if rr >= 1.0 else '⚠️ R/R غير مناسب'} | ATR: {atr_v*100:.1f}%",
                         ]
+                    elif signal.confidence >= 0.40 and signal.direction == "short":
+                        entry = min(fib_618, price * (1 + atr_v * 0.3))
+                        tp1   = price * (1 - atr_v * 1.5)
+                        sl    = entry * (1 + atr_v * 1.2)
+                        rr    = (entry - tp1) / max(sl - entry, 0.0001)
+                        entry_lines = [
+                            f"  📍 Short Limit: {_fmt_price(entry)} | وقف: {_fmt_price(sl)} (+{atr_v*120:.1f}%)",
+                            f"  🎯 هدف: {_fmt_price(tp1)} (-{atr_v*150:.1f}%) | R/R: 1:{rr:.1f}",
+                        ]
                     else:
-                        # انتظار — إصلاح #146: شروط واقعية
+                        # انتظار — شروط محددة
                         rsi_t = 35 if "هابط" in regime.description_ar else 45
-                        # إذا RSI بالفعل فوق rsi_t → الشرط محقق، لا نعرضه
-                        rsi_cond = (f"  • RSI يرتفع فوق {rsi_t} (حالياً {rsi_w:.0f}) ✅"
-                                    if rsi_w > rsi_t
-                                    else f"  • RSI يرتفع فوق {rsi_t} (حالياً {rsi_w:.0f})")
                         pro_entry_w = max(fib_382, price * (1 - atr_v * 0.5)) if fib_382 < price else price * (1 - atr_v * 0.4)
                         pro_tp_w    = price * (1 + atr_v * 1.8)
                         pro_sl_w    = pro_entry_w * (1 - atr_v * 1.2)
                         rr_w        = abs(pro_tp_w - pro_entry_w) / max(abs(pro_sl_w - pro_entry_w), 0.001)
                         entry_lines = [
                             f"  ⏳ شروط الدخول:",
-                            rsi_cond,
+                            f"  • RSI يرتفع فوق {rsi_t} (حالياً {rsi_w:.0f})",
                             f"  • إغلاق فوق EMA50 ({_fmt_price(ema50_w)})",
                             f"  • الثقة ≥ 65% (حالياً {signal.confidence:.0%})",
                             f"  🛡️ خيار المحترف: Limit @ {_fmt_price(pro_entry_w)} | وقف: {_fmt_price(pro_sl_w)} | هدف: {_fmt_price(pro_tp_w)} | R/R: 1:{rr_w:.1f}",
@@ -684,23 +683,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 lines.append(f"⚠️ {sym}: {str(e)[:50]}")
                 lines.append("")
 
-        # ── 4. تنبؤ 30 يوم (#139) ──────────────────────────────
-        try:
-            _fc_candles = ohlcv_sym[0] if ohlcv_sym else []
-            if len(_fc_candles) >= 30:
-                _fc = _calc_price_forecast(
-                    _fc_candles, days=30,
-                    fear_greed=fear_val,
-                    btc_dominance=float((getattr(regime,"metrics",{}) or {}).get("btc_dominance",50) or 50),
-                    market_regime=regime.description_ar,
-                )
-                _fc_price = float((price_results[0] if not isinstance(price_results[0], Exception) else {}).get("price", 0) or 0)
-                if _fc and _fc_price > 0:
-                    lines.append(_format_forecast_ar(symbols[0], _fc_price, _fc, days=30))
-        except Exception as _fce:
-            logger.debug(f"planweek forecast: {_fce}")
-
-        # ── 5. الأحداث والجدول ────────────────────────────────
+        # ── 4. الأحداث والجدول ────────────────────────────────
         events_text = engine.event_risk.format_upcoming_ar(hours=168)
         # إصلاح تنسيق "بعد 20ساعة" → "بعد 20 ساعة"
         events_text = re.sub(r'(بعد\s*)(\d+)(ساعة)', r'بعد  ساعة', events_text)
@@ -726,6 +709,11 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"cmd_plan_week: {e}")
         await msg.edit_text(f"❌ خطأ في بناء الخطة الأسبوعية: {str(e)[:100]}")
+    finally:
+        try:
+            _heavy_sem_w.release()
+        except Exception:
+            pass
 
 
 async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):

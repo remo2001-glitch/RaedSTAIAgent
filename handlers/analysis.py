@@ -188,7 +188,7 @@ def _build_professional_block(
     reasons = []
     if conf < 0.65:
         reasons.append(f"• الثقة {conf:.0%} أقل من الحد 65%")
-    # إصلاح #86/#130: ADX فقط عند الخطورة القصوى (تجنب تكرار مع regime_detector)
+    # إصلاح #86/#130: ADX فقط عند الخطورة القصوى
     if adx > 45:
         reasons.append(f"• ADX = {adx:.0f} → اتجاه قوي جداً — خطر الدخول مرتفع")
     if macd_hist < 0:
@@ -704,7 +704,6 @@ async def cmd_backtest(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "trend_following": "اتباع الاتجاه",
         "mean_reversion":  "الارتداد للمتوسط",
         "breakout":        "الاختراق",
-        "hybrid":          "مدمج EMA+RSI",
     }
     msg = await update.message.reply_text(
         f"⏳ جاري Backtest لـ {symbol} — {strategy_ar[strategy]}\n"
@@ -726,21 +725,14 @@ async def cmd_backtest(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if result.win_rate > 0:
             engine.drift_monitor.update_baseline(result.win_rate / 100)
 
-        # إصلاح #168: تنظيف عميق للـ Markdown قبل الإرسال
-        raw_text = engine.backtest_engine.format_ar(result)
-        # إصلاح * غير مغلقة: إذا عدد * فردي في سطر → احذفها
-        import re as _re
-        def _fix_stars(t):
+        import re as _re_bt
+        def _fix_md_stars(t):
             lines = t.split("\n")
-            fixed = []
-            for ln in lines:
-                # عدد * خارج أزواج bold
-                stars = ln.count("*")
-                if stars % 2 != 0:
-                    ln = ln.replace("*", "")
-                fixed.append(ln)
-            return "\n".join(fixed)
-        text = _fix_stars(_clean_md(raw_text))
+            return "\n".join(
+                ln.replace("*","") if ln.count("*") % 2 != 0 else ln
+                for ln in lines
+            )
+        text = _fix_md_stars(_clean_md(engine.backtest_engine.format_ar(result)))
         await msg.edit_text(text, parse_mode=ParseMode.MARKDOWN)
 
     except Exception as e:
@@ -872,6 +864,9 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = await update.message.reply_text(f"🧠 جاري التحليل العميق لـ {symbol}...\n⏳ قد يستغرق 1-3 دقائق — يُرجى الانتظار")
 
+    # إصلاح #178: semaphore يمنع تزامن أكثر من 3 أوامر ثقيلة
+    _heavy_sem = await engine.acquire_heavy()
+    await _heavy_sem.acquire()
     try:
         # M#119: timeout صارم لمنع التجمد
         try:
@@ -982,13 +977,6 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 candles_summary=candles_summary)
             if not analysis or len(analysis.strip()) < 20:
                 raise ValueError("تحليل فارغ")
-            # إزالة headers مكررة من Groq فقط إذا بدأ النص بسطر هيدر
-            # (#172: لا نحذف كل النص — فقط السطور الأولى المكررة)
-            _lines = analysis.strip().split("\n")
-            _skip  = ("السعر:", "sعر:", "rsi", "fear", "السوق:", "الاتجاه:")
-            while _lines and any(k in _lines[0].lower() for k in _skip):
-                _lines.pop(0)
-            analysis = "\n".join(_lines).strip() or analysis
         except Exception as _ae:
             logger.error(f"analyze_symbol ({symbol}): {_ae}")
             analysis = (f"📊 تحليل {symbol}\n"
@@ -1062,7 +1050,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         if levels_lines:
             parts.extend(levels_lines)
-        # إصلاح #140: لا نُضيف contradiction إذا كان موجوداً في analysis
+        # إصلاح #140: لا تكرار contradiction
         if contradiction and contradiction not in analysis:
             parts += ["", contradiction]
         # إضافة Fibonacci
@@ -1091,6 +1079,12 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "• /quicksignal — تحليل سريع\n"
                 "• /signal — إشارة + مستويات دخول"
             )
+        except Exception:
+            pass
+    finally:
+        # إصلاح #178: تحرير semaphore دائماً
+        try:
+            _heavy_sem.release()
         except Exception:
             pass
 
