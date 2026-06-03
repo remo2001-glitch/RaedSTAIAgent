@@ -95,6 +95,20 @@ def _translate_news_title(title: str) -> str:
         ("bullish","صعودي"),("bearish","هبوطي"),
         ("sell","بيع"),("buy","شراء"),
         ("drop","هبوط"),("rise","ارتفاع"),("fall","تراجع"),
+        # إصلاح #301: كلمات شائعة في عناوين الكريبتو
+        ("scoring","محققاً"),("redeemed","استردّ"),("redemption","استرداد"),
+        ("sweeps","يكتسح"),("sweep","يكتسح"),("backed","مدعوم"),
+        ("supported","مدعوم"),("candidates","مرشحون"),("candidate","مرشح"),
+        ("primaries","انتخابات تمهيدية"),("primary","تمهيدي"),
+        ("just","للتو"),("someone","شخص"),("physical","مادي"),
+        ("copying","يستنسخ"),("perfectly","تماماً"),("trader","متداول"),
+        ("key","رئيسي"),("failing","يفشل"),
+        ("firms","شركات"),("firm","شركة"),("face","تواجه"),
+        ("cutoff","موعد نهائي"),("grace period","فترة سماح"),
+        ("ends","تنتهي"),("lows","أدنى مستويات"),("highs","أعلى مستويات"),
+        ("holds","يحتفظ"),("hold","يحتفظ"),
+        ("sees","يرى"),("said","قال"),("says","يقول"),
+        ("scores","يحقق"),("score","يحقق"),
     ]
     result = title
     for en, ar in replacements:

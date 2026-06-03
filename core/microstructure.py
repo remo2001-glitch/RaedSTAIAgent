@@ -371,6 +371,8 @@ class MicrostructureLayer:
         min_slip  = spread * 0.5 if spread > 0 else 0.005
         slippage  = max(raw_slip, min_slip, 0.005)  # لا أقل من 0.005%
         slippage  = min(slippage, 2.0)              # لا أكثر من 2%
+        # تقريب لـ 3 أرقام عشرية للعرض الواضح
+        slippage  = round(slippage, 3)
 
         # نسبة السيولة
         if spread < 0.05:   liq_score = 0.95
@@ -576,9 +578,10 @@ class MicrostructureLayer:
                 # نسبة الأمر من إجمالي عمق البيع في أول 5 مستويات
                 top5_ask = sum(float(a[0])*float(a[1]) for a in asks[:5])
                 slippage = (order_size_usd / max(top5_ask, order_size_usd)) * spread * 0.5
-                slippage = max(0.001, min(slippage, 0.5))  # حد أدنى 0.001% وأقصى 0.5%
+                # إصلاح #303: حد أدنى 0.005% (موحد مع الدالة الرئيسية)
+                slippage = max(0.005, min(slippage, 2.0))
             else:
-                slippage = spread * 0.5 if spread > 0 else 0.05
+                slippage = max(spread * 0.5, 0.005) if spread > 0 else 0.05
             score      = min(1.0, total / 1e6 * 0.5 + (1 - min(spread, 1)) * 0.5)
             warnings_  = []
             if spread > 0.5:
