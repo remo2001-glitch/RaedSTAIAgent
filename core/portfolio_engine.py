@@ -299,7 +299,7 @@ class CapitalAllocationEngine:
                 reason = (
                     f"\n\n📋 *توصية رائد في السوق الهابط*\n"
                     f"• الاحتفاظ بالسيولة {state.cash_reserve:,.0f}$ نقداً\n"
-                    f"• انتظار إشارة انعكاس (RSI < 25 أو Fear & Greed < 20)\n"
+                    f"• انتظار إشارة انعكاس (RSI يرتد فوق 35 أو Fear & Greed < 20)\n"  # إصلاح #215
                     f"• مراقبة {' و '.join(['BTC','ETH'])} لأول إشارة تعافٍ\n"
                     f"• الاستراتيجية الحالية: {' · '.join(regime.strategies).replace('_',' ')}"
                 )
