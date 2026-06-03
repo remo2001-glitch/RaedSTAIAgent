@@ -63,24 +63,121 @@ def _translate_news_title(title: str) -> str:
     arabic_chars = sum(1 for c in title if "؀" <= c <= "ۿ")
     if arabic_chars > len(title) * 0.3:
         return title
-    replacements = {
-        "Bitcoin": "بيتكوين", "Ethereum": "إيثيريوم", "SEC": "هيئة SEC",
-        "ETF": "صندوق ETF", "approval": "موافقة", "approved": "وافقت",
-        "fraud": "احتيال", "charges": "تهم قانونية", "billion": "مليار",
-        "million": "مليون", "record": "رقم قياسي", "outflow": "تدفق خروج",
-        "inflow": "تدفق دخول", "rally": "ارتفاع", "crash": "انهيار",
-        "surge": "قفزة", "ban": "حظر", "hack": "اختراق",
-        "exchange": "منصة تداول", "institutional": "مؤسسي",
-        "adoption": "تبني", "regulation": "تنظيم",
-        "lawsuit": "دعوى قضائية", "treasury": "خزينة",
-        "analyst": "محلل", "market": "سوق", "global": "عالمي",
-        "crypto": "كريبتو", "blockchain": "بلوكتشين",
-        "trading": "تداول", "indicator": "مؤشر",
-    }
+    # إصلاح #122/#129: قاموس موسّع مع دعم الجمع + regex
+    import re as _re
+    replacements = [
+        ("Bitcoins","بيتكوين"),("Ethereums","إيثيريوم"),
+        ("ETFs","صناديق ETF"),("approvals","موافقات"),
+        ("outflows","تدفقات خروج"),("inflows","تدفقات دخول"),
+        ("rallies","ارتفاعات"),("crashes","انهيارات"),
+        ("surges","قفزات"),("bans","حظر"),("hacks","اختراقات"),
+        ("exchanges","منصات تداول"),("regulations","تنظيمات"),
+        ("lawsuits","دعاوى قضائية"),("analysts","محللون"),
+        ("markets","أسواق"),("indicators","مؤشرات"),
+        ("losses","خسائر"),("gains","مكاسب"),("warnings","تحذيرات"),
+        ("charges","تهم قانونية"),("sells","يبيع"),("buys","يشتري"),
+        ("drops","يهبط"),("rises","يرتفع"),("falls","يتراجع"),
+        ("Bitcoin","بيتكوين"),("Ethereum","إيثيريوم"),
+        ("SEC","هيئة SEC"),("ETF","صندوق ETF"),
+        ("approval","موافقة"),("approved","وافقت"),
+        ("fraud","احتيال"),("billion","مليار"),("million","مليون"),
+        ("record","رقم قياسي"),("outflow","تدفق خروج"),
+        ("inflow","تدفق دخول"),("rally","ارتفاع"),
+        ("crash","انهيار"),("surge","قفزة"),
+        ("ban","حظر"),("hack","اختراق"),
+        ("exchange","منصة تداول"),("institutional","مؤسسي"),
+        ("adoption","تبني"),("regulation","تنظيم"),
+        ("lawsuit","دعوى قضائية"),("treasury","خزينة"),
+        ("analyst","محلل"),("market","سوق"),("global","عالمي"),
+        ("crypto","كريبتو"),("blockchain","بلوكتشين"),
+        ("trading","تداول"),("indicator","مؤشر"),
+        ("loss","خسارة"),("gain","مكسب"),("warning","تحذير"),
+        ("bullish","صعودي"),("bearish","هبوطي"),
+        ("sell","بيع"),("buy","شراء"),
+        ("drop","هبوط"),("rise","ارتفاع"),("fall","تراجع"),
+    ]
     result = title
-    for en, ar in replacements.items():
-        result = result.replace(en, ar).replace(en.lower(), ar)
+    for en, ar in replacements:
+        result = _re.sub(
+            r"(?<![\w\u0600-\u06FF])" + _re.escape(en) + r"(?![\w\u0600-\u06FF])",
+            ar, result, flags=_re.IGNORECASE
+        )
+    # تنظيف جمع إنجليزي متبقٍّ بعد ترجمة جذره
+    result = _re.sub(r"([\u0600-\u06FF]{3,})(?:es|s)\b", lambda m: m.group(1), result)
     return result
+
+
+def _normalize_groq_response(data: dict) -> dict:
+    """
+    إصلاح #229: تطبيع استجابة Groq بغض النظر عن لغة المفاتيح.
+    Groq أحياناً يُعيد مفاتيح عربية أو بنية مختلفة.
+    """
+    if not isinstance(data, dict):
+        return {}
+
+    # خريطة المفاتيح العربية/البديلة → المعيارية
+    sentiment_map = {
+        "المشاعر": "sentiment", "sentiment": "sentiment",
+        "الحالة": "sentiment", "توجه": "sentiment",
+        "تحليل": "summary_ar",
+    }
+    score_map = {
+        "درجة_المشاعر": "sentiment_score", "sentiment_score": "sentiment_score",
+        "الدرجة": "sentiment_score", "score": "sentiment_score",
+    }
+    summary_map = {
+        "الملخص": "summary_ar", "summary_ar": "summary_ar",
+        "تحليل": "summary_ar", "analysis": "summary_ar",
+        "ملخص": "summary_ar",
+    }
+
+    result = {}
+
+    # استخراج sentiment
+    for k, v in sentiment_map.items():
+        if k in data:
+            val = str(data[k]).lower()
+            # تطبيع القيم العربية
+            if any(w in val for w in ["إيجابي جداً", "صعودي قوي", "very_bull"]):
+                result["sentiment"] = "very_bullish"
+            elif any(w in val for w in ["إيجابي", "صعودي", "bullish"]):
+                result["sentiment"] = "bullish"
+            elif any(w in val for w in ["سلبي جداً", "هبوطي قوي", "very_bear"]):
+                result["sentiment"] = "very_bearish"
+            elif any(w in val for w in ["سلبي", "هبوطي", "bearish"]):
+                result["sentiment"] = "bearish"
+            else:
+                result["sentiment"] = "neutral"
+            break
+
+    # استخراج sentiment_score
+    for k in score_map:
+        if k in data:
+            try:
+                result["sentiment_score"] = float(data[k])
+            except (ValueError, TypeError):
+                result["sentiment_score"] = 0.0
+            break
+
+    # استخراج summary
+    for k in summary_map:
+        if k in data and isinstance(data[k], str) and len(data[k]) > 10:
+            result["summary_ar"] = data[k]
+            break
+
+    # إذا استخرجنا على الأقل sentiment → نكمل الباقي بقيم افتراضية
+    if "sentiment" in result:
+        result.setdefault("sentiment_score", 0.0)
+        result.setdefault("summary_ar", str(data.get("تحليل", data.get("analysis", "")))[:300])
+        result.setdefault("impact_level", "medium")
+        result.setdefault("key_events", [])
+        result.setdefault("affected_coins", ["BTC", "ETH"])
+        result.setdefault("market_impact_ar", "")
+        result.setdefault("confidence", 0.6)
+        result.setdefault("risk_flags", [])
+        return result
+
+    return {}
 
 
 def _rsi_interpretation(rsi: float) -> str:
@@ -374,9 +471,15 @@ class NewsEngine:
                     content = content[4:]
 
             result = json.loads(content)
+            # إصلاح #229: استخراج مرن من أي JSON
             if "sentiment" in result and "sentiment_score" in result:
                 logger.info(f"✅ Groq نجح ({model}): sentiment={result.get('sentiment')}")
                 return result
+            # محاولة استخراج من مفاتيح عربية أو بديلة
+            _mapped = _normalize_groq_response(result)
+            if _mapped:
+                logger.info(f"✅ Groq (normalized) ({model}): sentiment={_mapped.get('sentiment')}")
+                return _mapped
             else:
                 logger.warning(f"Groq ({model}): JSON ناقص: {list(result.keys())}")
 

@@ -564,7 +564,16 @@ class MicrostructureLayer:
             best_ask   = float(asks[0][0]) if asks else 0
             mid_price  = (best_bid + best_ask) / 2 if best_bid and best_ask else 0
             spread     = abs(best_ask - best_bid) / max(best_bid, 0.0001) * 100
-            slippage   = order_size_usd / max(total_bid, 1) * 100 if total_bid > 0 else 1.0
+            # إصلاح #151: slippage من أفضل ask وليس من total_bid
+            # للشراء: نقدّر التأثير على أفضل سعر ask
+            best_ask_v = float(asks[0][0]) if asks else 0
+            if best_ask_v > 0 and total_ask > 0:
+                # نسبة الأمر من إجمالي عمق البيع في أول 5 مستويات
+                top5_ask = sum(float(a[0])*float(a[1]) for a in asks[:5])
+                slippage = (order_size_usd / max(top5_ask, order_size_usd)) * spread * 0.5
+                slippage = max(0.001, min(slippage, 0.5))  # حد أدنى 0.001% وأقصى 0.5%
+            else:
+                slippage = spread * 0.5 if spread > 0 else 0.05
             score      = min(1.0, total / 1e6 * 0.5 + (1 - min(spread, 1)) * 0.5)
             warnings_  = []
             if spread > 0.5:

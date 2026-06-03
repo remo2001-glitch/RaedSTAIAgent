@@ -229,25 +229,89 @@ class RegimeDetector:
 
     @staticmethod
     def _adx(highs, lows, closes, period: int = 14) -> float:
-        if len(closes) < period + 1:
-            return 0
-        plus_dm, minus_dm, tr_list = [], [], []
-        for i in range(1, len(closes)):
+        """
+        ADX إصلاح #142 — حل جذري لمشكلة بيانات H/L المحسوبة.
+        
+        جذر المشكلة: بيانات CoinGecko تُحسب H/L كـ price±vol_d/2
+        فتُعطي +DM≈0 في سوق هابط → ADX=87-99 artifact.
+        
+        الحل: Wilder's smoothing + كشف أحادية الاتجاه + تطبيع.
+        """
+        n = len(closes)
+        if n < period + 1:
+            return 0.0
+
+        plus_dm_list, minus_dm_list, tr_list = [], [], []
+        for i in range(1, n):
             h_diff = highs[i]  - highs[i-1]
             l_diff = lows[i-1] - lows[i]
-            plus_dm.append(h_diff if h_diff > l_diff and h_diff > 0 else 0)
-            minus_dm.append(l_diff if l_diff > h_diff and l_diff > 0 else 0)
-            hl  = highs[i]  - lows[i]
-            hc  = abs(highs[i]  - closes[i-1])
-            lc  = abs(lows[i]   - closes[i-1])
+            plus_dm_list.append(h_diff if h_diff > l_diff and h_diff > 0 else 0.0)
+            minus_dm_list.append(l_diff if l_diff > h_diff and l_diff > 0 else 0.0)
+            hl = highs[i] - lows[i]
+            hc = abs(highs[i]  - closes[i-1])
+            lc = abs(lows[i]   - closes[i-1])
             tr_list.append(max(hl, hc, lc))
 
-        def smooth(lst): return sum(lst[-period:]) / period if lst else 0
-        str_ = smooth(tr_list) or 1
-        di_plus  = smooth(plus_dm)  / str_ * 100
-        di_minus = smooth(minus_dm) / str_ * 100
-        dx = abs(di_plus - di_minus) / (di_plus + di_minus + 1e-9) * 100
-        return dx
+        # كشف artifact البيانات: إذا +DM أو -DM = 0 دائماً
+        # (يحدث مع H/L المحسوبة من CoinGecko)
+        pdm_nonzero = sum(1 for x in plus_dm_list  if x > 0)
+        mdm_nonzero = sum(1 for x in minus_dm_list if x > 0)
+        total       = len(plus_dm_list) or 1
+
+        if pdm_nonzero / total < 0.05 or mdm_nonzero / total < 0.05:
+            # بيانات أحادية — نستخدم trend strength من EMA بدلاً من ADX
+            # ATR-based approach: مدى التذبذب كنسبة من السعر
+            p  = closes[-1] if closes[-1] > 0 else 1
+            avg_tr  = sum(tr_list[-period:]) / min(period, len(tr_list)) if tr_list else 0
+            atr_pct = avg_tr / p * 100
+
+            # الاتجاه من EMAs
+            ema_f = sum(closes[-period:])   / period if len(closes) >= period else closes[-1]
+            ema_s = sum(closes[-period*2:]) / (period*2) if len(closes) >= period*2 else ema_f
+            trend_strength = abs(ema_f - ema_s) / max(ema_s, 1) * 100
+
+            # ADX تقديري: مزيج من ATR وقوة الاتجاه
+            adx_est = min(15 + trend_strength * 8 + atr_pct * 1.5, 65.0)
+            return round(adx_est, 1)
+
+        # Wilder's Smoothing الصحيح
+        def wilder_smooth(data):
+            if len(data) < period:
+                return []
+            val = sum(data[:period])
+            result = [val]
+            for v in data[period:]:
+                val = val - val / period + v
+                result.append(val)
+            return result
+
+        atr_s = wilder_smooth(tr_list)
+        pdm_s = wilder_smooth(plus_dm_list)
+        mdm_s = wilder_smooth(minus_dm_list)
+
+        if not atr_s:
+            return 0.0
+
+        dx_list = []
+        for i in range(len(atr_s)):
+            atr_v = atr_s[i]
+            if atr_v <= 0:
+                continue
+            di_p  = pdm_s[i] / atr_v * 100
+            di_m  = mdm_s[i] / atr_v * 100
+            denom = di_p + di_m
+            if denom > 0:
+                dx_list.append(abs(di_p - di_m) / denom * 100)
+
+        if not dx_list:
+            return 0.0
+
+        adx_val = sum(dx_list[:period]) / period
+        for dx in dx_list[period:]:
+            adx_val = (adx_val * (period - 1) + dx) / period
+
+        # سقف واقعي: ADX > 75 نادر جداً في الأسواق الحقيقية
+        return round(min(adx_val, 75.0), 1)
 
     @staticmethod
     def _rsi(closes: List[float], period: int = 14) -> float:
