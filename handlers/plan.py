@@ -405,6 +405,16 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
         candidates = []
         for i, sym in enumerate(symbols):
             candles = ohlcv_all[i] if isinstance(ohlcv_all[i], list) else []
+            # إصلاح #307: إذا فشل OHLCV → retry بـ 50 شمعة
+            if len(candles) < 30:
+                try:
+                    _retry = await asyncio.wait_for(
+                        engine.data_layer.get_ohlcv(sym, "1d", 50),
+                        timeout=10.0
+                    )
+                    candles = _retry if isinstance(_retry, list) else []
+                except Exception:
+                    pass
             if len(candles) < 30:
                 continue
             try:
