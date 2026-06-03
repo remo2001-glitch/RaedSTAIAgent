@@ -422,32 +422,34 @@ class NewsEngine:
         # Fallback نهائي: rule-based
         return self._rule_based_analysis(news_items)
 
-    async def _call_groq(self, prompt: str, model: str) -> Optional[Dict]:
+    async def _call_groq(self, prompt: str, model: str,
+                          json_mode: bool = True) -> Optional[Dict]:
         """
-        استدعاء Groq API باستخدام urllib (built-in) لتجنب مشاكل aiohttp connector.
-        urllib أكثر توافقاً مع بيئات الاستضافة المختلفة.
+        استدعاء Groq API.
+        json_mode=False: يُعيد نصاً حراً مُغلَّفاً في {"text": "..."}
+        إصلاح #274: analyze_symbol يستخدم json_mode=False
         """
         logger.info(f"Groq: استدعاء {model} | key={'✅' if self.groq_key else '❌ مفقود'}")
         try:
             import urllib.request
             import ssl
 
-            payload = json.dumps({
-                "model":    model,
-                "messages": [
-                    {
-                        "role":    "system",
-                        "content": "أنت محلل مالي متخصص. أجب دائماً بـ JSON صحيح فقط بدون أي نص إضافي."
-                    },
-                    {
-                        "role":    "user",
-                        "content": prompt,
-                    }
+            # إصلاح #274: json_mode يتحكم في response_format
+            sys_msg = ("أنت محلل مالي متخصص. أجب دائماً بـ JSON صحيح فقط بدون أي نص إضافي."
+                       if json_mode else
+                       "أنت خبير تحليل فني. أجب بنص عربي احترافي مباشر بدون JSON وبدون markdown.")
+            req_body = {
+                "model":       model,
+                "messages":    [
+                    {"role": "system", "content": sys_msg},
+                    {"role": "user",   "content": prompt},
                 ],
-                "temperature":     0.1,
-                "max_tokens":      800,
-                "response_format": {"type": "json_object"},
-            }, ensure_ascii=False).encode("utf-8")
+                "temperature": 0.1,
+                "max_tokens":  800,
+            }
+            if json_mode:
+                req_body["response_format"] = {"type": "json_object"}
+            payload = json.dumps(req_body, ensure_ascii=False).encode("utf-8")
 
             req = urllib.request.Request(
                 GROQ_API_URL,
@@ -476,6 +478,9 @@ class NewsEngine:
                 if content.startswith("json"):
                     content = content[4:]
 
+            # إصلاح #274: إذا json_mode=False → النتيجة نص حر
+            if not json_mode:
+                return {"summary_ar": content.strip(), "source": "groq_text"}
             result = json.loads(content)
             # إصلاح #229: استخراج مرن من أي JSON
             if "sentiment" in result and "sentiment_score" in result:
@@ -682,21 +687,27 @@ class NewsEngine:
             return self._rule_based_symbol_analysis(
                 symbol, price, price_change_24h, rsi, fear_greed, regime_desc)
 
+                # إصلاح #274: prompt يطلب نصاً حراً — لا JSON
+        _cs = (f" | {candles_summary}" if candles_summary else "")
         prompt = (
-            f"أنت خبير تحليل فني ومالي متخصص في أسواق الكريبتو. "
-            f"حلل العملة التالية وقدم تحليلاً شاملاً باللغة العربية بدون markdown. "
-            f"العملة: {symbol} | السعر: ${price:,.6f} | التغيير 24h: {price_change_24h:+.2f}% "
-            f"| حجم: ${volume_24h/1e6:.0f}M | RSI: {rsi:.1f} "
-            f"| Fear & Greed: {fear_greed} | السوق: {regime_desc}. "
-            + (f"الشموع: {candles_summary}. " if candles_summary else "") +
-            "قدم: 1-الاتجاه الكبير (6-12 شهر) أولاً بناءً على EMA وSAR والهيكل الكلي "
-            "2-الدعم والمقاومة الدقيقة 3-توقعات أسبوع وشهر "
-            "4-توصية شراء/بيع/انتظار 5-نقاط الدخول والخروج 6-مستوى المخاطرة. "
-            "SAR فوق السعر=هابط قوي, SAR تحت السعر=صاعد. ""MACD: إذا DIF<DEA والاثنان سالبان=هابط قوي. ""إذا MACD الهيستوغرام موجب=زخم صاعد. ""اذكر SAR وMACD صراحةً في التحليل. كن محدداً بالأسعار."
+            f"أنت خبير تحليل فني متخصص في أسواق الكريبتو."
+            f" قدم تحليلاً نصياً احترافياً باللغة العربية بدون markdown وبدون JSON."
+            f" البيانات: {symbol} | السعر: ${price:,.4g}"
+            f" | التغيير 24h: {price_change_24h:+.2f}%"
+            f" | RSI: {rsi:.0f} | Fear & Greed: {fear_greed}"
+            f" | السوق: {regime_desc}{_cs}."
+            " اكتب 4-6 جمل تغطي:"
+            " 1-الاتجاه الكبير (SAR فوق=هابط/تحت=صاعد، MACD إشارته)."
+            " 2-أهم مستويات الدعم والمقاومة بالأسعار."
+            " 3-توقع الأسبوع القادم مع سبب."
+            " 4-توصية واحدة: شراء عند / بيع إذا / انتظار حتى."
+            
         )
 
+
         try:
-            result = await self._call_groq(prompt, GROQ_MODEL)
+            # إصلاح #274: json_mode=False → نص حر مباشرةً
+            result = await self._call_groq(prompt, GROQ_MODEL, json_mode=False)
             if result:
                 # إصلاح #241: استخراج نص من أي مفتاح في الـ result
                 text = ""
