@@ -704,6 +704,7 @@ async def cmd_backtest(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "trend_following": "اتباع الاتجاه",
         "mean_reversion":  "الارتداد للمتوسط",
         "breakout":        "الاختراق",
+        "hybrid":          "مدمج EMA+RSI",
     }
     msg = await update.message.reply_text(
         f"⏳ جاري Backtest لـ {symbol} — {strategy_ar[strategy]}\n"

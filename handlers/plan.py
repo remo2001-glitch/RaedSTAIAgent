@@ -469,10 +469,15 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
         invest_amount  = user_portfolio * invest_pct
 
         if regime.regime in (Regime.BEAR_TREND, Regime.DISTRIBUTION):
+            # إصلاح #216: week_plan يقرأ القيم الحالية ديناميكياً
+            _fg_now   = fear_val
+            _fg_label = "محقق ✅" if _fg_now < 25 else f"حالياً {_fg_now} — انتظر < 25"
+            _rsi_btc  = float((regime.metrics or {}).get("rsi", 50) or 50)
+            _rsi_label= "محقق ✅" if _rsi_btc > 30 else f"حالياً {_rsi_btc:.0f} — انتظر > 30"
             week_plan = [
-                f"• أسبوع 1: احتفظ بـ {cash_pct:.0%} سيولة (${cash_amount:,.0f}) — انتظر RSI يرتد فوق 30",
-                "• أسبوع 2: مراقبة مستويات الدعم ودخول تدريجي عند أول إشارة RSI",
-                "• أسبوع 3: راجع الإشارات — إذا Fear & Greed < 25 ابدأ التجميع التدريجي",
+                f"• أسبوع 1: احتفظ بـ {cash_pct:.0%} سيولة (${cash_amount:,.0f}) — RSI يرتد فوق 30 ({_rsi_label})",
+                f"• أسبوع 2: مراقبة مستويات الدعم ودخول تدريجي عند ارتداد RSI فوق 35",
+                f"• أسبوع 3: Fear & Greed < 25 → ابدأ التجميع ({_fg_label})",
                 "• أسبوع 4: تقييم: هل تشكّل قاع؟ قرار الدخول الكامل",
             ]
         elif regime.regime in (Regime.BULL_TREND, Regime.ACCUMULATION):
@@ -489,6 +494,27 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "• أسبوع 3: مراجعة وتعديل وقف الخسارة",
                 "• أسبوع 4: تقييم النتائج وقرار الاستمرار",
             ]
+
+        # تنبؤ 30 يوم في planmonth (#139/#213)
+        try:
+            _fca_idx = 0
+            _fca_c   = ohlcv_all[_fca_idx] if (ohlcv_all and
+                       not isinstance(ohlcv_all[_fca_idx], Exception)) else []
+            _fca_cand = next((c for c in candidates
+                              if c.get("symbol") == (symbols[0] if symbols else "BTC")), {})
+            _fca_p   = float(_fca_cand.get("price", 0) or 0)
+            if len(_fca_c) >= 30 and _fca_p > 0:
+                _fca = _calc_price_forecast(
+                    _fca_c, days=30, fear_greed=fear_val,
+                    btc_dominance=float((regime.metrics or {})
+                                        .get("btc_dominance", 50) or 50),
+                    market_regime=regime.description_ar,
+                )
+                if _fca:
+                    lines.append(_format_forecast_ar(
+                        symbols[0] if symbols else "BTC", _fca_p, _fca, days=30))
+        except Exception as _fcae:
+            logger.debug(f"planmonth forecast30: {_fcae}")
 
         lines += ["", "📅 *جدول الشهر المقترح*"] + week_plan + [
             "",
@@ -683,7 +709,29 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 lines.append(f"⚠️ {sym}: {str(e)[:50]}")
                 lines.append("")
 
-        # ── 4. الأحداث والجدول ────────────────────────────────
+        # ── 4. تنبؤ 30 يوم (#139/#208) ───────────────────────
+        try:
+            _fc_sym    = symbols[0] if symbols else "BTC"
+            _fc_idx    = 0
+            _fc_candles = ohlcv_sym[_fc_idx] if (ohlcv_sym and
+                          not isinstance(ohlcv_sym[_fc_idx], Exception)) else []
+            _fc_price   = 0.0
+            if not isinstance(price_results[_fc_idx], Exception):
+                _fc_price = float((price_results[_fc_idx] or {}).get("price", 0) or 0)
+            if len(_fc_candles) >= 30 and _fc_price > 0:
+                _fc = _calc_price_forecast(
+                    _fc_candles, days=30,
+                    fear_greed=fear_val,
+                    btc_dominance=float((getattr(regime, "metrics", {}) or {})
+                                        .get("btc_dominance", 50) or 50),
+                    market_regime=regime.description_ar,
+                )
+                if _fc:
+                    lines.append(_format_forecast_ar(_fc_sym, _fc_price, _fc, days=30))
+        except Exception as _fce:
+            logger.debug(f"planweek forecast30: {_fce}")
+
+        # ── 5. الأحداث والجدول ────────────────────────────────
         events_text = engine.event_risk.format_upcoming_ar(hours=168)
         # إصلاح تنسيق "بعد 20ساعة" → "بعد 20 ساعة"
         events_text = re.sub(r'(بعد\s*)(\d+)(ساعة)', r'بعد  ساعة', events_text)
