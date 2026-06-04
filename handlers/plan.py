@@ -705,6 +705,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "",
         ]
 
+        _buy_signals = []  # إصلاح #382: تجميع إشارات الشراء
         for i, sym in enumerate(symbols):
             candles = ohlcv_sym[i]
             if len(candles) < 20:
@@ -726,6 +727,9 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 dir_ar = ("🟢 شراء" if signal.direction == "long"
                           else "🔴 بيع" if signal.direction == "short"
                           else "⚪ انتظار")
+                # إصلاح #382: تسجيل إشارات الشراء القوية
+                if signal.direction == "long" and signal.confidence >= 0.65:
+                    _buy_signals.append(sym)
                 strat_name = strat.value.replace("_", " ")
 
                 # حساب التغيير 24h
@@ -748,11 +752,22 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 entry_lines = []
                 if price > 0:
+                    # إصلاح #366: R/R ديناميكي حسب RSI — نفس منطق analysis.py
+                    if rsi_w < 15:
+                        _tp_m, _sl_m = 4.0, 0.8
+                    elif rsi_w < 25:
+                        _tp_m, _sl_m = 3.0, 1.0
+                    elif rsi_w < 35:
+                        _tp_m, _sl_m = 2.5, 1.0
+                    elif rsi_w > 70:
+                        _tp_m, _sl_m = 1.5, 1.5
+                    else:
+                        _tp_m, _sl_m = 2.0, 1.2
                     if signal.confidence >= 0.40:
                         entry = min(max(fib_382, price * (1 - atr_v * 0.5)), price * 0.999)
-                        tp1   = entry * (1 + atr_v * 1.5)
-                        tp2   = price * (1 + atr_v * 2.5)
-                        sl    = entry * (1 - atr_v * 1.2)
+                        tp1   = entry * (1 + atr_v * _tp_m)
+                        tp2   = price * (1 + atr_v * _tp_m * 1.6)
+                        sl    = entry * (1 - atr_v * _sl_m)
                         rr    = (tp1 - entry) / max(entry - sl, 0.0001)
                         entry_lines = [
                             f"  📍 دخول: {_fmt_price(entry)} | وقف: {_fmt_price(sl)} ({atr_v*120:.1f}%-)",
@@ -830,14 +845,33 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _rsi_pw  = float((getattr(regime,"metrics",{}) or {}).get("rsi", 50) or 50)
         _fg_pw   = fear_val
         if regime.regime.value in ("bear_trend", "distribution"):
-            _rsi_lbl = f"حالياً {_rsi_pw:.0f} — انتظر > 30" if _rsi_pw < 30 else "محقق ✅"
-            _fg_lbl  = f"محقق ✅" if _fg_pw < 25 else f"حالياً {_fg_pw} — انتظر < 25"
-            week_lines = [
-                f"• أسبوع 1: لا دخول — RSI يرتد فوق 30 ({_rsi_lbl})",
-                f"• أسبوع 2: دخول تدريجي عند ارتداد RSI فوق 35",
-                f"• أسبوع 3: Fear & Greed < 25 → ابدأ التجميع ({_fg_lbl})",
-                f"• أسبوع 4: تقييم القاع — قرار الدخول الكامل",
-            ]
+            _rsi_lbl  = f"حالياً {_rsi_pw:.0f} — انتظر > 30" if _rsi_pw < 30 else "محقق ✅"
+            _fg_lbl   = "محقق ✅" if _fg_pw < 25 else f"حالياً {_fg_pw} — انتظر < 25"
+            _buy_names = " و".join(_buy_signals[:3]) if _buy_signals else ""
+
+            # إصلاح #382: week_lines تعكس إشارات الشراء الفعلية
+            if _buy_signals and _rsi_pw < 20:
+                # ذروة بيع تاريخية + إشارات شراء → دخول تكتيكي
+                week_lines = [
+                    f"• أسبوع 1: دخول تكتيكي محدود (25%) في {_buy_names} — RSI={_rsi_pw:.0f} ذروة بيع تاريخية",
+                    f"• أسبوع 2: مراقبة — وقف صارم إذا كسر الدعم | زيادة عند RSI > 25",
+                    f"• أسبوع 3: Fear & Greed < 25 → زيادة تدريجية ({_fg_lbl})",
+                    "• أسبوع 4: مراجعة المراكز وقرار الاستمرار",
+                ]
+            elif _buy_signals and _rsi_pw < 30:
+                week_lines = [
+                    f"• أسبوع 1: انتظار تأكيد — RSI يرتد فوق 30 ({_rsi_lbl})",
+                    f"• أسبوع 2: دخول تدريجي في {_buy_names} عند ارتداد RSI فوق 35",
+                    f"• أسبوع 3: Fear & Greed < 25 → ابدأ التجميع ({_fg_lbl})",
+                    "• أسبوع 4: تقييم القاع — قرار الدخول الكامل",
+                ]
+            else:
+                week_lines = [
+                    f"• أسبوع 1: لا دخول — RSI يرتد فوق 30 ({_rsi_lbl})",
+                    "• أسبوع 2: دخول تدريجي عند ارتداد RSI فوق 35",
+                    f"• أسبوع 3: Fear & Greed < 25 → ابدأ التجميع ({_fg_lbl})",
+                    "• أسبوع 4: تقييم القاع — قرار الدخول الكامل",
+                ]
         elif regime.regime.value in ("bull_trend", "accumulation"):
             week_lines = [
                 "• أسبوع 1: دخول مبكر عند أول تراجع",

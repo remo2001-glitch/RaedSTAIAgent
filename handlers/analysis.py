@@ -274,14 +274,18 @@ def _build_professional_block(
             _rsi_cond = f"1. RSI يتجاوز 55 + إغلاق فوق {_fmt_price(ema50_val)}"
         else:
             _rsi_cond = f"1. انتظر تصحيح RSI تحت 60 ثم ارتداد"
+        # إصلاح #378: شرط دخول يستخدم مقاومة فيبو القريبة بدلاً من EMA50 البعيد
+        _fib_res    = fib.get("nearest_resistance", 0) if isinstance(fib, dict) else 0
+        _target_lbl = (f"مقاومة فيبو ({_fmt_price(_fib_res)})"
+                       if _fib_res and _fib_res > price
+                       else f"EMA50 ({_fmt_price(ema50_val)})")
         entry_conds = [
             _rsi_cond,
             "2. الثقة الإجمالية ≥ 65%",
-            f"3. كسر EMA50 ({_fmt_price(ema50_val)})",
+            f"3. إغلاق فوق {_target_lbl}",
         ]
         if ns > 0:
             entry_conds.append(f"4. وصول Demand Zone {_fmt_price(ns)}")
-        # إصلاح: شرط RSI cross أكثر واقعية من ADX
         if adx > 40:
             entry_conds.append("5. RSI يتجاوز 30 صعوداً (تأكيد انتهاء الهبوط)")
 
@@ -1083,26 +1087,41 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             levels_lines = []
 
-        # Fibonacci + Professional Block (بدون signal object)
-        fib_a       = _calc_fibonacci(candles)
-        _atr_a      = _calc_atr(candles)
-        # بناء كائن إشارة محلي من البيانات المتاحة في cmd_analyze
-        class _AnalyzeSignal:
-            confidence = 0.5
-            direction  = "neutral"
-            technicals = {}
+        # إصلاح #375/#390: استخدام signal_layer.generate الحقيقي
+        fib_a  = _calc_fibonacci(candles)
+        _atr_a = _calc_atr(candles)
+        try:
+            _sig_a = engine.signal_layer.generate(
+                symbol=symbol, candles=candles,
+                onchain_data={},
+                news_sentiment=float(getattr(engine, "_last_news_sentiment", 0) or 0),
+                backtest_win_rate=0.55,
+                macro_data={"fear_greed": fear_val},
+                regime=engine.regime_detector.detect(
+                    candles, btc_dominance=float(btc_dom or 50), fear_greed=fear_val),
+            )
+        except Exception as _se:
+            logger.debug(f"signal_layer in analyze: {_se}")
+            # fallback بسيط فقط عند الفشل
+            class _AnalyzeSignal:
+                confidence = 0.55
+                direction  = "neutral"
+                technicals = {}
+                trade_type = "spot"
+            _sig_a = _AnalyzeSignal()
+            if rsi < 20:
+                _sig_a.direction   = "long"
+                _sig_a.confidence  = 0.70
+            elif rsi < 35:
+                _sig_a.direction   = "long"
+                _sig_a.confidence  = 0.60
+            elif rsi > 70:
+                _sig_a.direction   = "short"
+                _sig_a.confidence  = 0.60
         class _AnalyzeRegime:
             description_ar = regime_desc
             class regime:
                 value = "bear_trend" if is_bearish else "bull_trend"
-        _sig_a = _AnalyzeSignal()
-        _sig_a.technicals = {"macd_hist": 0, "adx": _calc_adx(candles), "ema_align": not ema_bearish}
-        if rsi < 40:
-            _sig_a.direction = "long"
-            _sig_a.confidence = 0.55
-        elif rsi > 65:
-            _sig_a.direction = "short"
-            _sig_a.confidence = 0.55
         _reg_a = _AnalyzeRegime()
         pro_block_a = _build_professional_block(
             symbol, price, _sig_a, _reg_a, candles, rsi, _atr_a, fib_a)
