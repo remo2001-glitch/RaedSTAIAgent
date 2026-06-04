@@ -556,7 +556,7 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # capital_engine قرر الدخول رغم الهبوط (إشارات RSI extreme)
                 week_plan = [
                     f"• أسبوع 1: دخول تكتيكي محدود {_deploy_pct:.0%} (${_deployed:,.0f}) في {_pos_names} — ذروة بيع تاريخية",
-                    f"• أسبوع 2: مراقبة الإشارة — وقف خسارة صارم إذا كسر الدعم ({_rsi_label})",
+                    f"• أسبوع 2: مراقبة — وقف خسارة صارم إذا كسر الدعم | RSI {_rsi_label}",
                     f"• أسبوع 3: Fear & Greed < 25 → زيادة تدريجية ({_fg_label})",
                     f"• أسبوع 4: مراجعة المراكز — احتفظ بـ ${_cash:,.0f} سيولة احتياطية",
                 ]

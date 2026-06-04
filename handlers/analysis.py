@@ -313,11 +313,25 @@ def _build_professional_block(
         pro_dir = "Long"
 
     rr = abs(pro_tp - pro_entry) / max(abs(pro_sl - pro_entry), 0.0001)
+
+    # إضافة تحذير السيناريو
+    _scenario_warn = signal.technicals.get("scenario_warn", "") if hasattr(signal, "technicals") else ""
+    _scenario_ar   = signal.technicals.get("scenario_ar",   "") if hasattr(signal, "technicals") else ""
     sl_pct  = abs(pro_sl - pro_entry) / max(pro_entry, 0.0001) * 100
     tp_pct  = abs(pro_tp - pro_entry) / max(pro_entry, 0.0001) * 100
     hold    = 3 if adx > 40 else 5
 
+    # إضافة تحذير السيناريو في decision
+    scenario_block = []
+    if _scenario_ar:
+        scenario_block.append(f"📊 *السيناريو:* {_scenario_ar}")
+    if _scenario_warn:
+        scenario_block.append(f"{_scenario_warn}")
+
     parts = [f"*{decision}*", ""]
+    if scenario_block:
+        parts.extend(scenario_block)
+        parts.append("")
     if reasons:
         parts.append("*✅ الأسباب:*")
         parts.extend(reasons)
@@ -686,10 +700,13 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         strategy, params = engine.strategy_router.select(regime, signal)
         atr_pct = _calc_atr(candles)
         price   = float(candles[-1]["close"]) if candles else 0.0
+        # تمرير سقف السيناريو لـ risk_engine
+        _scenario_max = float(signal.technicals.get("max_size_pct", 0.35) or 0.35)
         risk    = engine.risk_engine.assess(
             symbol=symbol, direction=signal.direction,
             confidence=signal.confidence, price=price,
             atr_pct=atr_pct, regime=regime.regime.value,
+            scenario_max_pct=_scenario_max,
         )
 
         # تحذير RSI/اتجاه متعارض
