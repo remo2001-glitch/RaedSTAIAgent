@@ -538,18 +538,36 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cash_amount    = user_portfolio * cash_pct
         invest_amount  = user_portfolio * invest_pct
 
+        # إصلاح #373: week_plan يعكس قرار capital_engine الفعلي
+        _fg_now    = fear_val
+        _fg_label  = "محقق ✅" if _fg_now < 25 else f"حالياً {_fg_now} — انتظر < 25"
+        _rsi_btc   = float((regime.metrics or {}).get("rsi", 50) or 50)
+        _rsi_label = "محقق ✅" if _rsi_btc > 30 else f"حالياً {_rsi_btc:.0f} — انتظر > 30"
+
+        # قراءة قرار allocation الفعلي
+        _deployed    = getattr(allocation, "deployed_usd", 0) or 0
+        _positions   = getattr(allocation, "positions",    []) or []
+        _cash        = getattr(allocation, "cash_reserve", user_portfolio) or user_portfolio
+        _deploy_pct  = _deployed / max(user_portfolio, 1)
+        _pos_names   = " و".join(p.symbol for p in _positions[:3]) if _positions else ""
+
         if regime.regime in (Regime.BEAR_TREND, Regime.DISTRIBUTION):
-            # إصلاح #216: week_plan يقرأ القيم الحالية ديناميكياً
-            _fg_now   = fear_val
-            _fg_label = "محقق ✅" if _fg_now < 25 else f"حالياً {_fg_now} — انتظر < 25"
-            _rsi_btc  = float((regime.metrics or {}).get("rsi", 50) or 50)
-            _rsi_label= "محقق ✅" if _rsi_btc > 30 else f"حالياً {_rsi_btc:.0f} — انتظر > 30"
-            week_plan = [
-                f"• أسبوع 1: احتفظ بـ {cash_pct:.0%} سيولة (${cash_amount:,.0f}) — RSI يرتد فوق 30 ({_rsi_label})",
-                f"• أسبوع 2: مراقبة مستويات الدعم ودخول تدريجي عند ارتداد RSI فوق 35",
-                f"• أسبوع 3: Fear & Greed < 25 → ابدأ التجميع ({_fg_label})",
-                "• أسبوع 4: تقييم: هل تشكّل قاع؟ قرار الدخول الكامل",
-            ]
+            if _deployed > 0 and _positions:
+                # capital_engine قرر الدخول رغم الهبوط (إشارات RSI extreme)
+                week_plan = [
+                    f"• أسبوع 1: دخول تكتيكي محدود {_deploy_pct:.0%} (${_deployed:,.0f}) في {_pos_names} — ذروة بيع تاريخية",
+                    f"• أسبوع 2: مراقبة الإشارة — وقف خسارة صارم إذا كسر الدعم ({_rsi_label})",
+                    f"• أسبوع 3: Fear & Greed < 25 → زيادة تدريجية ({_fg_label})",
+                    f"• أسبوع 4: مراجعة المراكز — احتفظ بـ ${_cash:,.0f} سيولة احتياطية",
+                ]
+            else:
+                # capital_engine قرر عدم الدخول
+                week_plan = [
+                    f"• أسبوع 1: احتفظ بـ 100% سيولة (${user_portfolio:,.0f}) — RSI يرتد فوق 30 ({_rsi_label})",
+                    f"• أسبوع 2: مراقبة مستويات الدعم ودخول تدريجي عند ارتداد RSI فوق 35",
+                    f"• أسبوع 3: Fear & Greed < 25 → ابدأ التجميع ({_fg_label})",
+                    "• أسبوع 4: تقييم: هل تشكّل قاع؟ قرار الدخول الكامل",
+                ]
         elif regime.regime in (Regime.BULL_TREND, Regime.ACCUMULATION):
             week_plan = [
                 f"• أسبوع 1: دخول مبكر — {invest_pct:.0%} من المحفظة (${invest_amount:,.0f})",
