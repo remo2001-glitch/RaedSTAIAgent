@@ -83,7 +83,8 @@ class RiskEngine:
                portfolio_value: Optional[float] = None,
                trade_type: str = "spot",
                is_autotrade: bool = False,
-               leverage: int = 1) -> RiskAssessment:
+               leverage: int = 1,
+               **kwargs) -> RiskAssessment:
         """
         يُقيّم الصفقة ويُعيد القرار النهائي مع الحجم المعدّل.
         """
@@ -164,6 +165,18 @@ class RiskEngine:
             warnings.append(f"الحجم مُخفَّض {1-regime_scale:.0%} بسبب حالة السوق: {regime_label}")
 
         final_size = raw_size * vol_scale * regime_scale
+
+        # ── فحص 8: سقف السيناريو (جديد) ──────────────────────
+        # counter-trend bounce = max 12%، trend_reversal = max 35%
+        scenario_from_signal = kwargs.get("scenario_max_pct", None) if kwargs else None
+        if scenario_from_signal is not None:
+            scenario_cap = scenario_from_signal * portfolio
+            if final_size > scenario_cap:
+                final_size = scenario_cap
+                warnings.append(
+                    f"الحجم محدود بسقف السيناريو {scenario_from_signal:.0%}"
+                    f" ({scenario_cap:,.0f}$) — counter-trend trade"
+                )
 
         # تحقق نسبة R/R
         stop_pct   = self._dynamic_stop(atr_pct)

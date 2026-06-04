@@ -17,6 +17,90 @@ logger = logging.getLogger(__name__)
 
 
 # ══════════════════════════════════════════════════════════════
+# التمييز الثلاثي للسيناريو — الجولة الجديدة
+# ══════════════════════════════════════════════════════════════
+class TradeScenario:
+    """
+    يُميّز بين 3 سيناريوهات مختلفة جذرياً:
+
+    TREND_CONTINUATION: الاتجاه يستمر — لا تتداول عكسه
+    COUNTER_TREND_BOUNCE: ارتداد مؤقت متوقع — scalp محدود
+    TREND_REVERSAL: انعكاس حقيقي — دخول كامل
+    """
+    TREND_CONTINUATION   = "trend_continuation"   # استمرار الاتجاه
+    COUNTER_TREND_BOUNCE = "counter_trend_bounce"  # ارتداد مؤقت عكس الاتجاه
+    TREND_REVERSAL       = "trend_reversal"        # انعكاس حقيقي
+
+
+SCENARIO_AR = {
+    TradeScenario.TREND_CONTINUATION:   "📉 استمرار الاتجاه",
+    TradeScenario.COUNTER_TREND_BOUNCE: "⚡ ارتداد مؤقت (Counter-trend)",
+    TradeScenario.TREND_REVERSAL:       "🔄 انعكاس اتجاه",
+}
+
+SCENARIO_MAX_SIZE = {
+    TradeScenario.TREND_CONTINUATION:   0.0,    # لا دخول عكس الاتجاه
+    TradeScenario.COUNTER_TREND_BOUNCE: 0.12,   # 12% max — scalp فقط
+    TradeScenario.TREND_REVERSAL:       0.35,   # 35% — انعكاس مؤكد
+}
+
+SCENARIO_TARGET_MULT = {
+    TradeScenario.TREND_CONTINUATION:   0.0,
+    TradeScenario.COUNTER_TREND_BOUNCE: 1.5,    # هدف صغير: مقاومة قريبة فقط
+    TradeScenario.TREND_REVERSAL:       4.0,    # هدف كبير: انعكاس حقيقي
+}
+
+
+def classify_trade_scenario(
+    rsi: float,
+    fear_greed: int,
+    is_bear_regime: bool,
+    macd_hist: float,
+    bb_pos: float,
+    ema_align: bool,
+) -> tuple:
+    """
+    يُصنّف السيناريو التجاري بناءً على المؤشرات.
+    يُعيد: (scenario, confidence_adj, warning_ar)
+    """
+    # ── سوق صاعد ─────────────────────────────────────────────
+    if not is_bear_regime:
+        if rsi > 70 and not ema_align:
+            return (TradeScenario.COUNTER_TREND_BOUNCE,
+                    0.9, "⚠️ ذروة شراء في سوق صاعد — ارتداد محتمل")
+        return (TradeScenario.TREND_CONTINUATION, 1.0, "")
+
+    # ── سوق هابط ─────────────────────────────────────────────
+    # السيناريو 1: استمرار الهبوط (الأكثر احتمالاً)
+    if rsi > 40 and not ema_align:
+        return (TradeScenario.TREND_CONTINUATION,
+                0.7, "📉 الاتجاه هابط — انتظر أو Short فقط")
+
+    # السيناريو 2: ارتداد مؤقت (Counter-trend bounce)
+    # شروط: RSI extreme + Fear extreme + Bollinger lower band
+    if rsi < 15 and fear_greed < 20 and bb_pos < 0.1:
+        # أقوى الإشارات + Bollinger confirmation
+        return (TradeScenario.COUNTER_TREND_BOUNCE,
+                1.05, "⚡ ذروة بيع تاريخية — ارتداد scalp محتمل (Counter-trend)")
+    elif rsi < 20 and fear_greed < 25:
+        return (TradeScenario.COUNTER_TREND_BOUNCE,
+                0.95, "⚡ ارتداد مؤقت محتمل — scalp فقط، وقف صارم")
+    elif rsi < 30 and fear_greed < 30 and bb_pos < 0.2:
+        return (TradeScenario.COUNTER_TREND_BOUNCE,
+                0.85, "⚡ منطقة oversold — ارتداد محتمل لكن غير مؤكد")
+
+    # السيناريو 3: انعكاس حقيقي
+    # يحتاج: MACD يتحول + EMA تبدأ تتقاطع + RSI يتعافى
+    if macd_hist > 0 and rsi > 40 and rsi < 60 and not ema_align and fear_greed < 40:
+        return (TradeScenario.TREND_REVERSAL,
+                1.1, "🔄 احتمال انعكاس — MACD يتحول والسعر يتعافى")
+
+    # افتراضي: استمرار الاتجاه
+    return (TradeScenario.TREND_CONTINUATION,
+            0.75, "📉 الاتجاه هابط — احتفظ بالسيولة")
+
+
+# ══════════════════════════════════════════════════════════════
 # SIGNAL LAYER (الطبقة 3)
 # ══════════════════════════════════════════════════════════════
 
@@ -93,57 +177,59 @@ class SignalLayer:
             bt_score       * self.WEIGHTS["backtest"]
         )
 
-        # إصلاح #311: تعديل regime_adj — RSI extreme يُعيد جزءاً من الثقة
-        regime_adj = _regime_confidence_adj(regime.regime)
-        rsi_now    = tech.get("rsi", 50)
-        fg_now     = macro_data.get("fear_greed", 50)
-        # عند ذروة بيع شديدة (RSI<20, Fear<15): نُعدّل adj لأعلى
-        if rsi_now < 20 and fg_now < 20:
-            regime_adj = min(regime_adj + 0.25, 1.05)  # انعكاس محتمل قوي
-        elif rsi_now < 30 and fg_now < 25:
-            regime_adj = min(regime_adj + 0.10, 1.0)
-        confidence = min(raw_conf * regime_adj, 0.97)
-
-        # ── تحديد الاتجاه مع دعم Futures ────────────────────────
-        direction      = "neutral"
-        trade_type     = "spot"   # spot | futures_long | futures_short
-        rsi_val        = tech.get("rsi", 50)
+        # ── التمييز الثلاثي للسيناريو ──────────────────────────
+        rsi_now        = tech.get("rsi", 50)
+        fg_now         = macro_data.get("fear_greed", 50)
         is_bear_regime = regime.regime.value in ("bear_trend", "distribution")
         is_bull_regime = regime.regime.value in ("bull_trend", "accumulation")
 
-        if confidence > 0.65 and tech["bias"] == "bullish":
-            direction  = "long"
-            trade_type = "spot"
-            # Futures Long: سوق صاعد + RSI مقبول + EMA مؤكد
-            if is_bull_regime and rsi_val < 65 and tech.get("ema_align"):
-                trade_type = "futures_long"
+        scenario, scenario_adj, scenario_warn = classify_trade_scenario(
+            rsi        = rsi_now,
+            fear_greed = int(fg_now),
+            is_bear_regime = is_bear_regime,
+            macd_hist  = tech.get("macd_hist", 0),
+            bb_pos     = tech.get("bb_pos", 0.5),
+            ema_align  = bool(tech.get("ema_align", False)),
+        )
 
-        elif confidence > 0.65 and tech["bias"] == "bearish":
-            direction  = "short"
-            trade_type = "spot"  # Spot: لا تقصير في Spot عادة
-            # Futures Short: سوق هابط + RSI فوق 40 (ليس ذروة بيع)
-            if is_bear_regime and rsi_val > 40:
+        # regime_adj + scenario_adj
+        regime_adj = _regime_confidence_adj(regime.regime)
+        if rsi_now < 20 and fg_now < 20:
+            regime_adj = min(regime_adj + 0.20, 1.05)
+        elif rsi_now < 30 and fg_now < 25:
+            regime_adj = min(regime_adj + 0.10, 1.0)
+        confidence = min(raw_conf * regime_adj * scenario_adj, 0.97)
+
+        # ── direction بناءً على السيناريو ─────────────────────
+        direction  = "neutral"
+        trade_type = "spot"
+        rsi_val    = rsi_now
+
+        if scenario == TradeScenario.TREND_CONTINUATION:
+            # استمرار الاتجاه — لا تتداول عكسه
+            if is_bear_regime and rsi_val > 50 and confidence > 0.65:
+                direction  = "short"
                 trade_type = "futures_short"
+            elif is_bull_regime and confidence > 0.65:
+                direction  = "long"
+                trade_type = "futures_long" if tech.get("ema_align") else "spot"
 
-        # ذروة شراء RSI>70 في أي سوق → Short Futures فرصة
-        elif rsi_val > 72 and confidence > 0.60 and is_bear_regime:
+        elif scenario == TradeScenario.COUNTER_TREND_BOUNCE:
+            # ارتداد مؤقت — long scalp محدود
+            if confidence >= 0.60:
+                direction  = "long"
+                trade_type = "spot"   # spot فقط في counter-trend
+
+        elif scenario == TradeScenario.TREND_REVERSAL:
+            # انعكاس حقيقي — long كامل
+            if confidence >= 0.65:
+                direction  = "long"
+                trade_type = "futures_long" if tech.get("ema_align") else "spot"
+
+        # ذروة شراء = short دائماً
+        if rsi_val > 72 and confidence > 0.60 and is_bear_regime:
             direction  = "short"
             trade_type = "futures_short"
-
-        # ذروة بيع RSI<25 + هابط → Long Futures انعكاس محتمل
-        elif rsi_val < 25 and confidence > 0.70 and is_bear_regime:
-            direction  = "long"
-            trade_type = "futures_long"
-
-        # إصلاح #365: RSI extreme + Fear extreme = long حتى لو bias neutral
-        # منطق مالي: RSI<15 تاريخياً = نقطة انعكاس في 90%+ من الحالات
-        elif rsi_val < 15 and fg_now < 20 and confidence >= 0.60:
-            direction  = "long"
-            trade_type = "spot"   # spot أكثر أماناً عند هذه المستويات
-
-        elif rsi_val < 20 and fg_now < 25 and confidence >= 0.65:
-            direction  = "long"
-            trade_type = "spot"
 
         return SignalResult(
             symbol=symbol,
@@ -157,7 +243,14 @@ class SignalLayer:
                 "backtest":  round(bt_score, 3),
                 "macro":     round(macro_score, 3),
             },
-            technicals=tech,
+            technicals={
+                **tech,
+                "scenario":        scenario,
+                "scenario_ar":     SCENARIO_AR.get(scenario, ""),
+                "scenario_warn":   scenario_warning,
+                "max_size_pct":    SCENARIO_MAX_SIZE.get(scenario, 0.15),
+                "target_mult":     SCENARIO_TARGET_MULT.get(scenario, 2.0),
+            },
             onchain_score=oc_score,
             news_score=news_score,
             backtest_score=bt_score,
