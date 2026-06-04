@@ -452,6 +452,65 @@ def _calc_atr(candles: list, period: int = 14) -> float:
         return 3.0
 
 
+def _build_scenarios_context(
+    price: float,
+    atr_pct: float,
+    fib: dict,
+    rsi: float,
+    is_bear: bool,
+) -> str:
+    """
+    يبني السيناريوهات الثلاثة من بيانات حقيقية:
+    - مستويات الدعم/المقاومة من Fibonacci
+    - ATR لحساب الحركة المتوقعة
+    يُمرَّر لـ Groq كـ context — Groq يُفسر فقط
+    """
+    atr = price * atr_pct / 100
+    ns  = fib.get("nearest_support",    0) or price * 0.97
+    nr  = fib.get("nearest_resistance", 0) or price * 1.05
+    f382 = fib.get("0.382", price * 1.06)
+    f618 = fib.get("0.618", price * 1.10)
+    f786 = fib.get("0.786", price * 1.14)
+
+    # دعوم ومقاومات واقعية
+    sup1 = round(ns, 2)
+    sup2 = round(ns - atr * 1.5, 2)
+    sup3 = round(ns - atr * 3.0, 2)
+    res1 = round(nr, 2)
+    res2 = round(f382 if f382 > price else nr * 1.04, 2)
+    res3 = round(f618 if f618 > price else nr * 1.08, 2)
+
+    rsi_note = ""
+    if rsi < 20:
+        rsi_note = f"RSI={rsi:.0f} (تشبع بيعي تاريخي — يرفع احتمال الارتداد قبل استئناف الاتجاه)."
+    elif rsi < 30:
+        rsi_note = f"RSI={rsi:.0f} (تشبع بيعي — احتمال ارتداد قصير)."
+    elif rsi > 70:
+        rsi_note = f"RSI={rsi:.0f} (تشبع شرائي — احتمال تصحيح)."
+
+    if is_bear:
+        scenarios = (
+            "السيناريوهات المحتملة: "
+            + f"أ) هابط: كسر {_fmt_price(sup1)} يفتح {_fmt_price(sup2)} ثم {_fmt_price(sup3)}. "
+            + f"ب) ارتداد: ثبات فوق {_fmt_price(sup1)} يستهدف {_fmt_price(res1)} ثم {_fmt_price(res2)}. "
+            + f"ج) انعكاس: استعادة {_fmt_price(res2)} تستهدف {_fmt_price(res3)}. "
+            + f"للشورت: رفض من {_fmt_price(res1)}-{_fmt_price(res2)} مع ضعف الزخم. "
+            + f"للـ scalp long: ثبات فوق {_fmt_price(sup1)} ووقف تحت {_fmt_price(sup2)}. "
+            + f"للمحافظ: انتظار إغلاق فوق {_fmt_price(res1)} أو كسر {_fmt_price(sup2)}."
+        )
+    else:
+        scenarios = (
+            "السيناريوهات المحتملة: "
+            + f"أ) صاعد: ثبات فوق {_fmt_price(ns)} يستهدف {_fmt_price(res1)} ثم {_fmt_price(res2)}. "
+            + f"ب) تصحيح: كسر {_fmt_price(ns)} يفتح {_fmt_price(sup2)}. "
+            + f"ج) انعكاس هابط: كسر {_fmt_price(sup2)} يعيد النظر في الاتجاه. "
+            + f"للـ long: دخول عند {_fmt_price(ns)} ووقف {_fmt_price(sup2)}. "
+            + f"للمحافظ: انتظار إغلاق فوق {_fmt_price(res1)}."
+        )
+
+    return (rsi_note + "\n" + scenarios).strip() if rsi_note else scenarios.strip()
+
+
 def _calc_rsi(candles: list, period: int = 14) -> float:
     """حساب RSI دقيق."""
     if len(candles) < period + 1:
@@ -1077,12 +1136,25 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 candles_summary = "بيانات الشموع غير كافية"
 
+        # بناء السيناريوهات من البيانات الحقيقية قبل Groq
+        _fib_for_ctx  = _calc_fibonacci(candles)
+        _atr_for_ctx  = _calc_atr(candles)
+        _scenarios_ctx = _build_scenarios_context(
+            price    = price,
+            atr_pct  = _atr_for_ctx,
+            fib      = _fib_for_ctx,
+            rsi      = rsi,
+            is_bear  = is_bearish,
+        )
+        # دمج السيناريوهات مع candles_summary
+        _full_context = f"{candles_summary}\n{_scenarios_ctx}".strip() if candles_summary else _scenarios_ctx
+
         try:
             analysis = await engine.news_engine.analyze_symbol(
                 symbol=symbol, price=price, price_change_24h=change_24h,
                 volume_24h=volume_24h, market_cap=market_cap, rsi=rsi,
                 fear_greed=fear_val, regime_desc=regime_desc,
-                candles_summary=candles_summary)
+                candles_summary=_full_context)
             if not analysis or len(analysis.strip()) < 20:
                 raise ValueError("تحليل فارغ")
         except Exception as _ae:
