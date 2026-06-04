@@ -53,6 +53,7 @@ class RegimeResult:
     strategies:     List[str]
     metrics:        Dict
     action:         str             # "trade_normal" | "reduce_size" | "avoid"
+    market_phase:   str = "unknown" # "Accumulation" | "Distribution" | "Markup" | "Markdown"
 
 
 class RegimeDetector:
@@ -123,6 +124,26 @@ class RegimeDetector:
         if rsi_val < 30:
             action = "wait_reversal"
 
+        # تحديد Market Phase (Wyckoff-inspired)
+        closes_20  = [c["close"] for c in candles[-20:]]
+        price_chg  = (closes_20[-1] - closes_20[0]) / max(closes_20[0], 1) * 100
+        if regime == Regime.BULL_TREND:
+            market_phase = "Markup"
+        elif regime == Regime.BEAR_TREND:
+            market_phase = "Markdown"
+        elif regime == Regime.ACCUMULATION:
+            market_phase = "Accumulation"
+        elif regime == Regime.DISTRIBUTION:
+            market_phase = "Distribution"
+        elif regime == Regime.SIDEWAYS:
+            # الفرق بين تراكم وتوزيع: هل كان قبلها هبوط أم صعود؟
+            long_chg = (closes[-1] - closes[-min(60, len(closes))]) / max(closes[-min(60, len(closes))], 1) * 100
+            market_phase = "Accumulation" if long_chg < -5 else "Distribution" if long_chg > 5 else "Consolidation"
+        elif regime == Regime.HIGH_VOLATILITY:
+            market_phase = "Markdown" if price_chg < 0 else "Markup"
+        else:
+            market_phase = "Unknown"
+
         return RegimeResult(
             regime=regime,
             confidence=confidence,
@@ -130,6 +151,7 @@ class RegimeDetector:
             strategies=REGIME_STRATEGY[regime],
             metrics=metrics,
             action=action,
+            market_phase=market_phase,
         )
 
     def _classify(self, adx, atr_pct, rsi, price,

@@ -291,7 +291,35 @@ class SignalLayer:
         ema200 = _ema(closes, 200) if len(closes) >= 200 else ema50
         macd_hist = _macd_histogram(closes)
         bb_pos    = _bb_position(closes, 20)
-        vol_ratio = vols[-1] / (_sma(vols, 20) or 1)
+        vol_ratio  = vols[-1] / (_sma(vols, 20) or 1)
+        vol_avg20  = _sma(vols, 20) or 1
+
+        # ── RSI Divergence (Bullish/Bearish) ─────────────────
+        # Bullish: price أدنى قاع لكن RSI أعلى قاع → انعكاس محتمل
+        rsi_div = "none"
+        if len(closes) >= 20:
+            rsi_series = []
+            for i in range(max(0, len(closes)-20), len(closes)):
+                g = sum(max(closes[j]-closes[j-1],0) for j in range(1,i+1) if j>0) / 14 + 1e-9
+                l = sum(max(closes[j-1]-closes[j],0) for j in range(1,i+1) if j>0) / 14 + 1e-9
+                rsi_series.append(100 - 100/(1+g/l))
+            # قارن آخر قاعين في السعر مع RSI
+            mid = len(closes) // 2
+            if closes[-1] < min(closes[mid:]) and rsi > _rsi(closes[:mid], 14):
+                rsi_div = "bullish"
+            elif closes[-1] > max(closes[mid:]) and rsi < _rsi(closes[:mid], 14):
+                rsi_div = "bearish"
+
+        # ── Volume Profile ────────────────────────────────────
+        # Climax selling: حجم ≥3x مع هبوط | Climax buying: حجم ≥3x مع صعود
+        vol_profile = "normal"
+        if vol_ratio >= 3.0:
+            last_change = closes[-1] - closes[-2] if len(closes) >= 2 else 0
+            vol_profile = "climax_selling" if last_change < 0 else "climax_buying"
+        elif vol_ratio >= 1.5:
+            vol_profile = "above_average"
+        elif vol_ratio < 0.5:
+            vol_profile = "no_demand"
 
         price = closes[-1]
         score = 0.5
@@ -351,13 +379,16 @@ class SignalLayer:
                 bias  = "bearish"
 
         return {
-            "score":     round(min(max(score, 0), 1), 3),
-            "bias":      bias,
-            "rsi":       round(rsi, 1),
-            "ema_align": ema_align,
-            "macd_hist": round(macd_hist, 6),
-            "bb_pos":    round(bb_pos, 3),
-            "vol_ratio": round(vol_ratio, 2),
+            "score":       round(min(max(score, 0), 1), 3),
+            "bias":        bias,
+            "rsi":         round(rsi, 1),
+            "ema_align":   ema_align,
+            "macd_hist":   round(macd_hist, 6),
+            "bb_pos":      round(bb_pos, 3),
+            "vol_ratio":   round(vol_ratio, 2),
+            "rsi_div":     rsi_div,
+            "vol_profile": vol_profile,
+            "conf_flags":  conf_flags,
         }
 
     def _onchain_signal(self, data: Dict) -> float:
