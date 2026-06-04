@@ -384,119 +384,210 @@ def _build_professional_block(
         f"• R/R: 1:{rr:.1f}",
         f"• أقصى مدة: {hold} أيام",
     ])
-    # ══════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════
     # الهيكل الاحترافي الكامل (المرحلة 1)
-    # ══════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════
 
-    # Market Phase
-    _mp = getattr(regime, "market_phase", "") or ""
-    _mp_ar = _get_market_phase_ar(_mp) if _mp else ""
-
-    # RSI Divergence
-    _rsi_div    = tech.get("rsi_div", "none")
-    _vol_prof   = tech.get("vol_profile", "normal")
-    _vol_ratio  = tech.get("vol_ratio", 1.0)
+    # ── المؤشرات الأساسية ──────────────────────────────────
+    _mp       = getattr(regime, "market_phase", "") or ""
+    _mp_ar    = _get_market_phase_ar(_mp) if _mp else ""
+    _rsi_div  = tech.get("rsi_div",   "none")
+    _vol_prof = tech.get("vol_profile", "normal")
+    _vol_ratio= tech.get("vol_ratio",  1.0)
+    _bb_pos_v = tech.get("bb_pos",     0.5)
+    _scenario = tech.get("scenario",   "")
     _conf_flags = tech.get("conf_flags", [])
-    _bb_pos_v   = tech.get("bb_pos", 0.5)
-    _scenario   = tech.get("scenario", "")
+    _atr_val  = tech.get("atr_value",  0)
 
-    # Confirmation Flags (2 من 4)
-    _flags_needed = 2
-    _flags_found  = len(_conf_flags)
-    _confirmed    = _flags_found >= _flags_needed
+    # ── Derivatives Data ────────────────────────────────────
+    _oi    = tech.get("oi_data",    {}) or {}
+    _fund  = tech.get("fund_data",  {}) or {}
+    _whale = tech.get("whale_data", {}) or {}
 
-    # Entry Aggressive + Conservative
-    fib_s0    = fib.get("0.0",   ns) if fib else ns
-    fib_s236  = fib.get("nearest_support", ns) if fib else ns
-    entry_agg  = ns if ns > 0 and ns < price * 0.99 else price * (1 - atr_dec * 0.3)
-    entry_cons = price * (1 - atr_dec * 0.6)  # أعمق — بعد تأكيد ارتداد
+    # Funding Rate signal
+    _fund_pct = float(_fund.get("rate_pct", 0) or 0)
+    _fund_sig = _fund.get("signal", "")
+    # Open Interest signal
+    _oi_chg   = float(_oi.get("oi_change_pct", 0) or 0)
+    _oi_sig   = _oi.get("signal", "")
+    # Whale signal
+    _whale_sig = _whale.get("signal", "")
+    _whale_ratio = float(_whale.get("ratio", 0) or 0)
 
-    # أهداف متدرجة حسب نوع الصفقة
+    # Funding Rate يضيف Confirmation Flag
+    if _fund_pct < -0.01:
+        _conf_flags = list(_conf_flags) + ["Funding Rate سالب (فرصة Longs) ✓"]
+    if _oi_chg < -5:
+        _conf_flags = list(_conf_flags) + ["OI انخفض (تصفية Shorts) ✓"]
+    if _whale_ratio < 0.6:
+        _conf_flags = list(_conf_flags) + ["الحيتان تتراكم ✓"]
+
+    _flags_found = len(_conf_flags)
+    _confirmed   = _flags_found >= 2
+
+    # ── Confidence Score مفصّل ──────────────────────────────
+    _tech_score    = round(tech.get("score", 0.5) * 100)
+    _oc_score      = round(getattr(signal, "onchain_score", 0.5) * 100)
+    _sent_score    = round(getattr(signal, "news_score",    0.5) * 100)
+    _macro_score   = round(getattr(signal, "macro_score",   0.5) * 100)
+    _conf_score    = round(conf * 100)
+
+    # ── القرار بناءً على Confidence ──────────────────────────
+    if _conf_score < 40:
+        _decision_label = "[WAIT] — لا صفقة نشطة"
+        _pos_size_rule  = "0% — انتظر مؤشرات أقوى"
+    elif _conf_score < 60:
+        _decision_label = "[LOW] — حجم 3–5% فقط"
+        _pos_size_rule  = f"5% — ثقة منخفضة"
+    elif _conf_score < 80:
+        _decision_label = "[NORMAL] — حجم 10–20%"
+        _pos_size_rule  = f"12% — ثقة متوسطة"
+    else:
+        _decision_label = "[HIGH] — حجم 25–35%"
+        _pos_size_rule  = f"25% — ثقة عالية"
+
+    # تحديث vol_pct من _decision_label
+    if _conf_score < 40:
+        vol_pct = 0
+    elif _conf_score < 60:
+        vol_pct = 5
+    elif _conf_score < 80:
+        vol_pct = 12
+
+    # ── Entry Aggressive + Conservative ──────────────────────
     nr_fib = fib.get("nearest_resistance", price * 1.05) if fib else price * 1.05
     f236   = fib.get("0.236", price * 1.06) if fib else price * 1.06
     f382   = fib.get("0.382", price * 1.10) if fib else price * 1.10
+    entry_agg  = ns if ns > 0 and ns < price * 0.99 else price * (1 - atr_dec * 0.3)
+    entry_cons = price * (1 - atr_dec * 0.6)
 
+    # ── TP متدرج حسب نوع الصفقة ──────────────────────────────
     if _scenario == "counter_trend_bounce":
-        tp1_v = nr_fib if nr_fib > price else price * (1 + atr_dec * 1.5)
-        tp2_v = f236   if f236 > tp1_v   else price * (1 + atr_dec * 2.5)
-        tp3_v = None   # لا TP3 في scalp
-    elif _scenario == "trend_reversal":
-        tp1_v = nr_fib
-        tp2_v = f236
-        tp3_v = f382
-    else:
-        tp1_v = price * (1 + atr_dec * _tp_mult)
-        tp2_v = price * (1 + atr_dec * _tp_mult * 1.6)
+        # Scalp: هدف قريب فقط (2-5%)
+        tp1_v = nr_fib if (nr_fib > price and abs(nr_fib-price)/price < 0.08) else price * (1 + atr_dec * 1.5)
+        tp2_v = f236   if (f236 > tp1_v  and abs(f236-price)/price < 0.12)   else price * (1 + atr_dec * 2.5)
         tp3_v = None
-
-    # R/R الواقعي (1:2 إلى 1:4)
-    rr_real = abs(tp1_v - entry_agg) / max(abs(pro_sl - entry_agg), 0.0001)
-    rr_real = round(min(rr_real, 4.0), 1)  # سقف 1:4
-
-    # إضافة قسم SMC (ما هو متاح من Daily data)
-    smc_block = []
-    if _mp_ar:
-        smc_block.append(f"• Market Phase: {_mp_ar}")
-    if _rsi_div == "bullish":
-        smc_block.append("• RSI Divergence: 🟢 Bullish Divergence — RSI يرتفع والسعر ينخفض")
-    elif _rsi_div == "bearish":
-        smc_block.append("• RSI Divergence: 🔴 Bearish Divergence — RSI يهبط والسعر يرتفع")
+        _time_exit = "3 أيام"
+        _trade_dur = "ساعات — 3 أيام (Scalp)"
+    elif _scenario == "trend_reversal":
+        tp1_v = nr_fib; tp2_v = f236; tp3_v = f382
+        _time_exit = "14 يوم"
+        _trade_dur = "1–3 أسابيع (Swing)"
     else:
-        smc_block.append("• RSI Divergence: ⚪ لا divergence واضح")
-    smc_block.append(f"• Volume Profile: {_get_vol_profile_ar(_vol_prof, _vol_ratio)}")
-    smc_block.append(f"• Bollinger Bands: {_get_bb_status_ar(_bb_pos_v)}")
+        tp1_v = price * (1 + atr_dec * 1.8)
+        tp2_v = price * (1 + atr_dec * 3.0)
+        tp3_v = None
+        _time_exit = "5 أيام"
+        _trade_dur = "2–5 أيام"
 
-    # قسم إدارة المخاطر
-    sl_type_ar = _get_sl_type(_scenario, rsi)
+    # R/R واقعي (سقف 1:4)
+    rr_real = abs(tp1_v - entry_agg) / max(abs(pro_sl - entry_agg), 0.0001)
+    rr_real = round(min(max(rr_real, 1.0), 4.0), 1)
+
+    # Worst-Case
+    wc_loss = abs(price - pro_sl) / max(price, 0.001) * 100
+    wc_bd1  = price * 0.95  # كسر الدعم
+    wc_bd2  = price * 0.90  # اختراق أعمق
+
+    sl_type_ar    = _get_sl_type(_scenario, rsi)
     exit_strategy = (
-        "TP1 (50% من الموضع) ← TP2 (30%) ← TP3 (20%) مع Trailing SL"
+        "TP1 (50%) ← TP2 (30%) ← TP3 (20%) مع Trailing SL"
         if tp3_v else
-        "TP1 (60% من الموضع) ← TP2 (40%) مع Hard SL"
+        "TP1 (60%) ← TP2 (40%) مع Hard SL"
     )
 
-    # بناء الأقسام الجديدة
-    if smc_block:
-        parts.extend(["", "*📊 تحليل الهيكلة (SMC)*"])
-        parts.extend(smc_block)
+    # ── بناء الأقسام ─────────────────────────────────────────
 
-    # Entry Aggressive + Conservative
-    tp1_pct = abs(tp1_v - entry_agg) / max(entry_agg, 0.001) * 100
-    tp2_pct = abs(tp2_v - entry_agg) / max(entry_agg, 0.001) * 100
-
+    # 1. Confidence Score
     parts.extend([
         "",
+        f"*🎯 Confidence Score: {_conf_score}%*",
+        f"• Technical: {_tech_score}% | On-chain: {_oc_score}%",
+        f"• Sentiment: {_sent_score}% | Macro: {_macro_score}%",
+        f"• القرار: *{_decision_label}*",
+    ])
+
+    # 2. SMC Block
+    smc_lines = ["", "*📊 تحليل الهيكلة (SMC)*"]
+    if _mp_ar:
+        smc_lines.append(f"• Market Phase: {_mp_ar}")
+    smc_lines.append(
+        "• RSI Divergence: 🟢 Bullish Divergence ✓" if _rsi_div == "bullish" else
+        "• RSI Divergence: 🔴 Bearish Divergence ✓" if _rsi_div == "bearish" else
+        "• RSI Divergence: ⚪ لا divergence"
+    )
+    smc_lines.append(f"• Volume Profile: {_get_vol_profile_ar(_vol_prof, _vol_ratio)}")
+    smc_lines.append(f"• Bollinger Bands: {_get_bb_status_ar(_bb_pos_v)}")
+    if _atr_val:
+        smc_lines.append(f"• ATR (تقلب): ${_atr_val:,.0f} يومياً")
+    parts.extend(smc_lines)
+
+    # 3. Derivatives (إذا متاحة)
+    deriv_lines = []
+    if _fund_pct != 0:
+        deriv_lines.append(f"• Funding Rate: {_fund_pct:+.4f}% {_fund_sig}")
+    if _oi_chg != 0:
+        deriv_lines.append(f"• Open Interest: {_oi_chg:+.1f}% {_oi_sig}")
+    if _whale_ratio > 0:
+        deriv_lines.append(f"• Whale Ratio: {_whale_ratio:.2f} {_whale_sig}")
+    if deriv_lines:
+        parts.extend(["", "*🔗 Derivatives & On-Chain*"])
+        parts.extend(deriv_lines)
+
+    # 4. Entry Aggressive + Conservative + TP + SL
+    tp1_pct = abs(tp1_v - entry_agg) / max(entry_agg, 0.001) * 100
+    tp2_pct = abs(tp2_v - entry_agg) / max(entry_agg, 0.001) * 100
+    entry_lines = [
+        "",
         "*📍 مناطق الدخول والخروج*",
-        f"• Entry 1 (Aggressive): {_fmt_price(entry_agg)} — عند الدعم مباشرةً",
+        f"• Entry 1 (Aggressive): {_fmt_price(entry_agg)}",
         f"• Entry 2 (Conservative): {_fmt_price(entry_cons)} — بعد تأكيد الثبات",
         f"• TP1: {_fmt_price(tp1_v)} (+{tp1_pct:.1f}%)",
         f"• TP2: {_fmt_price(tp2_v)} (+{tp2_pct:.1f}%)",
-    ])
+    ]
     if tp3_v:
         tp3_pct = abs(tp3_v - entry_agg) / max(entry_agg, 0.001) * 100
-        parts.append(f"• TP3 (اختياري): {_fmt_price(tp3_v)} (+{tp3_pct:.1f}%)")
-    parts.extend([
+        entry_lines.append(f"• TP3 (اختياري): {_fmt_price(tp3_v)} (+{tp3_pct:.1f}%)")
+    entry_lines.extend([
         f"• وقف الخسارة: {_fmt_price(pro_sl)} ({sl_pct:.1f}%-)",
         f"• R/R الواقعي: 1:{rr_real}",
+        f"• الحجم: {_pos_size_rule}",
     ])
+    parts.extend(entry_lines)
 
-    # إدارة المخاطر
+    # 5. إدارة المخاطر + Time Exit + Worst-Case
     parts.extend([
         "",
         "*🛡️ إدارة المخاطر*",
         f"• نوع الوقف: {sl_type_ar}",
         f"• استراتيجية الخروج: {exit_strategy}",
+        f"• المدة المتوقعة: {_trade_dur}",
+        f"• ⏰ Time Exit: إذا لا حركة بعد {_time_exit} → أغلق الموضع",
+        f"• ⚠️ Worst-Case: كسر {_fmt_price(wc_bd1)} → {_fmt_price(wc_bd2)} (خسارة ~{wc_loss:.1f}%)",
     ])
 
-    # Confirmation Flags
-    parts.extend(["", "*📊 مؤشرات التأكيد*"])
+    # 6. Confirmation Flags + Checklist
+    parts.extend(["", "*✅ مؤشرات التأكيد (2 من 4 للدخول)*"])
     if _confirmed:
-        parts.append(f"✅ {_flags_found} من 4 مؤشرات مؤكدة — الإشارة نشطة")
+        parts.append(f"✅ {_flags_found}/4 مؤكدة — الإشارة *نشطة*")
     else:
-        parts.append(f"⚠️ {_flags_found} من 4 فقط — انتظر مؤشر تأكيد إضافي")
+        parts.append(f"⚠️ {_flags_found}/4 — انتظر مؤشر إضافي")
     for flag in _conf_flags:
         parts.append(f"  ✓ {flag}")
     if not _conf_flags:
-        parts.append("  • لا مؤشرات تأكيد حتى الآن")
+        parts.append("  • لا مؤشرات تأكيد بعد")
+
+    # Checklist
+    parts.extend([
+        "",
+        "*📋 Checklist قبل الدخول*",
+        f"{'☑' if _rsi_div != 'none' else '□'} RSI Divergence",
+        f"{'☑' if _vol_ratio >= 1.5 else '□'} Volume Spike ≥1.5x (حالياً {_vol_ratio:.1f}x)",
+        f"{'☑' if ns > 0 and price >= ns * 0.995 else '□'} Reclaim الدعم {_fmt_price(ns) if ns else 'N/A'}",
+        f"{'☑' if tech.get('macd_hist', 0) > 0 else '□'} MACD إيجابي",
+        f"{'☑' if _whale_ratio > 0 and _whale_ratio < 0.6 else '□'} On-chain تراكم",
+        f"{'☑' if _fund_pct < 0 else '□'} Funding Rate مناسب",
+    ])
 
     return "\n".join(parts)
 
@@ -1292,6 +1383,22 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 candles_summary = "بيانات الشموع غير كافية"
 
+        # جلب بيانات Derivatives + On-chain بالتوازي
+        try:
+            _oi_data, _fund_data, _whale_data = await asyncio.wait_for(
+                asyncio.gather(
+                    engine.data_layer.get_open_interest(symbol),
+                    engine.data_layer.get_funding_rate(symbol),
+                    engine.data_layer.get_whale_ratio(symbol),
+                    return_exceptions=True,
+                ), timeout=10.0
+            )
+        except Exception:
+            _oi_data = _fund_data = _whale_data = {}
+        _oi_data    = _oi_data    if isinstance(_oi_data, dict)    else {}
+        _fund_data  = _fund_data  if isinstance(_fund_data, dict)  else {}
+        _whale_data = _whale_data if isinstance(_whale_data, dict) else {}
+
         # بناء السيناريوهات من البيانات الحقيقية قبل Groq
         _fib_for_ctx  = _calc_fibonacci(candles)
         _atr_for_ctx  = _calc_atr(candles)
@@ -1325,39 +1432,8 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         rsi_lbl = _rsi_label(rsi)
         contradiction = _market_contradiction(rsi, fear_val, regime_desc)
 
-        # مستويات ذكية بناءً على ATR واتجاه السوق
-        if rsi < 40 and not ("هابط" in regime_desc and rsi > 30):
-            entry = price * (1 - atr_pct * 0.3)
-            # معاملات الهدف حسب RSI (counter-trend = هدف قريب)
-            if rsi < 15:
-                tp1 = price * (1 + atr_pct * 4.0)
-                tp2 = price * (1 + atr_pct * 6.0)
-                sl  = price * (1 - atr_pct * 0.8)
-            elif rsi < 25:
-                tp1 = price * (1 + atr_pct * 3.0)
-                tp2 = price * (1 + atr_pct * 5.0)
-                sl  = price * (1 - atr_pct * 1.0)
-            else:
-                tp1 = price * (1 + atr_pct * 1.5)
-                tp2 = price * (1 + atr_pct * 2.5)
-                sl  = price * (1 - atr_pct * 1.2)
-            levels_lines = [
-                "",
-                "📍 *مناطق الدخول والخروج*",
-                f"• دخول مقترح: {_fmt_price(entry)}",
-                f"• هدف 1: {_fmt_price(tp1)} ({abs(tp1-price)/price*100:.1f}%+)",
-                f"• هدف 2: {_fmt_price(tp2)} ({abs(tp2-price)/price*100:.1f}%+)",
-                f"• وقف الخسارة: {_fmt_price(sl)} ({abs(sl-price)/price*100:.1f}%-)",
-            ]
-        elif rsi > 65:
-            levels_lines = [
-                "",
-                "⚠️ *تحذير ذروة شراء*",
-                f"• RSI={rsi:.0f} — خطر انعكاس",
-                f"• انتظر تراجعاً إلى: {_fmt_price(price * (1 - atr_pct))}",
-            ]
-        else:
-            levels_lines = []
+        # levels_lines مُدمجة في الهيكل الاحترافي — لا حاجة لها هنا
+        levels_lines = []
 
         # إصلاح #375/#390: استخدام signal_layer.generate الحقيقي
         fib_a  = _calc_fibonacci(candles)
@@ -1372,6 +1448,12 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 regime=engine.regime_detector.detect(
                     candles, btc_dominance=float(btc_dom or 50), fear_greed=fear_val),
             )
+            # إضافة بيانات Derivatives لـ technicals
+            if hasattr(_sig_a, "technicals") and isinstance(_sig_a.technicals, dict):
+                _sig_a.technicals["oi_data"]    = _oi_data
+                _sig_a.technicals["fund_data"]  = _fund_data
+                _sig_a.technicals["whale_data"] = _whale_data
+                _sig_a.technicals["atr_value"]  = round(_calc_atr(candles) * price / 100, 2)
         except Exception as _se:
             logger.debug(f"signal_layer in analyze: {_se}")
             # fallback بسيط فقط عند الفشل
@@ -1392,6 +1474,8 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _sig_a.confidence  = 0.60
         class _AnalyzeRegime:
             description_ar = regime_desc
+            market_phase   = getattr(regime_obj, "market_phase", "") if "regime_obj" in dir() else (
+                "Markdown" if is_bearish else "Markup")
             class regime:
                 value = "bear_trend" if is_bearish else "bull_trend"
         _reg_a = _AnalyzeRegime()
