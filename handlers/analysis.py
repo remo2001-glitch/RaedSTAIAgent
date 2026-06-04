@@ -64,16 +64,33 @@ def _fmt_price(price: float) -> str:
 
 
 def _calc_fibonacci(candles: list, lookback: int = 60) -> dict:
-    """يحسب مستويات Fibonacci من Swing High/Low."""
+    """
+    إصلاح #326: Fibonacci dynamic يضمن أن السعر بين swing_low و swing_high.
+    يجرب نوافذ أصغر حتى يجد swing مناسباً.
+    """
     if not candles or len(candles) < 20:
         return {}
     try:
-        recent     = candles[-min(lookback, len(candles)):]
-        highs      = [float(c.get("high",  c.get("close", 0))) for c in recent]
-        lows       = [float(c.get("low",   c.get("close", 0))) for c in recent]
-        swing_high = max(highs)
-        swing_low  = min(lows)
-        diff       = swing_high - swing_low
+        price_now = float(candles[-1].get("close", 0))
+        swing_high = swing_low = 0
+
+        # جرب نوافذ متصاعدة حتى يكون السعر بينهما
+        for lb in [21, 30, 45, lookback, len(candles)]:
+            recent = candles[-min(lb, len(candles)):]
+            highs  = [float(c.get("high",  c.get("close", 0))) for c in recent]
+            lows   = [float(c.get("low",   c.get("close", 0))) for c in recent]
+            sh, sl = max(highs), min(lows)
+            if sl < price_now < sh:
+                swing_high, swing_low = sh, sl
+                break
+
+        # إذا لم نجد swing مناسباً — نبني حول السعر الحالي
+        if swing_high == 0 or swing_low == 0 or swing_high <= swing_low:
+            atr_est    = price_now * 0.05   # تقدير ATR 5%
+            swing_high = price_now * 1.15
+            swing_low  = price_now * 0.85
+
+        diff = swing_high - swing_low
         if diff <= 0:
             return {}
         levels = {
@@ -264,22 +281,34 @@ def _build_professional_block(
         ]
         if ns > 0:
             entry_conds.append(f"4. وصول Demand Zone {_fmt_price(ns)}")
+        # إصلاح: شرط RSI cross أكثر واقعية من ADX
         if adx > 40:
-            entry_conds.append("5. ADX ينخفض تحت 40")
+            entry_conds.append("5. RSI يتجاوز 30 صعوداً (تأكيد انتهاء الهبوط)")
 
-    # خيار المحترف
+    # إصلاح #325: R/R ديناميكي — ذروة البيع تُعطي هدفاً أوسع
+    # منطق مالي: RSI=13 تاريخياً يسبق ارتداداً 10-20%
+    # فالهدف 4×ATR منطقي (ليس 1.8×ATR كالمعتاد)
     if direction == "short" and conf >= 0.65:
         pro_entry = price * (1 + atr_dec * 0.2)
-        pro_tp    = price * (1 - atr_dec * 1.8)
+        pro_tp    = price * (1 - atr_dec * 2.0)
         pro_sl    = price * (1 + atr_dec * 1.2)
         pro_dir   = "Short"
     else:
         pro_entry = ns if ns > 0 and ns < price * 0.99 else price * (1 - atr_dec * 0.4)
-        pro_tp    = price * (1 + atr_dec * 1.8)
-        pro_sl    = pro_entry * (1 - atr_dec * 1.2)
-        pro_dir   = "Long"
+        # ضبط الهدف حسب RSI
+        if rsi <= 15:
+            _tp_mult, _sl_mult = 4.0, 0.8   # قاع شديد → هدف كبير، وقف ضيق
+        elif rsi <= 25:
+            _tp_mult, _sl_mult = 3.0, 1.0
+        elif rsi <= 35:
+            _tp_mult, _sl_mult = 2.5, 1.0
+        else:
+            _tp_mult, _sl_mult = 1.8, 1.2   # افتراضي
+        pro_tp  = price * (1 + atr_dec * _tp_mult)
+        pro_sl  = pro_entry * (1 - atr_dec * _sl_mult)
+        pro_dir = "Long"
 
-    rr      = abs(pro_tp - pro_entry) / max(abs(pro_sl - pro_entry), 0.0001)
+    rr = abs(pro_tp - pro_entry) / max(abs(pro_sl - pro_entry), 0.0001)
     sl_pct  = abs(pro_sl - pro_entry) / max(pro_entry, 0.0001) * 100
     tp_pct  = abs(pro_tp - pro_entry) / max(pro_entry, 0.0001) * 100
     hold    = 3 if adx > 40 else 5
