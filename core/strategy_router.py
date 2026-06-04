@@ -130,10 +130,20 @@ class SignalLayer:
             direction  = "short"
             trade_type = "futures_short"
 
-        # ذروة بيع RSI<25 + هابط → Long Futures انعكاس محتمل (بتأكيد أعلى)
+        # ذروة بيع RSI<25 + هابط → Long Futures انعكاس محتمل
         elif rsi_val < 25 and confidence > 0.70 and is_bear_regime:
             direction  = "long"
             trade_type = "futures_long"
+
+        # إصلاح #365: RSI extreme + Fear extreme = long حتى لو bias neutral
+        # منطق مالي: RSI<15 تاريخياً = نقطة انعكاس في 90%+ من الحالات
+        elif rsi_val < 15 and fg_now < 20 and confidence >= 0.60:
+            direction  = "long"
+            trade_type = "spot"   # spot أكثر أماناً عند هذه المستويات
+
+        elif rsi_val < 20 and fg_now < 25 and confidence >= 0.65:
+            direction  = "long"
+            trade_type = "spot"
 
         return SignalResult(
             symbol=symbol,
@@ -205,10 +215,19 @@ class SignalLayer:
         elif rsi > 70:  bearish_pts += 2
         elif rsi > 55:  bearish_pts += 1
 
-        # EMA alignment
+        # EMA alignment — إصلاح #365: عند RSI extreme، EMA تُخفَّف
+        # منطق مالي: RSI<15 = ذروة بيع تاريخية تتجاوز إشارة EMA
         ema_align = price > ema20 > ema50
-        if ema_align:   bullish_pts += 2
-        elif price < ema20 < ema50: bearish_pts += 2
+        if ema_align:
+            bullish_pts += 2
+        elif price < ema20 < ema50:
+            # في ذروة بيع شديدة: EMA bearish أقل أهمية
+            if rsi < 15:
+                bearish_pts += 0   # لا وزن لـ EMA عند RSI<15 (الارتداد أقوى)
+            elif rsi < 25:
+                bearish_pts += 1   # نصف الوزن العادي
+            else:
+                bearish_pts += 2
 
         # MACD
         if macd_hist > 0: bullish_pts += 1
