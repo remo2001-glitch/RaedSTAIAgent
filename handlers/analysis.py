@@ -384,6 +384,120 @@ def _build_professional_block(
         f"• R/R: 1:{rr:.1f}",
         f"• أقصى مدة: {hold} أيام",
     ])
+    # ══════════════════════════════════════════════
+    # الهيكل الاحترافي الكامل (المرحلة 1)
+    # ══════════════════════════════════════════════
+
+    # Market Phase
+    _mp = getattr(regime, "market_phase", "") or ""
+    _mp_ar = _get_market_phase_ar(_mp) if _mp else ""
+
+    # RSI Divergence
+    _rsi_div    = tech.get("rsi_div", "none")
+    _vol_prof   = tech.get("vol_profile", "normal")
+    _vol_ratio  = tech.get("vol_ratio", 1.0)
+    _conf_flags = tech.get("conf_flags", [])
+    _bb_pos_v   = tech.get("bb_pos", 0.5)
+    _scenario   = tech.get("scenario", "")
+
+    # Confirmation Flags (2 من 4)
+    _flags_needed = 2
+    _flags_found  = len(_conf_flags)
+    _confirmed    = _flags_found >= _flags_needed
+
+    # Entry Aggressive + Conservative
+    fib_s0    = fib.get("0.0",   ns) if fib else ns
+    fib_s236  = fib.get("nearest_support", ns) if fib else ns
+    entry_agg  = ns if ns > 0 and ns < price * 0.99 else price * (1 - atr_dec * 0.3)
+    entry_cons = price * (1 - atr_dec * 0.6)  # أعمق — بعد تأكيد ارتداد
+
+    # أهداف متدرجة حسب نوع الصفقة
+    nr_fib = fib.get("nearest_resistance", price * 1.05) if fib else price * 1.05
+    f236   = fib.get("0.236", price * 1.06) if fib else price * 1.06
+    f382   = fib.get("0.382", price * 1.10) if fib else price * 1.10
+
+    if _scenario == "counter_trend_bounce":
+        tp1_v = nr_fib if nr_fib > price else price * (1 + atr_dec * 1.5)
+        tp2_v = f236   if f236 > tp1_v   else price * (1 + atr_dec * 2.5)
+        tp3_v = None   # لا TP3 في scalp
+    elif _scenario == "trend_reversal":
+        tp1_v = nr_fib
+        tp2_v = f236
+        tp3_v = f382
+    else:
+        tp1_v = price * (1 + atr_dec * _tp_mult)
+        tp2_v = price * (1 + atr_dec * _tp_mult * 1.6)
+        tp3_v = None
+
+    # R/R الواقعي (1:2 إلى 1:4)
+    rr_real = abs(tp1_v - entry_agg) / max(abs(pro_sl - entry_agg), 0.0001)
+    rr_real = round(min(rr_real, 4.0), 1)  # سقف 1:4
+
+    # إضافة قسم SMC (ما هو متاح من Daily data)
+    smc_block = []
+    if _mp_ar:
+        smc_block.append(f"• Market Phase: {_mp_ar}")
+    if _rsi_div == "bullish":
+        smc_block.append("• RSI Divergence: 🟢 Bullish Divergence — RSI يرتفع والسعر ينخفض")
+    elif _rsi_div == "bearish":
+        smc_block.append("• RSI Divergence: 🔴 Bearish Divergence — RSI يهبط والسعر يرتفع")
+    else:
+        smc_block.append("• RSI Divergence: ⚪ لا divergence واضح")
+    smc_block.append(f"• Volume Profile: {_get_vol_profile_ar(_vol_prof, _vol_ratio)}")
+    smc_block.append(f"• Bollinger Bands: {_get_bb_status_ar(_bb_pos_v)}")
+
+    # قسم إدارة المخاطر
+    sl_type_ar = _get_sl_type(_scenario, rsi)
+    exit_strategy = (
+        "TP1 (50% من الموضع) ← TP2 (30%) ← TP3 (20%) مع Trailing SL"
+        if tp3_v else
+        "TP1 (60% من الموضع) ← TP2 (40%) مع Hard SL"
+    )
+
+    # بناء الأقسام الجديدة
+    if smc_block:
+        parts.extend(["", "*📊 تحليل الهيكلة (SMC)*"])
+        parts.extend(smc_block)
+
+    # Entry Aggressive + Conservative
+    tp1_pct = abs(tp1_v - entry_agg) / max(entry_agg, 0.001) * 100
+    tp2_pct = abs(tp2_v - entry_agg) / max(entry_agg, 0.001) * 100
+
+    parts.extend([
+        "",
+        "*📍 مناطق الدخول والخروج*",
+        f"• Entry 1 (Aggressive): {_fmt_price(entry_agg)} — عند الدعم مباشرةً",
+        f"• Entry 2 (Conservative): {_fmt_price(entry_cons)} — بعد تأكيد الثبات",
+        f"• TP1: {_fmt_price(tp1_v)} (+{tp1_pct:.1f}%)",
+        f"• TP2: {_fmt_price(tp2_v)} (+{tp2_pct:.1f}%)",
+    ])
+    if tp3_v:
+        tp3_pct = abs(tp3_v - entry_agg) / max(entry_agg, 0.001) * 100
+        parts.append(f"• TP3 (اختياري): {_fmt_price(tp3_v)} (+{tp3_pct:.1f}%)")
+    parts.extend([
+        f"• وقف الخسارة: {_fmt_price(pro_sl)} ({sl_pct:.1f}%-)",
+        f"• R/R الواقعي: 1:{rr_real}",
+    ])
+
+    # إدارة المخاطر
+    parts.extend([
+        "",
+        "*🛡️ إدارة المخاطر*",
+        f"• نوع الوقف: {sl_type_ar}",
+        f"• استراتيجية الخروج: {exit_strategy}",
+    ])
+
+    # Confirmation Flags
+    parts.extend(["", "*📊 مؤشرات التأكيد*"])
+    if _confirmed:
+        parts.append(f"✅ {_flags_found} من 4 مؤشرات مؤكدة — الإشارة نشطة")
+    else:
+        parts.append(f"⚠️ {_flags_found} من 4 فقط — انتظر مؤشر تأكيد إضافي")
+    for flag in _conf_flags:
+        parts.append(f"  ✓ {flag}")
+    if not _conf_flags:
+        parts.append("  • لا مؤشرات تأكيد حتى الآن")
+
     return "\n".join(parts)
 
 DEFAULT_SYMBOLS = ["BTC", "ETH", "BNB", "SOL"]
@@ -450,6 +564,48 @@ def _calc_atr(candles: list, period: int = 14) -> float:
         return (atr / price * 100) if price > 0 else 3.0
     except (ValueError, TypeError, ZeroDivisionError):
         return 3.0
+
+
+def _get_market_phase_ar(phase: str) -> str:
+    """ترجمة Market Phase للعربية."""
+    return {
+        "Accumulation":   "🔵 تراكم (Accumulation)",
+        "Distribution":   "🟠 توزيع (Distribution)",
+        "Markup":         "🟢 صعود (Markup)",
+        "Markdown":       "🔴 هبوط (Markdown)",
+        "Consolidation":  "🟡 تعزيز (Consolidation)",
+    }.get(phase, "⚪ غير محدد")
+
+
+def _get_vol_profile_ar(vol_profile: str, vol_ratio: float) -> str:
+    """تفسير Volume Profile."""
+    if vol_profile == "climax_selling":
+        return f"⚠️ Climax Selling ({vol_ratio:.1f}x) — ضغط بيعي استثنائي قد يشير لقاع"
+    elif vol_profile == "climax_buying":
+        return f"⚡ Climax Buying ({vol_ratio:.1f}x) — ضغط شرائي قوي"
+    elif vol_profile == "above_average":
+        return f"📈 حجم فوق المتوسط ({vol_ratio:.1f}x)"
+    elif vol_profile == "no_demand":
+        return f"📉 حجم ضعيف ({vol_ratio:.1f}x) — غياب طلب"
+    return f"⚪ حجم عادي ({vol_ratio:.1f}x)"
+
+
+def _get_bb_status_ar(bb_pos: float) -> str:
+    """موقع Bollinger Bands."""
+    if bb_pos < 0.1:   return "📉 تحت الحد السفلي (Oversold شديد)"
+    elif bb_pos < 0.25: return "⬇️ قرب الحد السفلي"
+    elif bb_pos > 0.9:  return "📈 فوق الحد العلوي (Overbought شديد)"
+    elif bb_pos > 0.75: return "⬆️ قرب الحد العلوي"
+    return "⚪ منتصف النطاق"
+
+
+def _get_sl_type(scenario: str, rsi: float) -> str:
+    """نوع وقف الخسارة حسب السيناريو."""
+    if scenario == "counter_trend_bounce":
+        return "Hard Stop — وقف صارم لا يتحرك"
+    elif scenario == "trend_reversal":
+        return "Trailing Stop — يتحرك مع الربح"
+    return "Hard Stop"
 
 
 def _build_scenarios_context(
