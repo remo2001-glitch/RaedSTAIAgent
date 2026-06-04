@@ -247,7 +247,7 @@ class SignalLayer:
                 **tech,
                 "scenario":        scenario,
                 "scenario_ar":     SCENARIO_AR.get(scenario, ""),
-                "scenario_warn":   scenario_warning,
+                "scenario_warn":   scenario_warn,
                 "max_size_pct":    SCENARIO_MAX_SIZE.get(scenario, 0.15),
                 "target_mult":     SCENARIO_TARGET_MULT.get(scenario, 2.0),
             },
