@@ -93,8 +93,15 @@ class SignalLayer:
             bt_score       * self.WEIGHTS["backtest"]
         )
 
-        # تعديل بحسب الـ Regime
+        # إصلاح #311: تعديل regime_adj — RSI extreme يُعيد جزءاً من الثقة
         regime_adj = _regime_confidence_adj(regime.regime)
+        rsi_now    = tech.get("rsi", 50)
+        fg_now     = macro_data.get("fear_greed", 50)
+        # عند ذروة بيع شديدة (RSI<20, Fear<15): نُعدّل adj لأعلى
+        if rsi_now < 20 and fg_now < 20:
+            regime_adj = min(regime_adj + 0.25, 1.05)  # انعكاس محتمل قوي
+        elif rsi_now < 30 and fg_now < 25:
+            regime_adj = min(regime_adj + 0.10, 1.0)
         confidence = min(raw_conf * regime_adj, 0.97)
 
         # ── تحديد الاتجاه مع دعم Futures ────────────────────────
@@ -189,9 +196,12 @@ class SignalLayer:
         bullish_pts = 0
         bearish_pts = 0
 
-        # RSI
-        if rsi < 30:    bullish_pts += 2
+        # RSI — إصلاح #311: extreme RSI يستحق وزناً أكبر
+        if rsi < 15:    bullish_pts += 5   # ذروة بيع شديدة جداً — انعكاس مؤكد تاريخياً
+        elif rsi < 20:  bullish_pts += 4   # ذروة بيع شديدة
+        elif rsi < 30:  bullish_pts += 2
         elif rsi < 45:  bullish_pts += 1
+        elif rsi > 80:  bearish_pts += 5   # ذروة شراء شديدة
         elif rsi > 70:  bearish_pts += 2
         elif rsi > 55:  bearish_pts += 1
 
@@ -249,17 +259,25 @@ class SignalLayer:
         return round(min(max(score, 0), 1), 3)
 
     def _macro_signal(self, macro: Dict, regime: RegimeResult) -> float:
+        """
+        إصلاح #311: منطق contrarian صحيح.
+        خوف تاريخي (< 15) = فرصة شراء قوية جداً (Warren Buffett: buy when fearful).
+        """
         fear_greed = macro.get("fear_greed", 50)
         btc_dom    = macro.get("btc_dominance", 50)
         score = 0.5
 
-        # Fear & Greed
-        if fear_greed < 25:   score += 0.15   # خوف شديد = فرصة شراء
-        elif fear_greed > 75: score -= 0.1    # جشع = خطر
-        elif fear_greed > 60: score += 0.05
+        # Fear & Greed — contrarian signal
+        if fear_greed < 10:   score += 0.30   # ذعر تاريخي = قاع محتمل قوي جداً
+        elif fear_greed < 15: score += 0.20   # خوف شديد جداً = فرصة انعكاس
+        elif fear_greed < 25: score += 0.12   # خوف شديد = فرصة شراء
+        elif fear_greed < 35: score += 0.05
+        elif fear_greed > 90: score -= 0.20   # طمع تاريخي = قمة محتملة
+        elif fear_greed > 75: score -= 0.10
+        elif fear_greed > 60: score += 0.03
 
         # BTC Dominance
-        if btc_dom > 60: score -= 0.05   # هيمنة BTC تضغط على altcoins
+        if btc_dom > 60:   score -= 0.05
         elif btc_dom < 45: score += 0.05
 
         return round(min(max(score, 0), 1), 3)

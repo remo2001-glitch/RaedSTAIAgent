@@ -450,12 +450,19 @@ class BacktestEngine:
             lines.append(f"💡 جرّب: /backtest {r.symbol} {alt}")
         else:
             lines.append(f"💡 {r.summary_ar.replace('_',' ')}")
-        # إصلاح #260: تنظيف * غير مغلقة
+        # إصلاح #348: تنظيف Markdown شامل
         def _sanitize(t):
             result = []
             for ln in t.split("\n"):
+                # إصلاح * فردية
                 if ln.count("*") % 2 != 0:
                     ln = ln.replace("*", "")
+                # إصلاح _ فردية
+                if ln.count("_") % 2 != 0:
+                    ln = ln.replace("_", "-")
+                # إصلاح backtick فردي
+                if ln.count("`") % 2 != 0:
+                    ln = ln.replace("`", "'")
                 result.append(ln)
             return "\n".join(result)
         return _sanitize("\n".join(lines))
