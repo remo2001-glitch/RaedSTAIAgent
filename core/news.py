@@ -435,6 +435,7 @@ class NewsEngine:
             )
             self.session = _temp_session
 
+        result = None  # إصلاح #458: تعريف مسبق لمنع UnboundLocalError
         try:
             # محاولة Groq
             result = await self._call_groq(prompt, GROQ_MODEL)

@@ -213,7 +213,10 @@ class RegimeDetector:
 
         best = max(score_map, key=score_map.get)
         total = sum(score_map.values()) or 1
-        confidence = min(score_map[best] / total * 2, 0.95)
+        # إصلاح #463: سقف 0.82 أكثر واقعية من 0.95
+        # الأسواق دائماً تحتوي عدم يقين — 95% مضلل
+        raw_conf = score_map[best] / total * 2
+        confidence = min(raw_conf, 0.82)
 
         if confidence < 0.35:
             return Regime.UNKNOWN, 0.3

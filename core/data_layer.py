@@ -451,9 +451,11 @@ class DataLayer:
                     "price":                        price,
                     "change_24h":                   round(change, 4),
                     "price_change_percentage_24h":  round(change, 4),
-                    # vol24h = حجم بـ USDT (الصحيح) | volCcy24h = حجم بـ BTC
-                    "volume_24h":                   float(ticker.get("vol24h", 0) or
-                                                          ticker.get("volCcy24h", 0) or 0),
+                    # vol24h = حجم بـ USDT | volCcy24h = حجم بـ BTC
+                    # نُحوّل volCcy24h لـ USDT إذا vol24h = 0
+                    "volume_24h": (lambda v, c: v if v > 0 else c * price)(
+                                      float(ticker.get("vol24h", 0) or 0),
+                                      float(ticker.get("volCcy24h", 0) or 0)),
                     "high_24h":                     float(ticker.get("high24h", 0) or 0),
                     "low_24h":                      float(ticker.get("low24h", 0) or 0),
                     "source":                       "okx",
@@ -1020,6 +1022,45 @@ class DataLayer:
         except Exception as e:
             logger.debug(f"open_interest ({symbol}): {e}")
         return result
+
+    async def get_ohlcv_4h(self, symbol: str, limit: int = 100) -> List[Dict]:
+        """
+        المرحلة 2: جلب بيانات 4H من OKX لـ SMC حقيقي.
+        يُستخدم لـ RSI Divergence وOrder Blocks وBOS/ChoCH.
+        """
+        key = f"ohlcv4h:{symbol}:{limit}"
+        if cached := _cached(key, "ohlcv"):
+            return cached
+        try:
+            inst_id = f"{symbol.upper()}-USDT"
+            data = await _fetch(
+                self.session,
+                f"https://www.okx.com/api/v5/market/history-candles?instId={inst_id}&bar=4H&limit={limit}",
+                headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+                retries=2,
+            )
+            if not (isinstance(data, dict) and data.get("data")):
+                return []
+            candles = []
+            for c in reversed(data["data"]):  # OKX يُعيد بترتيب عكسي
+                try:
+                    candles.append({
+                        "timestamp": float(c[0]) / 1000,
+                        "open":      float(c[1]),
+                        "high":      float(c[2]),
+                        "low":       float(c[3]),
+                        "close":     float(c[4]),
+                        "volume":    float(c[5]),
+                        "interval":  "4h",
+                    })
+                except (IndexError, ValueError):
+                    continue
+            if candles:
+                _store(key, candles, "ohlcv")
+            return candles
+        except Exception as e:
+            logger.debug(f"get_ohlcv_4h ({symbol}): {e}")
+        return []
 
     async def get_whale_ratio(self, symbol: str) -> dict:
         """يجلب Exchange Whale Ratio من CoinGlass."""

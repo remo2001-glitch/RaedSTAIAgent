@@ -74,7 +74,7 @@ def classify_trade_scenario(
     # السيناريو 1: استمرار الهبوط (الأكثر احتمالاً)
     if rsi > 40 and not ema_align:
         return (TradeScenario.TREND_CONTINUATION,
-                0.7, "📉 الاتجاه هابط — انتظر أو Short فقط")
+                0.80, "📉 الاتجاه هابط — انتظر أو Short فقط")
 
     # السيناريو 2: ارتداد مؤقت (Counter-trend bounce)
     # شروط: RSI extreme + Fear extreme + Bollinger lower band
@@ -96,8 +96,9 @@ def classify_trade_scenario(
                 1.1, "🔄 احتمال انعكاس — MACD يتحول والسعر يتعافى")
 
     # افتراضي: استمرار الاتجاه
+    # adj=0.85 وليس 0.75 — المعلومات المتاحة مفيدة حتى في TREND_CONTINUATION
     return (TradeScenario.TREND_CONTINUATION,
-            0.75, "📉 الاتجاه هابط — احتفظ بالسيولة")
+            0.85, "📉 الاتجاه هابط — احتفظ بالسيولة")
 
 
 # ══════════════════════════════════════════════════════════════
@@ -294,21 +295,46 @@ class SignalLayer:
         vol_ratio  = vols[-1] / (_sma(vols, 20) or 1)
         vol_avg20  = _sma(vols, 20) or 1
 
-        # ── RSI Divergence (Bullish/Bearish) ─────────────────
-        # Bullish: price أدنى قاع لكن RSI أعلى قاع → انعكاس محتمل
+        # ── RSI Divergence — محسّن بـ pivot lows ─────────────
         rsi_div = "none"
-        if len(closes) >= 20:
-            rsi_series = []
-            for i in range(max(0, len(closes)-20), len(closes)):
-                g = sum(max(closes[j]-closes[j-1],0) for j in range(1,i+1) if j>0) / 14 + 1e-9
-                l = sum(max(closes[j-1]-closes[j],0) for j in range(1,i+1) if j>0) / 14 + 1e-9
-                rsi_series.append(100 - 100/(1+g/l))
-            # قارن آخر قاعين في السعر مع RSI
-            mid = len(closes) // 2
-            if closes[-1] < min(closes[mid:]) and rsi > _rsi(closes[:mid], 14):
-                rsi_div = "bullish"
-            elif closes[-1] > max(closes[mid:]) and rsi < _rsi(closes[:mid], 14):
-                rsi_div = "bearish"
+        if len(closes) >= 30:
+            # احسب RSI لكل نقطة
+            def _rsi_series(c, p=14):
+                if len(c) < p+1: return [50.0]*len(c)
+                rs = []
+                for i in range(p, len(c)):
+                    g = sum(max(c[j]-c[j-1],0) for j in range(i-p+1,i+1)) / p + 1e-9
+                    l = sum(max(c[j-1]-c[j],0) for j in range(i-p+1,i+1)) / p + 1e-9
+                    rs.append(100-100/(1+g/l))
+                return [50.0]*p + rs
+
+            rsi_arr = _rsi_series(closes)
+
+            # أبحث عن آخر قاعين في السعر (pivot lows)
+            def find_lows(data, window=5):
+                lows = []
+                for i in range(window, len(data)-window):
+                    if data[i] == min(data[i-window:i+window+1]):
+                        lows.append(i)
+                return lows[-2:] if len(lows) >= 2 else []
+
+            price_lows = find_lows(closes)
+            price_highs_idx = []
+            for i in range(3, len(closes)-3):
+                if closes[i] == max(closes[i-3:i+4]):
+                    price_highs_idx.append(i)
+            price_highs_idx = price_highs_idx[-2:] if len(price_highs_idx) >= 2 else []
+
+            if len(price_lows) == 2:
+                i1, i2 = price_lows
+                # Bullish: سعر أدنى لكن RSI أعلى
+                if closes[i2] < closes[i1] and rsi_arr[i2] > rsi_arr[i1]:
+                    rsi_div = "bullish"
+            if rsi_div == "none" and len(price_highs_idx) == 2:
+                i1, i2 = price_highs_idx
+                # Bearish: سعر أعلى لكن RSI أدنى
+                if closes[i2] > closes[i1] and rsi_arr[i2] < rsi_arr[i1]:
+                    rsi_div = "bearish"
 
         # ── Volume Profile ────────────────────────────────────
         # Climax selling: حجم ≥3x مع هبوط | Climax buying: حجم ≥3x مع صعود
