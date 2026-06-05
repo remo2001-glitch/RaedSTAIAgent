@@ -1013,6 +1013,10 @@ async def cmd_autotrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if action in ("on", "تشغيل"):
             _sm.set_autotrade_on(user_id, True)
+            # إصلاح: تفعيل engine.auto_trade_enabled أيضاً
+            engine = _eng(context)
+            if engine:
+                engine.auto_trade_enabled = True
             await update.message.reply_text(
                 "✅ *التداول الآلي مُفعَّل*\n"
                 "━━━━━━━━━━━━━━━━━━\n"
@@ -1025,6 +1029,9 @@ async def cmd_autotrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         elif action in ("off", "إيقاف"):
             _sm.set_autotrade_on(user_id, False)
+            engine = _eng(context)
+            if engine:
+                engine.auto_trade_enabled = False
             await update.message.reply_text(
                 "⏹️ *التداول الآلي مُوقَف*\n"
                 "━━━━━━━━━━━━━━━━━━\n"
