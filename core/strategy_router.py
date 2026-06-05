@@ -193,12 +193,24 @@ class SignalLayer:
             ema_align  = bool(tech.get("ema_align", False)),
         )
 
-        # regime_adj + scenario_adj
+        # regime_adj + scenario_adj + RSI extreme bonus
         regime_adj = _regime_confidence_adj(regime.regime)
-        if rsi_now < 20 and fg_now < 20:
+
+        # RSI/Fear extreme = حالة نادرة تاريخياً → رفع raw_conf
+        # المنطق: كلما كانت الإشارة أكثر وضوحاً، كلما كانت الثقة أعلى
+        if rsi_now < 15 and fg_now < 15:
+            raw_conf = min(raw_conf + 0.25, 0.85)  # ذروة تاريخية نادرة
             regime_adj = min(regime_adj + 0.20, 1.05)
+        elif rsi_now < 20 and fg_now < 20:
+            raw_conf = min(raw_conf + 0.15, 0.80)
+            regime_adj = min(regime_adj + 0.15, 1.0)
         elif rsi_now < 30 and fg_now < 25:
-            regime_adj = min(regime_adj + 0.10, 1.0)
+            raw_conf = min(raw_conf + 0.08, 0.75)
+            regime_adj = min(regime_adj + 0.08, 1.0)
+        # ذروة شراء أيضاً
+        elif rsi_now > 80 and fg_now > 80:
+            raw_conf = min(raw_conf + 0.20, 0.85)
+
         confidence = min(raw_conf * regime_adj * scenario_adj, 0.97)
 
         # ── direction بناءً على السيناريو ─────────────────────

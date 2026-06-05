@@ -360,7 +360,9 @@ class RegimeDetector:
             f"📊 *حالة السوق الحالية*\n"
             f"━━━━━━━━━━━━━━━━━━\n"
             f"{result.description_ar}\n"
-            f"الثقة: {result.confidence:.0%} — (مدى يقين النموذج من تشخيص الاتجاه الحالي)\n\n"
+            f"الثقة: {result.confidence:.0%} — (مدى يقين النموذج من تشخيص الاتجاه الحالي)\n"
+            + (f"📊 Market Phase: {result.market_phase}\n" if getattr(result, 'market_phase', '') else "")
+            + "\n"
             f"📈 *المؤشرات*\n"
             f"• ATR: {m.get('atr_pct',0):.1f}% | ADX: {m.get('adx',0):.0f}\n"
             f"• RSI: {m.get('rsi',0):.0f} | حجم: {vol_ratio:.1f}x\n"
