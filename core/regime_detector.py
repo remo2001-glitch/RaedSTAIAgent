@@ -361,7 +361,8 @@ class RegimeDetector:
             f"━━━━━━━━━━━━━━━━━━\n"
             f"{result.description_ar}\n"
             f"الثقة: {result.confidence:.0%} — (مدى يقين النموذج من تشخيص الاتجاه الحالي)\n"
-            + (f"📊 Market Phase: {result.market_phase}\n" if getattr(result, 'market_phase', '') else "")
+            + (f"📊 Market Phase: {_mp_ar(getattr(result, 'market_phase', ''))}\n"
+               if getattr(result, 'market_phase', '') else "")
             + "\n"
             f"📈 *المؤشرات*\n"
             f"• ATR: {m.get('atr_pct',0):.1f}% | ADX: {m.get('adx',0):.0f}\n"
@@ -374,6 +375,17 @@ class RegimeDetector:
             + _rsi_warning(m.get("rsi", 50), result.regime)
             + _adx_warning(m.get("adx", 0))
         )
+
+
+def _mp_ar(phase: str) -> str:
+    """ترجمة Market Phase للعربية."""
+    return {
+        "Markup":        "🟢 صعود (Markup)",
+        "Markdown":      "🔴 هبوط (Markdown)",
+        "Accumulation":  "🔵 تراكم (Accumulation)",
+        "Distribution":  "🟠 توزيع (Distribution)",
+        "Consolidation": "🟡 تعزيز (Consolidation)",
+    }.get(phase, phase)
 
 
 def _action_ar(action: str) -> str:

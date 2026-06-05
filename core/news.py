@@ -515,6 +515,7 @@ class NewsEngine:
             # إصلاح #274: إذا json_mode=False → النتيجة نص حر
             if not json_mode:
                 return {"summary_ar": content.strip(), "source": "groq_text"}
+            result = None  # إصلاح #509: تعريف مبكر
             result = json.loads(content)
             # إصلاح #229: استخراج مرن من أي JSON
             if "sentiment" in result and "sentiment_score" in result:
@@ -740,6 +741,7 @@ class NewsEngine:
         )
 
 
+        result = None  # إصلاح #509: تعريف مبكر جذري
         try:
             # إصلاح #274: json_mode=False → نص حر مباشرةً
             result = await self._call_groq(prompt, GROQ_MODEL, json_mode=False)

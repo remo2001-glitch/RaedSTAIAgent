@@ -342,6 +342,12 @@ class DataLayer:
         # OKX أولاً — سريع وغير محجوب على Railway
         result = await self._price_okx(symbol)
         if result and result.get("price", 0) > 0:
+            # إصلاح #500: تحقق من volume — إذا مشكوك فيه نُصحح من CoinGecko
+            vol_okx = result.get("volume_24h", 0)
+            if vol_okx < 1e8:  # أقل من $100M مشكوك فيه لـ BTC/ETH
+                cg_fix = await self._price_coingecko(symbol)
+                if cg_fix and cg_fix.get("volume_24h", 0) > vol_okx:
+                    result["volume_24h"] = cg_fix["volume_24h"]
             _store(key, result)
             return result
 

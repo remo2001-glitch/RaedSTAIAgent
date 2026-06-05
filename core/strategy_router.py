@@ -307,6 +307,11 @@ class SignalLayer:
         vol_ratio  = vols[-1] / (_sma(vols, 20) or 1)
         vol_avg20  = _sma(vols, 20) or 1
 
+        # تعريف مبكر لمنع NameError (#510)
+        rsi_div     = "none"
+        vol_profile = "normal"
+        conf_flags  = []
+
         # ── RSI Divergence — محسّن بـ pivot lows ─────────────
         rsi_div = "none"
         if len(closes) >= 30:
