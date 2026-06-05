@@ -284,10 +284,16 @@ def _build_professional_block(
         _target_lbl = (f"مقاومة فيبو ({_fmt_price(_fib_res)})"
                        if _fib_res and _fib_res > price
                        else f"EMA50 ({_fmt_price(ema50_val)})")
+        # إصلاح #449: شرط 3 يستخدم المقاومة القريبة دائماً
+        _fib_res_cond = fib.get("nearest_resistance", 0) if isinstance(fib, dict) else 0
+        if _fib_res_cond and _fib_res_cond > price:
+            _cond3 = f"3. إغلاق فوق مقاومة فيبو ({_fmt_price(_fib_res_cond)})"
+        else:
+            _cond3 = f"3. كسر EMA20 ({_fmt_price(ema50_val * 0.85):.0f}$) — مقاومة قريبة"
         entry_conds = [
             _rsi_cond,
             "2. الثقة الإجمالية ≥ 65%",
-            f"3. إغلاق فوق {_target_lbl}",
+            _cond3,
         ]
         if ns > 0:
             entry_conds.append(f"4. وصول Demand Zone {_fmt_price(ns)}")
@@ -756,6 +762,21 @@ def _build_scenarios_context(
         )
 
     return (rsi_note + "\n" + scenarios).strip() if rsi_note else scenarios.strip()
+
+
+def _calc_bb_pos(closes: list, period: int = 20) -> float:
+    """موقع السعر في Bollinger Bands: 0=أدنى، 1=أعلى."""
+    if len(closes) < period:
+        return 0.5
+    window = closes[-period:]
+    avg = sum(window) / period
+    std = (sum((x-avg)**2 for x in window)/period)**0.5
+    if std == 0:
+        return 0.5
+    upper = avg + 2*std
+    lower = avg - 2*std
+    price = closes[-1]
+    return round(max(0, min(1, (price - lower) / (upper - lower))), 3)
 
 
 def _calc_rsi(candles: list, period: int = 14) -> float:
@@ -1383,18 +1404,24 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 candles_summary = "بيانات الشموع غير كافية"
 
-        # جلب بيانات Derivatives + On-chain بالتوازي
+        # جلب بيانات Derivatives + On-chain + 4H بالتوازي
         try:
-            _oi_data, _fund_data, _whale_data = await asyncio.wait_for(
+            _oi_data, _fund_data, _whale_data, _candles_4h = await asyncio.wait_for(
                 asyncio.gather(
                     engine.data_layer.get_open_interest(symbol),
                     engine.data_layer.get_funding_rate(symbol),
                     engine.data_layer.get_whale_ratio(symbol),
+                    engine.data_layer.get_ohlcv_4h(symbol, 100),
                     return_exceptions=True,
-                ), timeout=10.0
+                ), timeout=12.0
             )
         except Exception:
             _oi_data = _fund_data = _whale_data = {}
+            _candles_4h = []
+        _oi_data     = _oi_data     if isinstance(_oi_data, dict)  else {}
+        _fund_data   = _fund_data   if isinstance(_fund_data, dict) else {}
+        _whale_data  = _whale_data  if isinstance(_whale_data, dict) else {}
+        _candles_4h  = _candles_4h  if isinstance(_candles_4h, list) else []
         _oi_data    = _oi_data    if isinstance(_oi_data, dict)    else {}
         _fund_data  = _fund_data  if isinstance(_fund_data, dict)  else {}
         _whale_data = _whale_data if isinstance(_whale_data, dict) else {}
@@ -1448,12 +1475,17 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 regime=engine.regime_detector.detect(
                     candles, btc_dominance=float(btc_dom or 50), fear_greed=fear_val),
             )
-            # إضافة بيانات Derivatives لـ technicals
+            # إضافة بيانات Derivatives + 4H لـ technicals
             if hasattr(_sig_a, "technicals") and isinstance(_sig_a.technicals, dict):
-                _sig_a.technicals["oi_data"]    = _oi_data
-                _sig_a.technicals["fund_data"]  = _fund_data
-                _sig_a.technicals["whale_data"] = _whale_data
-                _sig_a.technicals["atr_value"]  = round(_calc_atr(candles) * price / 100, 2)
+                _sig_a.technicals["oi_data"]     = _oi_data
+                _sig_a.technicals["fund_data"]   = _fund_data
+                _sig_a.technicals["whale_data"]  = _whale_data
+                _sig_a.technicals["atr_value"]   = round(_calc_atr(candles) * price / 100, 2)
+                _sig_a.technicals["candles_4h"]  = _candles_4h
+                # RSI Divergence من 4H إذا متاح
+                if len(_candles_4h) >= 30:
+                    _closes_4h = [float(c.get("close",0)) for c in _candles_4h]
+                    _sig_a.technicals["bb_pos"] = _calc_bb_pos(_closes_4h)
         except Exception as _se:
             logger.debug(f"signal_layer in analyze: {_se}")
             # fallback بسيط فقط عند الفشل
@@ -1495,10 +1527,13 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         if levels_lines:
             parts.extend(levels_lines)
-        # إصلاح #415: لا contradiction عند counter-trend bounce (السيناريو واضح بالفعل)
+        # إصلاح #415/#448: لا contradiction إذا السيناريو واضح
         _sig_scenario = getattr(_sig_a, "technicals", {}).get("scenario", "")
-        if (contradiction and contradiction not in analysis
-                and _sig_scenario != "counter_trend_bounce"):
+        _hide_contradiction = _sig_scenario in (
+            "counter_trend_bounce",   # السيناريو يوضح الوضع
+            "trend_continuation",     # الرسالة واضحة بالفعل
+        )
+        if contradiction and contradiction not in analysis and not _hide_contradiction:
             parts += ["", contradiction]
         # إضافة Fibonacci
         if fib_lines_a:
