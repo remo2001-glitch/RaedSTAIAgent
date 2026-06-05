@@ -289,15 +289,19 @@ def _build_professional_block(
         _target_lbl = (f"مقاومة فيبو ({_fmt_price(_fib_res)})"
                        if _fib_res and _fib_res > price
                        else f"EMA50 ({_fmt_price(ema50_val)})")
-        # إصلاح #449: شرط 3 يستخدم المقاومة القريبة دائماً
+        # إصلاح #495: شرط 3 مختلف عن شرط 1
         _fib_res_cond = fib.get("nearest_resistance", 0) if isinstance(fib, dict) else 0
+        _fib_sup_cond = fib.get("nearest_support",    0) if isinstance(fib, dict) else 0
+
         if _fib_res_cond and _fib_res_cond > price:
-            _cond3 = f"3. إغلاق فوق مقاومة فيبو ({_fmt_price(_fib_res_cond)})"
+            # شرط 3 = Reclaim الدعم (مستوى أدنى من المقاومة)
+            _sup_display = _fmt_price(_fib_sup_cond) if _fib_sup_cond else _fmt_price(price * 0.98)
+            _cond3 = f"3. Reclaim وثبات فوق {_sup_display} (الدعم القريب)"
         else:
-            _cond3 = f"3. كسر EMA20 ({_fmt_price(ema50_val * 0.85):.0f}$) — مقاومة قريبة"
+            _cond3 = "3. ظهور شمعة ارتداد قوية (Bullish Engulfing أو Hammer)"
         entry_conds = [
             _rsi_cond,
-            "2. الثقة الإجمالية ≥ 65%",
+            "2. الثقة الإجمالية ≥ 60%",
             _cond3,
         ]
         if ns > 0:
@@ -538,10 +542,12 @@ def _build_professional_block(
         _wr_txt = f" ({_whale_ratio:.2f})" if _whale_ratio > 0 else ""
         deriv_lines.append(f"• Whale Activity{_wr_txt}: {_whale_sig}")
     # إضافة On-chain من DeFiLlama
+    # TVL من On-chain data — نتحقق من بنية الـ dict
     _onchain = tech.get("onchain_data", {}) or {}
-    _tvl = float(_onchain.get("tvl_total", 0) or 0)
+    # get_onchain() يُعيد: {"tvl": ..., "tvl_change_24h": ...} أو {"total_tvl": ...}
+    _tvl = float(_onchain.get("tvl") or 0)
     if _tvl > 0:
-        _tvl_chg = float(_onchain.get("tvl_change_24h", 0) or 0)
+        _tvl_chg = float(_onchain.get("tvl_change_1d", 0) or 0)
         deriv_lines.append(
             f"• TVL الكلي: ${_tvl/1e9:.1f}B ({_tvl_chg:+.1f}% 24h)"
         )
@@ -776,6 +782,20 @@ def _build_scenarios_context(
         )
 
     return (rsi_note + "\n" + scenarios).strip() if rsi_note else scenarios.strip()
+
+
+def _fmt_volume(vol: float) -> str:
+    """تنسيق الحجم بوحدة مناسبة: T/B/M$."""
+    if vol <= 0:
+        return "N/A"
+    if vol >= 1e12:
+        return f"{vol/1e12:.2f}T$"
+    elif vol >= 1e9:
+        return f"{vol/1e9:.1f}B$"
+    elif vol >= 1e6:
+        return f"{vol/1e6:.1f}M$"
+    else:
+        return f"{vol:,.0f}$"
 
 
 def _calc_bb_pos(closes: list, period: int = 20) -> float:
@@ -1549,7 +1569,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"💰 السعر: {_fmt_price(price)} ({change_sign}{change_24h:.2f}%)",
             f"📊 RSI: {rsi_lbl} | Fear & Greed: {fear_val}",
             f"🌍 السوق: {regime_desc}",
-            f"📉 EMA50: {'✅ فوق' if not ema_bearish else '❌ تحت'} | حجم: {volume_24h/1e6:.1f}M$" if volume_24h > 0 else f"📉 EMA50: {'✅ فوق' if not ema_bearish else '❌ تحت'}",
+            f"📉 EMA50: {'✅ فوق' if not ema_bearish else '❌ تحت'} | حجم: {_fmt_volume(volume_24h)}" if volume_24h > 0 else f"📉 EMA50: {'✅ فوق' if not ema_bearish else '❌ تحت'}",
             "━━━━━━━━━━━━━━━━━━",
             analysis,
         ]
