@@ -274,6 +274,65 @@ class RaedEngine:
             )
         return best_info
 
+    async def _notify_real_users(self, signals: list, regime, send_fn) -> None:
+        """
+        يُرسل إشعاراً للمستخدمين الحقيقيين (has_live=True)
+        مع زرَّي: ✅ نفّذ | ❌ تجاهل
+        """
+        try:
+            from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+            import json
+
+            # بناء نص الإشعار
+            lines = ["⚡ *فرصة تداول — موافقة مطلوبة*", ""]
+            for s in signals[:2]:
+                dir_ar = "🟢 شراء" if s["direction"] == "long" else "🔴 بيع"
+                lines.append(
+                    f"• {s['symbol']} {dir_ar} | "
+                    f"ثقة: {s['confidence']:.0%} | "
+                    f"${s['price']:,.2f}"
+                )
+            lines += ["", f"السوق: {regime.description_ar}",
+                      "", "هل تريد تنفيذ هذه الصفقات؟"]
+            text = "\n".join(lines)
+
+            # بناء callback_data
+            sig_data = ",".join(
+                f"{s['symbol']}_{s['direction']}_{s['price']:.2f}"
+                for s in signals[:2]
+            )
+            kb = InlineKeyboardMarkup([[
+                InlineKeyboardButton(
+                    "✅ نفّذ الصفقات",
+                    callback_data=f"autotrade_confirm_{sig_data[:60]}"
+                ),
+                InlineKeyboardButton(
+                    "❌ تجاهل",
+                    callback_data="autotrade_ignore"
+                ),
+            ]])
+
+            # إرسال لكل مستخدم حقيقي لديه autotrade مفعّل
+            from core.state_manager import _sm_singleton as _sm
+            for uid, portfolio in self._user_portfolios.items():
+                try:
+                    if not _sm.is_autotrade_on(uid):
+                        continue
+                    ex_info = self.get_user_exchange(uid)
+                    if not ex_info:  # فقط المستخدمين الحقيقيين
+                        continue
+                    await send_fn(
+                        chat_id    = uid,
+                        text       = text,
+                        parse_mode = "Markdown",
+                        reply_markup = kb,
+                    )
+                    logger.info(f"📩 Real user {uid} notified for approval")
+                except Exception as ue:
+                    logger.debug(f"Notify user {uid}: {ue}")
+        except Exception as e:
+            logger.warning(f"_notify_real_users: {e}")
+
     async def check_strong_signals(self, send_fn=None):
         """
         يفحص الإشارات القوية >= 75% ويُرسل تنبيهاً تلقائياً.
@@ -540,7 +599,8 @@ class RaedEngine:
                     })
 
                     # 3. إشارات قوية ≥ 65%
-                    if signal.confidence >= 0.65:
+                    # إضافة إشارة قوية — يجب أن تكون long أو short (ليس neutral)
+                    if signal.confidence >= 0.65 and signal.direction != "neutral":
                         strong_signals.append({
                             "symbol":     sym,
                             "confidence": signal.confidence,
@@ -554,7 +614,8 @@ class RaedEngine:
             # 4. تنفيذ آلي للإشارات القوية
             executed = []
             if getattr(self, "auto_trade_enabled", False) and strong_signals:
-                for s in strong_signals[:2]:   # أقصى صفقتان
+                from core.risk_engine import RiskDecision
+                for s in strong_signals[:2]:
                     try:
                         ev_mult, _ = self.event_risk.get_exposure_multiplier()
                         if ev_mult == 0:
@@ -564,26 +625,52 @@ class RaedEngine:
                             s["confidence"], s["price"],
                             3.0, regime.regime.value
                         )
-                        from core.risk_engine import RiskDecision
-                        if risk.decision != RiskDecision.REJECT:
-                            self.risk_engine.register_trade(
-                                s["symbol"], risk.approved_size, s["direction"])
-                            self.audit_logger.log_trade(
-                                symbol=s["symbol"],
-                                direction=s["direction"],
-                                size=risk.approved_size,
-                                confidence=s["confidence"],
-                                regime=regime.regime.value,
-                                reason="auto_4h_scan",
+                        if risk.decision == RiskDecision.REJECT:
+                            continue
+
+                        self.risk_engine.register_trade(
+                            s["symbol"], risk.approved_size, s["direction"])
+                        self.audit_logger.log_trade(
+                            symbol=s["symbol"], direction=s["direction"],
+                            size=risk.approved_size, confidence=s["confidence"],
+                            regime=regime.regime.value, reason="auto_4h_scan",
+                        )
+                        trade_rec = {
+                            **s,
+                            "size":        risk.approved_size,
+                            "stop_loss":   risk.stop_loss_pct,
+                            "take_profit": risk.take_profit_pct,
+                        }
+
+                        # ── Virtual Wallet: تنفيذ فوري تلقائي ────────────
+                        try:
+                            portfolio_val = float(
+                                self.cfg.get("portfolio_size") or 10000)
+                            self.virtual_wallet.open_trade(
+                                symbol    = s["symbol"],
+                                direction = s["direction"],
+                                entry     = s["price"],
+                                size_usd  = risk.approved_size,
+                                stop_loss = s["price"] * (1 - risk.stop_loss_pct/100),
+                                take_profit = s["price"] * (1 + risk.take_profit_pct/100),
+                                reason    = "auto_scan",
                             )
-                            executed.append({
-                                **s,
-                                "size":      risk.approved_size,
-                                "stop_loss": risk.stop_loss_pct,
-                                "take_profit": risk.take_profit_pct,
-                            })
+                            trade_rec["virtual_executed"] = True
+                            logger.info(
+                                f"✅ Virtual trade: {s['symbol']} "
+                                f"{s['direction']} ${risk.approved_size:,.0f}")
+                        except Exception as ve:
+                            logger.warning(f"Virtual wallet {s['symbol']}: {ve}")
+                            trade_rec["virtual_executed"] = False
+
+                        executed.append(trade_rec)
+
                     except Exception as e:
                         logger.warning(f"Auto execute {s['symbol']}: {e}")
+
+            # 4b. إشعار المستخدمين الحقيقيين بزرَّي تأكيد/رفض
+            if strong_signals and send_fn:
+                await self._notify_real_users(strong_signals, regime, send_fn)
 
             # 5. بناء التقرير
             if not strong_signals and not executed:
