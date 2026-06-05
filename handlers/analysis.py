@@ -273,10 +273,15 @@ def _build_professional_block(
     entry_conds = []
     if conf < 0.65 or direction == "neutral":
         # M#117: شرط RSI بناءً على القيمة الحالية
+        # إصلاح #470/#481: الشرط الأول يستخدم أقرب مستوى حقيقي
+        _near_res_c = fib.get("nearest_resistance", 0) if isinstance(fib, dict) else 0
+        _ema20_val  = sum([float(c.get("close",0)) for c in candles[-20:]]) / 20 if len(candles) >= 20 else price * 1.03
+        _close_target = _near_res_c if (_near_res_c and price < _near_res_c < price * 1.15) else _ema20_val
+
         if rsi < 40:
-            _rsi_cond = f"1. RSI يتجاوز 40 صعوداً + إغلاق فوق {_fmt_price(ema50_val)}"
+            _rsi_cond = f"1. RSI يتجاوز 30 صعوداً + إغلاق فوق {_fmt_price(_close_target)}"
         elif rsi < 55:
-            _rsi_cond = f"1. RSI يتجاوز 55 + إغلاق فوق {_fmt_price(ema50_val)}"
+            _rsi_cond = f"1. RSI يتجاوز 55 + إغلاق فوق {_fmt_price(_close_target)}"
         else:
             _rsi_cond = f"1. انتظر تصحيح RSI تحت 60 ثم ارتداد"
         # إصلاح #378: شرط دخول يستخدم مقاومة فيبو القريبة بدلاً من EMA50 البعيد
@@ -416,7 +421,8 @@ def _build_professional_block(
         _conf_flags = list(_conf_flags) + ["Funding Rate سالب (فرصة Longs) ✓"]
     if _oi_chg < -5:
         _conf_flags = list(_conf_flags) + ["OI انخفض (تصفية Shorts) ✓"]
-    if _whale_ratio < 0.6:
+    # إصلاح #471: فقط إذا ratio حقيقي (> 0) نُضيف flag
+    if _whale_ratio > 0 and _whale_ratio < 0.6:
         _conf_flags = list(_conf_flags) + ["الحيتان تتراكم ✓"]
 
     _flags_found = len(_conf_flags)
@@ -531,6 +537,14 @@ def _build_professional_block(
     if _whale_sig:  # عرض إذا يوجد signal نصي حتى لو ratio=0
         _wr_txt = f" ({_whale_ratio:.2f})" if _whale_ratio > 0 else ""
         deriv_lines.append(f"• Whale Activity{_wr_txt}: {_whale_sig}")
+    # إضافة On-chain من DeFiLlama
+    _onchain = tech.get("onchain_data", {}) or {}
+    _tvl = float(_onchain.get("tvl_total", 0) or 0)
+    if _tvl > 0:
+        _tvl_chg = float(_onchain.get("tvl_change_24h", 0) or 0)
+        deriv_lines.append(
+            f"• TVL الكلي: ${_tvl/1e9:.1f}B ({_tvl_chg:+.1f}% 24h)"
+        )
     if deriv_lines:
         parts.extend(["", "*🔗 Derivatives & On-Chain*"])
         parts.extend(deriv_lines)
@@ -591,7 +605,7 @@ def _build_professional_block(
         f"{'☑' if _vol_ratio >= 1.5 else '□'} Volume Spike ≥1.5x (حالياً {_vol_ratio:.1f}x)",
         f"{'☑' if ns > 0 and price >= ns * 0.995 else '□'} Reclaim الدعم {_fmt_price(ns) if ns else 'N/A'}",
         f"{'☑' if tech.get('macd_hist', 0) > 0 else '□'} MACD إيجابي",
-        f"{'☑' if _whale_ratio > 0 and _whale_ratio < 0.6 else '□'} On-chain تراكم",
+        f"{'☑' if _whale_ratio > 0 and _whale_ratio < 0.6 else '□'} On-chain تراكم (Whale Ratio < 0.6)",
         f"{'☑' if _fund_pct < 0 else '□'} Funding Rate مناسب",
     ])
 
@@ -997,18 +1011,20 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     try:
-        candles, onchain, fear, news_raw, btc_dom = await asyncio.gather(
+        candles, onchain, fear, news_raw, btc_dom, _sig_4h = await asyncio.gather(
             engine.data_layer.get_ohlcv(symbol, "1d", 365),
             engine.data_layer.get_onchain(),
             engine.data_layer.get_fear_greed(),
             engine.data_layer.get_news(currencies=symbol),
             engine.data_layer.get_btc_dominance(),
+            engine.data_layer.get_ohlcv_4h(symbol, 100),
             return_exceptions=True
         )
         candles  = candles  if isinstance(candles, list) else []
         onchain  = onchain  if isinstance(onchain, dict) else {}
         fear     = fear     if isinstance(fear, dict)    else {"value": 50}
         news_raw = news_raw if isinstance(news_raw, list) else []
+        _sig_4h  = _sig_4h  if isinstance(_sig_4h, list)  else []
 
         try:
             news_an = await engine.news_engine.analyze(news_raw, [symbol])
@@ -1053,8 +1069,16 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             scenario_max_pct=_scenario_max,
         )
 
-        # تحذير RSI/اتجاه متعارض
+        # إصلاح #478: rsi من candles (الحقيقي) وليس من signal.technicals
         rsi = _calc_rsi(candles)
+        # تحديث rsi في technicals لضمان التطابق في العرض
+        if hasattr(signal, "technicals") and isinstance(signal.technicals, dict):
+            signal.technicals["rsi"] = round(rsi, 1)
+            # إصلاح #479: BB من 4H إذا متاح
+            if len(_sig_4h) >= 20:
+                _c4h = [float(c.get("close",0)) for c in _sig_4h]
+                signal.technicals["bb_pos"] = _calc_bb_pos(_c4h)
+        # تحذير RSI/اتجاه متعارض
         warning = ""
         if signal.direction == "short" and rsi < 30:
             warning = "\n\n⚠️ *تنبيه:* RSI في ذروة البيع مع إشارة بيع — خطر انعكاس مرتفع"
@@ -1071,10 +1095,11 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _risk_text = _clean_md(engine.risk_engine.format_assessment_ar(risk, symbol))
         # إظهار تقييم المخاطر فقط عند الموافقة (لا عند الرفض مع وجود pro block)
         show_risk  = risk.decision.value == "approve" or not pro_block
+        # إصلاح #477: تقليل التكرار — pro_block يحتوي معظم المعلومات
         parts = [
             _clean_md(engine.signal_layer.format_ar(signal)),
+            # regime وstrategy مدمجان في pro_block — نُضيف حالة السوق فقط
             _clean_md(engine.regime_detector.format_ar(regime)),
-            _clean_md(engine.strategy_router.format_ar(strategy, params)),
         ]
         if show_risk:
             parts.append(_risk_text)
@@ -1404,24 +1429,26 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 candles_summary = "بيانات الشموع غير كافية"
 
-        # جلب بيانات Derivatives + On-chain + 4H بالتوازي
+        # جلب Derivatives + On-chain + 4H بالتوازي (المرحلة 2)
         try:
-            _oi_data, _fund_data, _whale_data, _candles_4h = await asyncio.wait_for(
+            _oi_data, _fund_data, _whale_data, _candles_4h, _onchain_an = await asyncio.wait_for(
                 asyncio.gather(
                     engine.data_layer.get_open_interest(symbol),
                     engine.data_layer.get_funding_rate(symbol),
                     engine.data_layer.get_whale_ratio(symbol),
                     engine.data_layer.get_ohlcv_4h(symbol, 100),
+                    engine.data_layer.get_onchain(),
                     return_exceptions=True,
-                ), timeout=12.0
+                ), timeout=15.0
             )
         except Exception:
-            _oi_data = _fund_data = _whale_data = {}
+            _oi_data = _fund_data = _whale_data = _onchain_an = {}
             _candles_4h = []
-        _oi_data     = _oi_data     if isinstance(_oi_data, dict)  else {}
-        _fund_data   = _fund_data   if isinstance(_fund_data, dict) else {}
-        _whale_data  = _whale_data  if isinstance(_whale_data, dict) else {}
-        _candles_4h  = _candles_4h  if isinstance(_candles_4h, list) else []
+        _oi_data     = _oi_data     if isinstance(_oi_data, dict)    else {}
+        _fund_data   = _fund_data   if isinstance(_fund_data, dict)   else {}
+        _whale_data  = _whale_data  if isinstance(_whale_data, dict)  else {}
+        _candles_4h  = _candles_4h  if isinstance(_candles_4h, list)  else []
+        _onchain_an  = _onchain_an  if isinstance(_onchain_an, dict)  else {}
         _oi_data    = _oi_data    if isinstance(_oi_data, dict)    else {}
         _fund_data  = _fund_data  if isinstance(_fund_data, dict)  else {}
         _whale_data = _whale_data if isinstance(_whale_data, dict) else {}
@@ -1481,9 +1508,10 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _sig_a.technicals["fund_data"]   = _fund_data
                 _sig_a.technicals["whale_data"]  = _whale_data
                 _sig_a.technicals["atr_value"]   = round(_calc_atr(candles) * price / 100, 2)
-                _sig_a.technicals["candles_4h"]  = _candles_4h
-                # RSI Divergence من 4H إذا متاح
-                if len(_candles_4h) >= 30:
+                _sig_a.technicals["candles_4h"]   = _candles_4h
+                _sig_a.technicals["onchain_data"]  = _onchain_an
+                # BB من 4H إذا متاح
+                if len(_candles_4h) >= 20:
                     _closes_4h = [float(c.get("close",0)) for c in _candles_4h]
                     _sig_a.technicals["bb_pos"] = _calc_bb_pos(_closes_4h)
         except Exception as _se:
