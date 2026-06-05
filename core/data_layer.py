@@ -451,11 +451,13 @@ class DataLayer:
                     "price":                        price,
                     "change_24h":                   round(change, 4),
                     "price_change_percentage_24h":  round(change, 4),
-                    # vol24h = حجم بـ USDT | volCcy24h = حجم بـ BTC
-                    # نُحوّل volCcy24h لـ USDT إذا vol24h = 0
-                    "volume_24h": (lambda v, c: v if v > 0 else c * price)(
-                                      float(ticker.get("vol24h", 0) or 0),
-                                      float(ticker.get("volCcy24h", 0) or 0)),
+                    # vol24h = حجم USDT | volCcy24h = حجم BTC
+                    # OKX: للـ SPOT المقترن بـ USDT، vol24h = حجم بالـ quote (USDT)
+                    # إذا vol24h = 0، نحوّل volCcy24h × price
+                    "volume_24h": max(
+                        float(ticker.get("vol24h", 0) or 0),
+                        float(ticker.get("volCcy24h", 0) or 0) * price
+                    ),
                     "high_24h":                     float(ticker.get("high24h", 0) or 0),
                     "low_24h":                      float(ticker.get("low24h", 0) or 0),
                     "source":                       "okx",
