@@ -374,16 +374,7 @@ def _build_professional_block(
     # حجم فعلي من المحفظة الافتراضية
     portfolio_est = 10000  # سيُحسب من المحفظة الحقيقية
 
-    parts.extend([
-        "*🛡️ خيار المحترف:*",
-        f"• الحجم المقترح: {vol_pct}% من رأس المال",
-        f"  📌 لماذا {vol_pct}%؟ — {vol_reason}",
-        f"• {pro_dir} Limit @ {_fmt_price(pro_entry)}",
-        f"• وقف: {_fmt_price(pro_sl)} ({sl_pct:.1f}%-)",
-        f"• هدف: {_fmt_price(pro_tp)} (+{tp_pct:.1f}%)",
-        f"• R/R: 1:{rr:.1f}",
-        f"• أقصى مدة: {hold} أيام",
-    ])
+    # (#438) خيار المحترف القديم حُذف — الهيكل الجديد يُغني عنه
     # ══════════════════════════════════════════════════════════
     # الهيكل الاحترافي الكامل (المرحلة 1)
     # ══════════════════════════════════════════════════════════
@@ -458,8 +449,11 @@ def _build_professional_block(
     nr_fib = fib.get("nearest_resistance", price * 1.05) if fib else price * 1.05
     f236   = fib.get("0.236", price * 1.06) if fib else price * 1.06
     f382   = fib.get("0.382", price * 1.10) if fib else price * 1.10
-    entry_agg  = ns if ns > 0 and ns < price * 0.99 else price * (1 - atr_dec * 0.3)
-    entry_cons = price * (1 - atr_dec * 0.6)
+    # إصلاح #439: Aggressive = عند الدعم (أدنى) | Conservative = بعد تأكيد (أعلى)
+    entry_agg  = ns if ns > 0 and ns < price * 0.99 else price * (1 - atr_dec * 0.5)
+    # Conservative = عند reclaim الدعم + ATR صغير (أعلى من Aggressive)
+    entry_cons = entry_agg * (1 + atr_dec * 0.3)
+    entry_cons = min(entry_cons, price * 0.999)  # لا يتجاوز السعر الحالي
 
     # ── TP متدرج حسب نوع الصفقة ──────────────────────────────
     if _scenario == "counter_trend_bounce":
@@ -528,26 +522,32 @@ def _build_professional_block(
         deriv_lines.append(f"• Funding Rate: {_fund_pct:+.4f}% {_fund_sig}")
     if _oi_chg != 0:
         deriv_lines.append(f"• Open Interest: {_oi_chg:+.1f}% {_oi_sig}")
-    if _whale_ratio > 0:
-        deriv_lines.append(f"• Whale Ratio: {_whale_ratio:.2f} {_whale_sig}")
+    if _whale_sig:  # عرض إذا يوجد signal نصي حتى لو ratio=0
+        _wr_txt = f" ({_whale_ratio:.2f})" if _whale_ratio > 0 else ""
+        deriv_lines.append(f"• Whale Activity{_wr_txt}: {_whale_sig}")
     if deriv_lines:
         parts.extend(["", "*🔗 Derivatives & On-Chain*"])
         parts.extend(deriv_lines)
 
-    # 4. Entry Aggressive + Conservative + TP + SL
+    # 4. Entry + TP (مع مراعاة #440: لا TP عند WAIT)
     tp1_pct = abs(tp1_v - entry_agg) / max(entry_agg, 0.001) * 100
     tp2_pct = abs(tp2_v - entry_agg) / max(entry_agg, 0.001) * 100
     entry_lines = [
         "",
         "*📍 مناطق الدخول والخروج*",
-        f"• Entry 1 (Aggressive): {_fmt_price(entry_agg)}",
-        f"• Entry 2 (Conservative): {_fmt_price(entry_cons)} — بعد تأكيد الثبات",
-        f"• TP1: {_fmt_price(tp1_v)} (+{tp1_pct:.1f}%)",
-        f"• TP2: {_fmt_price(tp2_v)} (+{tp2_pct:.1f}%)",
+        f"• Entry 1 (Aggressive): {_fmt_price(entry_agg)} — عند الدعم",
+        f"• Entry 2 (Conservative): {_fmt_price(entry_cons)} — بعد تأكيد الارتداد",
     ]
-    if tp3_v:
-        tp3_pct = abs(tp3_v - entry_agg) / max(entry_agg, 0.001) * 100
-        entry_lines.append(f"• TP3 (اختياري): {_fmt_price(tp3_v)} (+{tp3_pct:.1f}%)")
+    if _conf_score >= 40:  # لا أهداف عند WAIT
+        entry_lines.extend([
+            f"• TP1: {_fmt_price(tp1_v)} (+{tp1_pct:.1f}%)",
+            f"• TP2: {_fmt_price(tp2_v)} (+{tp2_pct:.1f}%)",
+        ])
+        if tp3_v:
+            tp3_pct = abs(tp3_v - entry_agg) / max(entry_agg, 0.001) * 100
+            entry_lines.append(f"• TP3 (اختياري): {_fmt_price(tp3_v)} (+{tp3_pct:.1f}%)")
+    else:
+        entry_lines.append("• الأهداف: متاحة بعد تأكيد 2/4 مؤشرات")
     entry_lines.extend([
         f"• وقف الخسارة: {_fmt_price(pro_sl)} ({sl_pct:.1f}%-)",
         f"• R/R الواقعي: 1:{rr_real}",
