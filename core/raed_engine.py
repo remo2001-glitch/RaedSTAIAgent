@@ -615,7 +615,10 @@ class RaedEngine:
 
             # 4. تنفيذ آلي للإشارات القوية
             executed = []
-            if getattr(self, "auto_trade_enabled", False) and strong_signals:
+            # إصلاح #569: نتحقق من state_manager بدلاً من self.auto_trade_enabled
+            from core.state_manager import state_manager as _sm_chk
+            _has_autotrade_users = bool(_sm_chk.get_autotrade_users())
+            if _has_autotrade_users and strong_signals:
                 from core.risk_engine import RiskDecision
                 for s in strong_signals[:2]:
                     try:
