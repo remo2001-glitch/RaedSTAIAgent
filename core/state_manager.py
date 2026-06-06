@@ -512,6 +512,52 @@ class StateManager:
         """يُعيد قائمة المخالفات."""
         return self._get_user(user_id).get("violations", [])
 
+    # ══ نظام إخلاء المسؤولية (D1-D2) ═══════════════════════
+
+    DISCLAIMER_VERSION = "v1.0"  # عند تحديث النص، غيّر الإصدار
+
+    DISCLAIMER_TEXT = (
+        "⚠️ *إخلاء المسؤولية*\n\n"
+        "جميع التحليلات والإشارات والخطط التي يقدمها رائد هي لأغراض "
+        "تعليمية واسترشادية فقط، ولا تُعدّ نصيحة مالية أو استثمارية.\n\n"
+        "التداول في أسواق العملات الرقمية ينطوي على مخاطر عالية قد تؤدي "
+        "إلى خسارة جزء أو كل رأس المال المستثمر.\n\n"
+        "بالضغط على ✅ أوافق فإنك تُقرّ بما يلي:\n"
+        "• أنت مسؤول مسؤولية كاملة عن قراراتك الاستثمارية\n"
+        "• رائد لا يضمن أي ربح أو يتحمل أي خسارة\n"
+        "• القرار النهائي دائماً يعود إليك\n\n"
+        "هل توافق على هذه الشروط؟"
+    )
+
+    def save_disclaimer_consent(self, user_id: int, consent_type: str):
+        """يحفظ موافقة المستخدم على إخلاء المسؤولية للأبد."""
+        import time as _t
+        ud = self._get_user(user_id)
+        consents = ud.get("disclaimer_consents", {})
+        consents[consent_type] = {
+            "version":   self.DISCLAIMER_VERSION,
+            "ts":        _t.time(),
+            "type":      consent_type,
+        }
+        ud["disclaimer_consents"] = consents
+        self._set_user(user_id, ud)
+        if self._redis_ok:
+            try: self._redis_set_user(user_id, ud)
+            except: pass
+
+    def has_disclaimer_consent(self, user_id: int,
+                                consent_type: str = "general") -> bool:
+        """هل وافق المستخدم على إخلاء المسؤولية من قبل؟"""
+        ud = self._get_user(user_id)
+        consents = ud.get("disclaimer_consents", {})
+        consent  = consents.get(consent_type, {})
+        # موافقة صالحة إذا كانت بنفس الإصدار الحالي
+        return consent.get("version") == self.DISCLAIMER_VERSION
+
+    def get_disclaimer_history(self, user_id: int) -> dict:
+        """يُعيد سجل جميع موافقات المستخدم."""
+        return self._get_user(user_id).get("disclaimer_consents", {})
+
     # ── T5: ملاحظات المستخدم على الخطط/الصفقات ─────────────
     def save_user_comment(self, user_id: int, comment: dict):
         """يحفظ ملاحظة المستخدم على خطة أو صفقة."""
@@ -617,6 +663,79 @@ class StateManager:
         "weekly":  {"max_trades": 2,  "pct_per_trade": 0.075, "window_hours": 168},
         "monthly": {"max_trades": 3,  "pct_per_trade": 0.10,  "window_hours": 720},
     }
+
+    # حدود الذهبي+ للتداول الحقيقي
+    GOLD_REAL_LIMITS = {
+        "daily":   {"max_trades": 5,  "pct_per_trade": 0.15},
+        "weekly":  {"max_trades": 2,  "pct_per_trade": 0.15},
+        "monthly": {"max_trades": 3,  "pct_per_trade": 0.15},
+        "max_total_exposure": 0.50,  # أقصى 50% من المحفظة الحقيقية
+    }
+
+    # ══ R1-R5: قيود التداول الحقيقي ══════════════════════════
+
+    def get_session_limits(self, user_id: int) -> dict:
+        """قيود الجلسة المعدَّلة (الذهبي+ فقط، تنتهي عند restart)."""
+        # تُخزَّن في RAM فقط (per session)
+        if not hasattr(self, "_session_limits"):
+            self._session_limits = {}
+        return self._session_limits.get(user_id, {})
+
+    def set_session_limits(self, user_id: int, limits: dict):
+        """يضبط قيود مخصصة للجلسة الحالية (الذهبي+ فقط)."""
+        tier = self.get_tier(user_id)
+        if tier not in ("gold", "diamond", "admin"):
+            return False, "هذه الميزة للباقة الذهبية وأعلى فقط"
+        if not hasattr(self, "_session_limits"):
+            self._session_limits = {}
+        self._session_limits[user_id] = limits
+        return True, "✅ تم تحديث قيود الجلسة"
+
+    def can_execute_real_trade(self, user_id: int, symbol: str,
+                                scan_type: str, portfolio_value: float,
+                                open_positions_value: float = 0) -> tuple:
+        """
+        يتحقق من قيود التداول الحقيقي للذهبي+.
+        يُعيد (can_trade: bool, amount_usd: float, reason: str)
+        """
+        import time as _t
+        tier = self.get_tier(user_id)
+
+        # قيود الجلسة المخصصة (الذهبي+ فقط)
+        session = self.get_session_limits(user_id)
+        if session and tier in ("gold", "diamond", "admin"):
+            limits = session.get(scan_type, self.GOLD_REAL_LIMITS.get(scan_type, {}))
+        else:
+            limits = self.TRADE_LIMITS.get(scan_type, {})
+
+        if not limits:
+            return False, 0, "نوع مسح غير معروف"
+
+        # فحص إجمالي التعرض (≤ 50% للذهبي+)
+        max_total = self.GOLD_REAL_LIMITS["max_total_exposure"]
+        if open_positions_value / max(portfolio_value, 1) >= max_total:
+            return False, 0, (f"إجمالي الصفقات المفتوحة وصل للحد الأقصى "
+                               f"{max_total*100:.0f}% من المحفظة")
+
+        # فحص سجل الصفقات
+        log = self.get_trade_log(user_id)
+        scan_log = log.get(f"real_{scan_type}", [])
+        now = _t.time()
+        window = self.TRADE_LIMITS.get(scan_type, {}).get("window_hours", 24) * 3600
+        scan_log = [t for t in scan_log if now - t.get("ts", 0) < window]
+
+        max_trades = limits.get("max_trades", 5)
+        if len(scan_log) >= max_trades:
+            return False, 0, f"الحد الأقصى {max_trades} صفقات {scan_type}"
+
+        # فحص تكرار العملة
+        if symbol in [t.get("symbol") for t in scan_log]:
+            return False, 0, f"{symbol} مُنفَّذة بالفعل في {scan_type}"
+
+        # حساب المبلغ
+        pct = limits.get("pct_per_trade", 0.05)
+        amount = portfolio_value * pct
+        return True, amount, "✅ مسموح"
 
     def get_trade_log(self, user_id: int) -> dict:
         """سجل الصفقات المنفَّذة حسب النوع."""
