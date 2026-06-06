@@ -515,18 +515,17 @@ class NewsEngine:
             # إصلاح #274: إذا json_mode=False → النتيجة نص حر
             if not json_mode:
                 return {"summary_ar": content.strip(), "source": "groq_text"}
-            result = json.loads(content)
-            # إصلاح #229: استخراج مرن من أي JSON
-            if "sentiment" in result and "sentiment_score" in result:
-                logger.info(f"✅ Groq نجح ({model}): sentiment={result.get('sentiment')}")
-                return result
-            # محاولة استخراج من مفاتيح عربية أو بديلة
-            _mapped = _normalize_groq_response(result)
+            # إصلاح #658: _gr بدلاً من result لتجنب UnboundLocalError في caller
+            _gr = json.loads(content)
+            if "sentiment" in _gr and "sentiment_score" in _gr:
+                logger.info(f"✅ Groq نجح ({model}): sentiment={_gr.get('sentiment')}")
+                return _gr
+            _mapped = _normalize_groq_response(_gr)
             if _mapped:
                 logger.info(f"✅ Groq (normalized) ({model}): sentiment={_mapped.get('sentiment')}")
                 return _mapped
             else:
-                logger.warning(f"Groq ({model}): JSON ناقص: {list(result.keys())}")
+                logger.warning(f"Groq ({model}): JSON ناقص: {list(_gr.keys())}")
 
         except urllib.error.HTTPError as e:
             if e.code == 429:

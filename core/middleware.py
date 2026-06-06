@@ -38,6 +38,17 @@ def require_tier(command: str):
                     return
             except Exception as e:
                 _mw_logger.error(f"middleware ({command}): {e}")
+            # تذكير الاستبيان (T4)
+            try:
+                from core.state_manager import state_manager as _sm_mw
+                if not _sm_mw.is_profile_done(user_id):
+                    if _sm_mw.needs_profile_reminder(user_id):
+                        await update.effective_message.reply_text(
+                            "📋 *أكمل استبيانك الشخصي!*\n"
+                            "اكتب /profile — 5 أسئلة فقط ✅",
+                            parse_mode="Markdown")
+            except Exception:
+                pass
             return await func(update, context, *args, **kwargs)
         return wrapper
     return decorator

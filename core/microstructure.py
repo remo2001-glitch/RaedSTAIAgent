@@ -284,13 +284,29 @@ class MicrostructureLayer:
         return OrderFlowSignal(symbol, [], [], 0, 0, 0)
 
     def _compute_walls(self, symbol: str, book: Dict) -> OrderFlowSignal:
-        """يحسب الجدران من Order Book."""
-        threshold = 500_000   # $500K = جدار معتبر
+        """يحسب الجدران من Order Book — threshold ديناميكي."""
+        bids_raw = book.get("bids", [])
+        asks_raw = book.get("asks", [])
+
+        # حساب threshold ديناميكي بناءً على متوسط حجم الأوامر
+        def _avg_val(levels):
+            vals = []
+            for lvl in levels[:20]:
+                try:
+                    p, q = float(lvl[0]), float(lvl[1])
+                    vals.append(p * q)
+                except: pass
+            return sum(vals) / len(vals) if vals else 100_000
+
+        avg_bid = _avg_val(bids_raw)
+        avg_ask = _avg_val(asks_raw)
+        # threshold = 3× المتوسط (جدار حقيقي يفوق المتوسط بكثير)
+        threshold = max(min((avg_bid + avg_ask) / 2 * 3, 5_000_000), 50_000)
 
         buy_walls  = []
         sell_walls = []
 
-        for price_str, qty_str in book.get("bids", []):
+        for price_str, qty_str in bids_raw:
             try:
                 p   = float(price_str)
                 q   = float(qty_str)
@@ -300,7 +316,7 @@ class MicrostructureLayer:
             except (ValueError, TypeError):
                 continue
 
-        for price_str, qty_str in book.get("asks", []):
+        for price_str, qty_str in asks_raw:
             try:
                 p   = float(price_str)
                 q   = float(qty_str)
@@ -309,6 +325,18 @@ class MicrostructureLayer:
                     sell_walls.append({"price": p, "value_usd": val})
             except (ValueError, TypeError):
                 continue
+
+        # إصلاح #627: fallback لأفضل bid/ask إذا لا جدران
+        if not buy_walls and bids_raw:
+            try:
+                p, q = float(bids_raw[0][0]), float(bids_raw[0][1])
+                buy_walls = [{"price": p, "value_usd": p*q, "is_best": True}]
+            except: pass
+        if not sell_walls and asks_raw:
+            try:
+                p, q = float(asks_raw[0][0]), float(asks_raw[0][1])
+                sell_walls = [{"price": p, "value_usd": p*q, "is_best": True}]
+            except: pass
 
         buy_val  = sum(w["value_usd"] for w in buy_walls)
         sell_val = sum(w["value_usd"] for w in sell_walls)
