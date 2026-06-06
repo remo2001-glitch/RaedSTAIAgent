@@ -506,6 +506,16 @@ async def hourly_alert_job(context: ContextTypes.DEFAULT_TYPE):
 
         if alerts:
             from telegram.constants import ParseMode
+            import time as _th
+
+            # dedup: نتحقق من آخر تنبيه لنفس العملات
+            _alert_key = "|".join(sorted(a.split()[1] for a in alerts if a.startswith("🚨")))
+            _last_sent = getattr(hourly_alert_job, "_last_alert_key", ("", 0))
+            if _alert_key == _last_sent[0] and _th.time() - _last_sent[1] < 3600:
+                logger.info(f"⚡ تنبيه مكرر — تخطى (dedup)")
+                return
+            hourly_alert_job._last_alert_key = (_alert_key, _th.time())
+
             header = "⚡ *تنبيه فوري — إشارة قوية*"
             footer = "\n\n💡 /signal للتفاصيل الكاملة"
             msg    = header + "\n" + "\n".join(alerts) + footer
