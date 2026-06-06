@@ -465,6 +465,148 @@ class StateManager:
                 if str(uid).isdigit()]
 
     # ── Virtual Wallet (Redis-persistent) ──────────────────────
+    # ══════════════════════════════════════════════════════
+    # نظام الاستبيان الشخصي (T4)
+    # ══════════════════════════════════════════════════════
+    def get_profile(self, user_id: int) -> dict:
+        """يُعيد الملف الشخصي للمستخدم من الاستبيان."""
+        return self._get_user(user_id).get("profile", {})
+
+    def save_profile(self, user_id: int, profile: dict):
+        """يحفظ الملف الشخصي + تاريخ آخر استبيان."""
+        import time as _t
+        ud = self._get_user(user_id)
+        ud["profile"]           = profile
+        ud["profile_updated_at"] = _t.time()
+        ud["profile_done"]      = True
+        self._set_user(user_id, ud)
+        if self._redis_ok:
+            try: self._redis_set_user(user_id, ud)
+            except: pass
+
+    def is_profile_done(self, user_id: int) -> bool:
+        """هل أكمل المستخدم الاستبيان؟"""
+        return bool(self._get_user(user_id).get("profile_done", False))
+
+    def needs_profile_reminder(self, user_id: int) -> bool:
+        """هل يحتاج تذكيراً بالاستبيان؟"""
+        ud = self._get_user(user_id)
+        if ud.get("profile_done"):
+            return False
+        # تذكير كل 3 رسائل
+        count = ud.get("reminder_count", 0) + 1
+        ud["reminder_count"] = count
+        self._set_user(user_id, ud)
+        return count % 3 == 0
+
+    def log_violation(self, user_id: int, violation: dict):
+        """يُسجّل مخالفة للخطة الشخصية."""
+        import time as _t
+        ud = self._get_user(user_id)
+        violations = ud.get("violations", [])
+        violations.append({**violation, "ts": _t.time()})
+        ud["violations"] = violations[-50:]  # آخر 50 مخالفة
+        self._set_user(user_id, ud)
+
+    def get_violations(self, user_id: int) -> list:
+        """يُعيد قائمة المخالفات."""
+        return self._get_user(user_id).get("violations", [])
+
+    # ── T5: ملاحظات المستخدم على الخطط/الصفقات ─────────────
+    def save_user_comment(self, user_id: int, comment: dict):
+        """يحفظ ملاحظة المستخدم على خطة أو صفقة."""
+        import time as _t
+        ud = self._get_user(user_id)
+        comments = ud.get("comments", [])
+        comments.append({**comment, "ts": _t.time()})
+        ud["comments"] = comments[-100:]
+        self._set_user(user_id, ud)
+        if self._redis_ok:
+            try: self._redis_set_user(user_id, ud)
+            except: pass
+
+    def get_user_comments(self, user_id: int) -> list:
+        return self._get_user(user_id).get("comments", [])
+
+    def get_user_preferences(self, user_id: int) -> dict:
+        """تفضيلات التداول المستمرة للمستخدم."""
+        return self._get_user(user_id).get("preferences", {})
+
+    def save_user_preferences(self, user_id: int, prefs: dict):
+        ud = self._get_user(user_id)
+        existing = ud.get("preferences", {})
+        existing.update(prefs)
+        ud["preferences"] = existing
+        self._set_user(user_id, ud)
+        if self._redis_ok:
+            try: self._redis_set_user(user_id, ud)
+            except: pass
+
+    # ── T7: إعدادات الاستراتيجية الشخصية ───────────────────
+    def get_strategy_config(self, user_id: int) -> dict:
+        """إعدادات الاستراتيجية المخصصة."""
+        tier = self.get_tier(user_id)
+        # حدود افتراضية حسب الباقة
+        defaults = {
+            "free":    {"min_confidence": 0.75, "max_position_pct": 5,  "max_daily_trades": 2},
+            "silver":  {"min_confidence": 0.70, "max_position_pct": 8,  "max_daily_trades": 4},
+            "gold":    {"min_confidence": 0.65, "max_position_pct": 15, "max_daily_trades": 6},
+            "diamond": {"min_confidence": 0.60, "max_position_pct": 25, "max_daily_trades": 10},
+            "admin":   {"min_confidence": 0.55, "max_position_pct": 35, "max_daily_trades": 20},
+        }
+        base = defaults.get(tier, defaults["free"]).copy()
+        # تطبيق إعدادات الاستبيان إذا وُجدت
+        profile = self.get_profile(user_id)
+        if profile:
+            risk_level = profile.get("risk_level", "medium")
+            if risk_level == "low":
+                base["min_confidence"] = min(base["min_confidence"] + 0.05, 0.90)
+                base["max_position_pct"] = max(base["max_position_pct"] - 2, 3)
+            elif risk_level == "high":
+                base["min_confidence"] = max(base["min_confidence"] - 0.05, 0.50)
+                base["max_position_pct"] = min(base["max_position_pct"] + 5, 35)
+        # تطبيق override المستخدم إذا وُجد
+        overrides = self._get_user(user_id).get("strategy_override", {})
+        base.update(overrides)
+        return base
+
+    def can_update_profile(self, user_id: int) -> tuple:
+        """
+        يتحقق إذا كان المستخدم يمكنه تحديث ملفه.
+        يُعيد (can_update: bool, reason: str)
+        """
+        import time as _t
+        tier = self.get_tier(user_id)
+        ud   = self._get_user(user_id)
+        last = ud.get("profile_updated_at", 0)
+        now  = _t.time()
+        elapsed_days = (now - last) / 86400
+
+        if tier in ("free", "silver"):
+            if elapsed_days >= 120:  # 4 أشهر
+                return True, "✅ يمكنك تحديث ملفك الشخصي"
+            remaining = int(120 - elapsed_days)
+            return False, f"⏳ يمكنك التحديث بعد {remaining} يوم"
+
+        # gold+ يحتاج شروط أداء
+        if tier in ("gold", "diamond", "admin"):
+            # تحقق من 21/30 صفقة رابحة + 50% ربح
+            vw = self.get_virtual_wallet(user_id)
+            if not vw:
+                return False, "⏳ لم تنفّذ صفقات كافية بعد"
+            history = vw.get("history", [])
+            sells   = [t for t in history if t.get("type") == "sell"]
+            last_30 = sells[-30:]
+            wins    = [t for t in last_30 if t.get("pnl", 0) > 0]
+            if len(wins) >= 21:
+                total_pnl = sum(t.get("pnl", 0) for t in sells)
+                initial   = 10000
+                if total_pnl / initial >= 0.50:
+                    return True, "✅ مستحق — 21+ صفقة رابحة و50%+ ربح"
+            return False, f"⏳ {len(wins)}/21 صفقة رابحة في آخر 30 صفقة"
+
+        return True, "✅ يمكنك التحديث"
+
     def get_virtual_wallet(self, user_id: int) -> dict:
         """يقرأ المحفظة من Redis مباشرة (مفتاح منفصل = لا يُفقَد عند Restart)."""
         if self._redis_ok:
