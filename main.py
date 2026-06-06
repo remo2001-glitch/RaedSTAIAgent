@@ -485,6 +485,7 @@ async def hourly_alert_job(context: ContextTypes.DEFAULT_TYPE):
         regime = engine.regime_detector.detect(btc_c, fear_greed=fear_val)
 
         alerts = []
+        strong_signals_data = []
         for sym in ["BTC", "ETH", "SOL", "BNB"]:
             try:
                 candles = await engine.data_layer.get_ohlcv(sym, "1d", 100)
@@ -495,30 +496,40 @@ async def hourly_alert_job(context: ContextTypes.DEFAULT_TYPE):
                     symbol=sym, candles=candles, onchain_data={},
                     news_sentiment=0, backtest_win_rate=0.55,
                     macro_data={"fear_greed": fear_val}, regime=regime)
-                if signal.confidence >= 0.80:
+                if signal.confidence >= 0.80 and signal.direction != "neutral":
                     dir_ar  = "🟢 شراء" if signal.direction == "long" else "🔴 بيع"
                     price_d = await engine.data_layer.get_price(sym)
                     price   = float((price_d or {}).get("price") or 0)
                     alerts.append(
                         f"🚨 {sym} {dir_ar} | ثقة: {signal.confidence:.0%} | ${price:,.2f}")
+                    strong_signals_data.append({
+                        "symbol":       sym,
+                        "direction":    signal.direction,
+                        "confidence":   signal.confidence,
+                        "price":        price,
+                        "approved_size": min(price * 0.001, 1000),  # تقدير بسيط
+                    })
             except Exception:
                 continue
 
         if alerts:
             from telegram.constants import ParseMode
+            from core.virtual_wallet import VirtualWallet as _VW_h
             import time as _th
 
-            # dedup: نتحقق من آخر تنبيه لنفس العملات
+            # dedup: لا نُرسل نفس التنبيه مرتين في ساعة
             _alert_key = "|".join(sorted(a.split()[1] for a in alerts if a.startswith("🚨")))
             _last_sent = getattr(hourly_alert_job, "_last_alert_key", ("", 0))
             if _alert_key == _last_sent[0] and _th.time() - _last_sent[1] < 3600:
-                logger.info(f"⚡ تنبيه مكرر — تخطى (dedup)")
+                logger.info("⚡ تنبيه مكرر — تخطى (dedup)")
                 return
             hourly_alert_job._last_alert_key = (_alert_key, _th.time())
 
             header = "⚡ *تنبيه فوري — إشارة قوية*"
             footer = "\n\n💡 /signal للتفاصيل الكاملة"
             msg    = header + "\n" + "\n".join(alerts) + footer
+
+            # إرسال التنبيه لكل premium + autotrade users
             target_ids = set(_sm_h.get_autotrade_users())
             for uid in _sm_h.get_all_user_ids():
                 if _sm_h.is_premium(uid):
@@ -529,6 +540,49 @@ async def hourly_alert_job(context: ContextTypes.DEFAULT_TYPE):
                         chat_id=uid, text=msg, parse_mode=ParseMode.MARKDOWN)
                 except Exception:
                     pass
+
+            # تنفيذ Virtual Wallet لمستخدمي autotrade
+            for uid in _sm_h.get_autotrade_users():
+                try:
+                    _wdata = _sm_h.get_virtual_wallet(uid)
+                    if not _wdata:
+                        _wdata = {"balance": 10000.0, "invested": 0.0,
+                                  "profit": 0.0, "positions": {}, "history": []}
+                    _vw_h = _VW_h(_wdata)
+
+                    _executed_syms = []
+                    for sig_info in strong_signals_data:
+                        if sig_info["confidence"] < 0.80:
+                            continue
+                        _max_buy = _vw_h.total_value * 0.10
+                        _buy_amt = min(sig_info.get("approved_size", _max_buy), _max_buy)
+                        _buy_amt = max(_buy_amt, 50)
+                        _result  = _vw_h.buy(
+                            symbol     = sig_info["symbol"],
+                            price      = sig_info["price"],
+                            amount_usd = _buy_amt,
+                        )
+                        if _result.get("ok"):
+                            _executed_syms.append(
+                                f"• {sig_info['symbol']} ${_buy_amt:,.0f}")
+
+                    if _executed_syms:
+                        _sm_h.save_virtual_wallet(uid, _vw_h.to_dict())
+                        _confirm = (
+                            "✅ *تم تنفيذ صفقات افتراضية تلقائياً*\n\n" +
+                            "\n".join(_executed_syms) +
+                            f"\n\n💰 رصيدك: ${_vw_h.balance:,.0f}"
+                            "\n🎮 /portfolio للتفاصيل"
+                        )
+                        try:
+                            await context.bot.send_message(
+                                chat_id=uid, text=_confirm,
+                                parse_mode=ParseMode.MARKDOWN)
+                        except Exception:
+                            pass
+                except Exception as _ve:
+                    logger.warning(f"Virtual exec uid={uid}: {_ve}")
+
             logger.info(f"⚡ تنبيه ساعي: {len(alerts)} إشارة >= 80%")
     except Exception as e:
         logger.error(f"hourly_alert_job: {e}")
