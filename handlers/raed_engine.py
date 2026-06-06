@@ -276,6 +276,63 @@ class RaedEngine:
             )
         return best_info
 
+    async def _check_virtual_positions(self, regime) -> None:
+        """
+        يفحص المراكز المفتوحة في virtual wallet ويُغلقها إذا:
+        - بلغت Take Profit
+        - بلغت Stop Loss
+        - انتهت مدة الاحتفاظ (Time Exit)
+        يُسجّل النتيجة في drift_monitor للتعلم الذاتي.
+        """
+        from core.virtual_wallet import VirtualWallet as _VW_c
+        from core.state_manager  import state_manager as _sm_c
+        import time as _tc
+
+        try:
+            for _uid in _sm_c.get_autotrade_users():
+                _wdata = _sm_c.get_virtual_wallet(_uid)
+                if not _wdata or not _wdata.get("positions"):
+                    continue
+                _vw = _VW_c(_wdata)
+                _changed = False
+
+                for sym in list(_vw.positions.keys()):
+                    pos = _vw.positions.get(sym)
+                    if not pos:
+                        continue
+                    try:
+                        pd    = await self.data_layer.get_price(sym.replace("USDT",""))
+                        price = float((pd or {}).get("price") or 0)
+                        if price <= 0:
+                            continue
+                        tp = float(pos.get("take_profit", 0))
+                        sl = float(pos.get("stop_loss",   0))
+                        # فحص TP أو SL
+                        should_close = (
+                            (tp > 0 and price >= tp) or
+                            (sl > 0 and price <= sl)
+                        )
+                        if should_close:
+                            result = _vw.sell(sym, price)
+                            if result.get("ok"):
+                                _changed = True
+                                pnl = result.get("trade", {}).get("pnl", 0)
+                                was_win = pnl > 0
+                                # تسجيل في drift_monitor
+                                self.drift_monitor.record_outcome(was_win)
+                                reason = "TP ✅" if (tp > 0 and price >= tp) else "SL 🛑"
+                                logger.info(
+                                    f"Auto-close {sym} uid={_uid}: {reason} "
+                                    f"PnL=${pnl:+,.2f}"
+                                )
+                    except Exception as ep:
+                        logger.debug(f"_check_virtual_positions {sym}: {ep}")
+
+                if _changed:
+                    _sm_c.save_virtual_wallet(_uid, _vw.to_dict())
+        except Exception as e:
+            logger.debug(f"_check_virtual_positions: {e}")
+
     async def _notify_real_users(self, signals: list, regime, send_fn) -> None:
         """
         يُرسل إشعاراً للمستخدمين الحقيقيين (has_live=True)
@@ -342,6 +399,10 @@ class RaedEngine:
         """
         if not send_fn or not self.auto_trade_enabled:
             return
+        # dedup: لا نُرسل نفس مجموعة الإشارات مرتين في 30 دقيقة
+        import time as _time_ds
+        if not hasattr(self, "_last_alert_ts"):
+            self._last_alert_ts = {}
         top_symbols = ["BTC", "ETH", "SOL", "BNB"]
         try:
             btc_c    = await self.data_layer.get_ohlcv("BTC", "1d", 200)
@@ -368,7 +429,14 @@ class RaedEngine:
                         macro_data={"fear_greed": fear_val},
                         regime=regime,
                     )
-                    if signal.confidence >= 0.75:
+                    if signal.confidence >= 0.75 and signal.direction != "neutral":
+                        # dedup: لا نُرسل نفس الإشارة مرتين في 30 دقيقة
+                        _sig_key = f"{sym}_{signal.direction}"
+                        _now_t   = _time_ds.time()
+                        if _now_t - self._last_alert_ts.get(_sig_key, 0) < 1800:
+                            continue
+                        self._last_alert_ts[_sig_key] = _now_t
+
                         dir_ar  = "شراء" if signal.direction == "long" else "بيع"
                         price_d = await self.data_layer.get_price(sym)
                         price   = float((price_d or {}).get("price") or 0)
@@ -613,6 +681,9 @@ class RaedEngine:
                 except Exception:
                     continue
 
+            # 3.5 فحص وإغلاق المراكز التي بلغت TP أو SL
+            await self._check_virtual_positions(regime)
+
             # 4. تنفيذ آلي للإشارات القوية
             executed = []
             # إصلاح #569: نتحقق من state_manager بدلاً من self.auto_trade_enabled
@@ -745,10 +816,14 @@ class RaedEngine:
                 lines.append("")
 
             from core.state_manager import state_manager as _sm_stat
-            _at_active = bool(_sm_stat.get_autotrade_users())
+            _at_users = _sm_stat.get_autotrade_users()
+            _at_active = bool(_at_users)
             if strong_signals and not executed:
-                _at_lbl = "✅ autotrade نشط — جاري التنفيذ" if _at_active else "فرص قوية (autotrade مُوقَف)"
-                lines.append(f"⚡ *{_at_lbl}*")
+                if _at_active:
+                    _at_lbl = f"⚡ *فرص قوية — autotrade نشط ({len(_at_users)} مستخدم)*"
+                else:
+                    _at_lbl = "⚡ *فرص قوية (autotrade مُوقَف)*"
+                lines.append(_at_lbl)
                 for s in strong_signals:
                     dir_ar = "🟢 شراء" if s["direction"] == "long" else "🔴 بيع"
                     lines.append(

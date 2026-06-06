@@ -1023,12 +1023,33 @@ async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
             candidates, portfolio_val, regime, ev_mult)
         risk_st       = engine.risk_engine.status_report(portfolio_val)
 
+        # قراءة virtual wallet الحقيقي من Redis
+        from core.virtual_wallet import VirtualWallet as _VW_p
+        from core.state_manager  import state_manager as _sm_p
+        _uid_p    = update.effective_user.id
+        _vw_p_d   = _sm_p.get_virtual_wallet(_uid_p) or {}
+        _vw_p     = _VW_p(_vw_p_d) if _vw_p_d else None
+        _open_p   = len(_vw_p.positions) if _vw_p else 0
+        _vw_total = _vw_p.total_value if _vw_p else portfolio_val
+
+        # حساب PnL الحي
+        _live_pnl_p = 0.0
+        if _vw_p and _vw_p.positions:
+            for _sym_p, _pos_p in _vw_p.positions.items():
+                try:
+                    _pd_p = await engine.data_layer.get_price(_sym_p.replace("USDT",""))
+                    if _pd_p and _pd_p.get("price"):
+                        _live_pnl_p += (float(_pd_p["price"]) - _pos_p["avg_price"]) * _pos_p["quantity"]
+                except Exception:
+                    pass
+        _dd_p = max(0, (portfolio_val - _vw_total) / portfolio_val * 100)
+
         text = _clean(engine.capital_engine.format_ar(allocation, regime))
         text += (
             f"\n\n⚖️ *حالة المخاطر*\n"
-            f"• Drawdown: {risk_st.get('drawdown_pct',0):.1f}%\n"
-            f"• PnL اليوم: ${risk_st.get('today_pnl',0):+,.2f}\n"
-            f"• صفقات مفتوحة: {risk_st.get('open_positions',0)}"
+            f"• Drawdown: {_dd_p:.1f}%\n"
+            f"• PnL الحي: ${_live_pnl_p:+,.2f}\n"
+            f"• صفقات مفتوحة: {_open_p}"
         )
         await msg.edit_text(text, parse_mode=ParseMode.MARKDOWN)
 
@@ -1060,23 +1081,60 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sched_m    = engine.scheduler.next_monthly_ar() if engine.scheduler else "غير مُفعَّل"
         sched_scan = engine.scheduler.next_scan_ar()    if engine.scheduler else ""
 
+        # ── قراءة Virtual Wallet الحقيقي من state_manager (Redis) ──────
+        from core.virtual_wallet import VirtualWallet as _VW_stats
+        from core.state_manager  import state_manager as _sm_stats
+        user_id   = update.effective_user.id
+        _vw_data  = _sm_stats.get_virtual_wallet(user_id) or {}
+        _vw       = _VW_stats(_vw_data) if _vw_data else None
+
+        # حساب القيم الحقيقية من virtual wallet
+        _vw_balance    = _vw.balance   if _vw else portfolio_val
+        _vw_invested   = _vw.invested  if _vw else 0.0
+        _vw_total      = _vw.total_value if _vw else portfolio_val
+        _vw_positions  = _vw.positions  if _vw else {}
+        _vw_history    = _vw.history    if _vw else []
+        _open_count    = len(_vw_positions)
+        _sells         = [t for t in _vw_history if t.get("type") == "sell"]
+        _wins          = [t for t in _sells if t.get("pnl", 0) > 0]
+        _total_trades  = len(_sells)
+        _win_rate      = (_wins.__len__() / max(_total_trades, 1) * 100) if _total_trades else 0
+        _net_pnl       = sum(t.get("pnl", 0) for t in _sells)
+        _avg_win       = (sum(t["pnl"] for t in _wins) / max(len(_wins), 1)) if _wins else 0
+        _losses        = [t for t in _sells if t.get("pnl", 0) <= 0]
+        _avg_loss      = (sum(t["pnl"] for t in _losses) / max(len(_losses), 1)) if _losses else 0
+        _drawdown_pct  = max(0, (portfolio_val - _vw_total) / portfolio_val * 100)
+
+        # حساب PnL الحي للمراكز المفتوحة
+        _live_pnl = 0.0
+        try:
+            for sym, pos in _vw_positions.items():
+                pd = await engine.data_layer.get_price(sym.replace("USDT",""))
+                if pd and pd.get("price"):
+                    cur = float(pd["price"])
+                    _live_pnl += (cur - pos["avg_price"]) * pos["quantity"]
+        except Exception:
+            pass
+        _today_pnl = _live_pnl
+
         lines = [
             "📊 *إحصائيات رائد الفورية*",
             "━━━━━━━━━━━━━━━━━━",
             "",
-            "💰 *المحفظة*",
-            f"• القيمة: ${risk_st.get('portfolio',0):,.0f}",
-            f"• Drawdown: {risk_st.get('drawdown_pct',0):.1f}%",
-            f"• PnL اليوم: ${risk_st.get('today_pnl',0):+,.2f}",
-            f"• صفقات مفتوحة: {risk_st.get('open_positions',0)}",
-            f"• حد الخسارة اليومية: {risk_st.get('daily_loss_used',0):.0f}% مُستهلك",
+            "💰 *المحفظة الافتراضية*",
+            f"• القيمة الكلية: ${_vw_total:,.2f}",
+            f"• رصيد نقدي: ${_vw_balance:,.2f}",
+            f"• مُستثمر: ${_vw_invested:,.2f}",
+            f"• Drawdown: {_drawdown_pct:.1f}%",
+            f"• PnL الحي (مراكز مفتوحة): ${_live_pnl:+,.2f}",
+            f"• صفقات مفتوحة: {_open_count}",
             "",
-            "📈 *الأداء الإجمالي*",
-            f"• إجمالي الصفقات: {pnl.get('trades',0)}",
-            f"• صافي الربح: ${pnl.get('total_pnl',0):+,.2f}",
-            f"• نسبة الفوز: {pnl.get('win_rate',0):.1f}%",
-            f"• متوسط الربح: ${pnl.get('avg_win',0):,.2f}",
-            f"• متوسط الخسارة: ${abs(pnl.get('avg_loss',0)):,.2f}",
+            "📈 *الأداء الإجمالي (صفقات مغلقة)*",
+            f"• إجمالي الصفقات المغلقة: {_total_trades}",
+            f"• صافي الربح: ${_net_pnl:+,.2f}",
+            f"• نسبة الفوز: {_win_rate:.1f}%",
+            f"• متوسط الربح: ${_avg_win:,.2f}",
+            f"• متوسط الخسارة: ${abs(_avg_loss):,.2f}",
             "",
             "🔬 *حالة النموذج*",
             f"• معدل فوز: {drift_st.current_win_rate:.0%}",
@@ -1097,24 +1155,25 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "📊 *أداء رائد vs BTC*",
         ]
 
-        # مقارنة أداء رائد vs BTC — فقط عند وجود صفقات فعلية (M#66)
+        # مقارنة أداء رائد vs BTC — يستخدم virtual wallet الحقيقي
         try:
             btc_price_now = await engine.data_layer.get_price("BTC")
-            has_trades    = pnl.get("trades", 0) > 0
             if btc_price_now and btc_price_now.get("price", 0) > 0:
-                btc_change = btc_price_now.get("change_24h", 0)
-                if has_trades:
-                    raed_pnl_pct = (pnl.get("total_pnl", 0) / max(portfolio_val, 1)) * 100
+                btc_change   = btc_price_now.get("change_24h", 0)
+                has_activity = _open_count > 0 or _total_trades > 0
+                if has_activity:
+                    raed_pnl_pct = ((_net_pnl + _live_pnl) / max(portfolio_val, 1)) * 100
                     lines += [
-                        f"• رائد (24h): {raed_pnl_pct:+.2f}%",
+                        f"• رائد (كلي): {raed_pnl_pct:+.2f}%",
                         f"• BTC  (24h): {btc_change:+.2f}%",
                         f"• الفارق: {raed_pnl_pct - btc_change:+.2f}% {'✅ رائد أفضل' if raed_pnl_pct > btc_change else '📊 BTC أفضل'}",
+                        f"• صفقات مفتوحة: {_open_count} | مغلقة: {_total_trades}",
                     ]
                 else:
                     lines += [
-                        f"• لا توجد صفقات مُنفَّذة بعد",
+                        f"• لا توجد صفقات بعد — انتظر المسح التالي",
                         f"• BTC (24h): {btc_change:+.2f}%",
-                        f"• 💡 ابدأ بـ /signal لتفعيل تتبع الأداء",
+                        f"• 💡 تأكد من /autotrade on",
                     ]
         except Exception:
             lines.append("• بيانات المقارنة غير متاحة")
