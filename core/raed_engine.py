@@ -750,12 +750,32 @@ class RaedEngine:
                                     amount_usd = _buy_amt,
                                 )
                                 if _result.get("ok"):
-                                    # حفظ في Redis — يصمد عند Restart
+                                    # حفظ في Redis
                                     _sm_vw.save_virtual_wallet(_uid, _vw.to_dict())
                                     trade_rec["virtual_executed"] = True
                                     logger.info(
                                         f"✅ Virtual buy: {s['symbol']} "
                                         f"${_buy_amt:,.0f} for user {_uid}")
+                                    # إشعار تأكيد للمستخدم (#608)
+                                    _sfn_notify = getattr(self, "_send_fn", None)
+                                    if _sfn_notify:
+                                        _dir_ar = "🟢 شراء" if s["direction"] == "long" else "🔴 بيع"
+                                        _confirm_msg = (
+                                            "✅ *تم تنفيذ صفقة افتراضية*\n\n"
+                                            f"• العملة: {s['symbol']} {_dir_ar}\n"
+                                            f"• السعر: ${s['price']:,.2f}\n"
+                                            f"• المبلغ: ${_buy_amt:,.0f}\n"
+                                            f"• الرصيد المتبقي: ${_vw.balance:,.0f}\n\n"
+                                            "🎮 محفظتك الافتراضية — /portfolio للتفاصيل"
+                                        )
+                                        try:
+                                            await _sfn_notify(
+                                                _confirm_msg,
+                                                user_id=_uid,
+                                                parse_mode="Markdown"
+                                            )
+                                        except Exception:
+                                            pass
                                 else:
                                     logger.warning(
                                         f"Virtual buy rejected {s['symbol']} "
@@ -816,14 +836,14 @@ class RaedEngine:
                 lines.append("")
 
             from core.state_manager import state_manager as _sm_stat
-            _at_users = _sm_stat.get_autotrade_users()
+            _at_users  = _sm_stat.get_autotrade_users()
             _at_active = bool(_at_users)
             if strong_signals and not executed:
                 if _at_active:
-                    _at_lbl = f"⚡ *فرص قوية — autotrade نشط ({len(_at_users)} مستخدم)*"
+                    lines.append(f"⚡ *فرص قوية — autotrade نشط ({len(_at_users)} مستخدم)*")
                 else:
-                    _at_lbl = "⚡ *فرص قوية (autotrade مُوقَف)*"
-                lines.append(_at_lbl)
+                    lines.append("⚡ *فرص قوية (autotrade مُوقَف)*")
+                    lines.append("💡 لتفعيل التنفيذ التلقائي: /autotrade on")
                 for s in strong_signals:
                     dir_ar = "🟢 شراء" if s["direction"] == "long" else "🔴 بيع"
                     lines.append(
