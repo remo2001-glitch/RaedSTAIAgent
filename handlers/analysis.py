@@ -1536,22 +1536,36 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     _sig_a.technicals["bb_pos"] = _calc_bb_pos(_closes_4h)
         except Exception as _se:
             logger.debug(f"signal_layer in analyze: {_se}")
-            # fallback بسيط فقط عند الفشل
             class _AnalyzeSignal:
                 confidence = 0.55
                 direction  = "neutral"
-                technicals = {}
                 trade_type = "spot"
+                technicals = {}
             _sig_a = _AnalyzeSignal()
+            _scenario_fb = (
+                "counter_trend_bounce" if rsi < 20 and fear_val < 25
+                else "trend_continuation"
+            )
             if rsi < 20:
-                _sig_a.direction   = "long"
-                _sig_a.confidence  = 0.70
+                _sig_a.direction  = "long"
+                _sig_a.confidence = 0.70
             elif rsi < 35:
-                _sig_a.direction   = "long"
-                _sig_a.confidence  = 0.60
+                _sig_a.direction  = "long"
+                _sig_a.confidence = 0.60
             elif rsi > 70:
-                _sig_a.direction   = "short"
-                _sig_a.confidence  = 0.60
+                _sig_a.direction  = "short"
+                _sig_a.confidence = 0.60
+            # تعيين scenario في technicals للـ fallback
+            _sig_a.technicals = {
+                "scenario":      _scenario_fb,
+                "scenario_ar":   "⚡ ارتداد مؤقت (Counter-trend)" if _scenario_fb == "counter_trend_bounce" else "📉 استمرار الاتجاه",
+                "scenario_warn": "⚡ ذروة بيع — scalp فقط، وقف صارم" if _scenario_fb == "counter_trend_bounce" else "📉 الاتجاه هابط",
+                "max_size_pct":  0.12 if _scenario_fb == "counter_trend_bounce" else 0.20,
+                "target_mult":   1.5  if _scenario_fb == "counter_trend_bounce" else 2.0,
+                "oi_data": _oi_data, "fund_data": _fund_data,
+                "whale_data": _whale_data, "onchain_data": _onchain_an,
+                "atr_value": round(_calc_atr(candles) * price / 100, 2),
+            }
         class _AnalyzeRegime:
             description_ar = regime_desc
             market_phase   = getattr(regime_obj, "market_phase", "") if "regime_obj" in dir() else (

@@ -1013,10 +1013,10 @@ async def cmd_autotrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if action in ("on", "تشغيل"):
             _sm.set_autotrade_on(user_id, True)
-            # إصلاح: تفعيل engine.auto_trade_enabled أيضاً
-            engine = _eng(context)
-            if engine:
-                engine.auto_trade_enabled = True
+            # تفعيل engine flag أيضاً
+            _eng_ref = _eng(context)
+            if _eng_ref:
+                _eng_ref.auto_trade_enabled = True
             await update.message.reply_text(
                 "✅ *التداول الآلي مُفعَّل*\n"
                 "━━━━━━━━━━━━━━━━━━\n"
@@ -1029,9 +1029,6 @@ async def cmd_autotrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         elif action in ("off", "إيقاف"):
             _sm.set_autotrade_on(user_id, False)
-            engine = _eng(context)
-            if engine:
-                engine.auto_trade_enabled = False
             await update.message.reply_text(
                 "⏹️ *التداول الآلي مُوقَف*\n"
                 "━━━━━━━━━━━━━━━━━━\n"
@@ -1164,90 +1161,6 @@ def register(app):
     app.add_handler(CallbackQueryHandler(
         cb_autotrade_decision, pattern=r"^autotrade_(confirm|ignore)"))
 
-async def cb_autotrade_decision(update, context):
-    """
-    معالجة قرار المستخدم الحقيقي: نفّذ أو تجاهل الصفقات الآلية.
-    """
-    query  = update.callback_query
-    await query.answer()
-    engine = _eng(context)
-    if not engine:
-        await query.edit_message_text("⚠️ النظام لم يُهيَّأ"); return
-
-    user_id = query.from_user.id
-    data    = query.data  # autotrade_confirm_BTC_long_61037.20,... أو autotrade_ignore
-
-    if data == "autotrade_ignore":
-        await query.edit_message_text("❌ تم تجاهل الإشارات.")
-        return
-
-    # استخراج بيانات الصفقات من callback_data
-    try:
-        sig_str = data.replace("autotrade_confirm_", "")
-        trades  = []
-        for part in sig_str.split(","):
-            bits = part.split("_")
-            if len(bits) >= 3:
-                trades.append({
-                    "symbol":    bits[0],
-                    "direction": bits[1],
-                    "price":     float(bits[2]),
-                })
-    except Exception as e:
-        await query.edit_message_text(f"❌ خطأ في البيانات: {e}")
-        return
-
-    lines = ["✅ *صفقات مُنفَّذة*", ""]
-    for t in trades:
-        try:
-            candles  = await engine.data_layer.get_ohlcv(t["symbol"], "1d", 100)
-            price_d  = await engine.data_layer.get_price(t["symbol"])
-            price    = float((price_d or {}).get("price") or t["price"])
-            fear     = await engine.data_layer.get_fear_greed()
-            fear_val = int((fear or {}).get("value") or 50)
-
-            atr_pct = 3.0
-            regime  = engine.regime_detector.detect(candles or [], fear_greed=fear_val)
-
-            from core.risk_engine import RiskDecision
-            risk = engine.risk_engine.assess(
-                t["symbol"], t["direction"], 0.75,
-                price, atr_pct, regime.regime.value)
-
-            if risk.decision == RiskDecision.REJECT:
-                lines.append(f"• {t['symbol']}: ❌ مرفوض من Risk Engine")
-                continue
-
-            # تنفيذ على المنصة الحقيقية
-            ex_info = engine.get_user_exchange(user_id)
-            if ex_info:
-                # تنفيذ حقيقي — يمر عبر order_manager
-                from core.order_manager import place_order
-                ok = await place_order(
-                    engine, user_id, t["symbol"],
-                    t["direction"], risk.approved_size, price)
-                status = "✅ حقيقي" if ok else "⚠️ فشل"
-            else:
-                # virtual fallback
-                engine.virtual_wallet.open_trade(
-                    symbol=t["symbol"], direction=t["direction"],
-                    entry=price, size_usd=risk.approved_size,
-                    stop_loss=price*(1-risk.stop_loss_pct/100),
-                    take_profit=price*(1+risk.take_profit_pct/100),
-                    reason="user_confirm")
-                status = "🎮 افتراضي"
-
-            dir_ar = "🟢 شراء" if t["direction"] == "long" else "🔴 بيع"
-            lines.append(
-                f"• {t['symbol']} {dir_ar} ${risk.approved_size:,.0f} — {status}")
-
-        except Exception as e:
-            lines.append(f"• {t['symbol']}: ❌ {e}")
-            logger.error(f"cb_autotrade_decision {t['symbol']}: {e}")
-
-    await query.edit_message_text("\n".join(lines), parse_mode="Markdown")
-
-
 @require_tier("setcustom")
 async def cmd_setcustom(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """يضبط باقة خاصة لمستخدم — للمدير فقط. /setcustom user_id coins label"""
@@ -1272,3 +1185,60 @@ async def cmd_setcustom(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown")
     except Exception as e:
         await update.message.reply_text(f"❌ خطأ: {e}")
+
+
+async def cb_autotrade_decision(update, context):
+    """معالجة قرار المستخدم: نفّذ أو تجاهل الصفقات الآلية."""
+    query  = update.callback_query
+    await query.answer()
+    engine = _eng(context)
+    if not engine:
+        await query.edit_message_text("⚠️ النظام لم يُهيَّأ")
+        return
+
+    data = query.data
+    if data == "autotrade_ignore":
+        await query.edit_message_text("❌ تم تجاهل الإشارات.")
+        return
+
+    # استخراج بيانات الصفقة
+    try:
+        sig_str = data.replace("autotrade_confirm_", "")
+        trades  = []
+        for part in sig_str.split(","):
+            bits = part.split("_")
+            if len(bits) >= 3:
+                trades.append({
+                    "symbol":    bits[0],
+                    "direction": bits[1],
+                    "price":     float(bits[2]),
+                })
+    except Exception as e:
+        await query.edit_message_text(f"❌ خطأ: {e}")
+        return
+
+    lines = ["✅ *صفقات مُنفَّذة*", ""]
+    from core.virtual_wallet import VirtualWallet as _VW
+    from core.state_manager  import state_manager as _sm_cb
+    uid = query.from_user.id
+
+    for t in trades:
+        try:
+            price_d = await engine.data_layer.get_price(t["symbol"])
+            price   = float((price_d or {}).get("price") or t["price"])
+            _wdata  = _sm_cb.get_virtual_wallet(uid) or {
+                "balance": 10000.0, "invested": 0.0,
+                "profit": 0.0, "positions": {}, "history": []}
+            _vw     = _VW(_wdata)
+            _amt    = min(_vw.total_value * 0.10, _vw.balance)
+            _result = _vw.buy(t["symbol"], price, max(_amt, 50))
+            if _result.get("ok"):
+                _sm_cb.save_virtual_wallet(uid, _vw.to_dict())
+                dir_ar = "🟢 شراء" if t["direction"] == "long" else "🔴 بيع"
+                lines.append(f"• {t['symbol']} {dir_ar} ${_amt:,.0f} ✅")
+            else:
+                lines.append(f"• {t['symbol']}: {_result.get('msg','')[:50]}")
+        except Exception as e:
+            lines.append(f"• {t['symbol']}: ❌ {str(e)[:50]}")
+
+    await query.edit_message_text("\n".join(lines), parse_mode="Markdown")
