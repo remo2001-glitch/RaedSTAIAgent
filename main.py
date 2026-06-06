@@ -448,6 +448,29 @@ def build_app() -> Application:
     plan_handlers.register(app)
     trading_handlers.register(app)
 
+    # ── T1/T2/T4: أوامر جديدة ──────────────────────────
+    from handlers.commands import (
+        cmd_vtrades, cmd_profile, _start_survey,
+        cb_vclose, cb_goto_vtrades, cb_goto_trades,
+        cb_survey_goal, cb_survey_risk, cb_survey_hold,
+        cb_survey_exp, cb_survey_exec,
+        cb_profile_violations,
+    )
+    from telegram.ext import CallbackQueryHandler as _CQH
+    app.add_handler(CommandHandler("vtrades",  cmd_vtrades))
+    app.add_handler(CommandHandler("profile",  cmd_profile))
+    # Survey callbacks
+    app.add_handler(_CQH(cb_survey_goal,    pattern=r"^survey_goal_"))
+    app.add_handler(_CQH(cb_survey_risk,    pattern=r"^survey_risk_"))
+    app.add_handler(_CQH(cb_survey_hold,    pattern=r"^survey_hold_"))
+    app.add_handler(_CQH(cb_survey_exp,     pattern=r"^survey_exp_"))
+    app.add_handler(_CQH(cb_survey_exec,    pattern=r"^survey_exec_"))
+    app.add_handler(_CQH(cb_profile_violations, pattern=r"^profile_violations$"))
+    # vtrades callbacks
+    app.add_handler(_CQH(cb_vclose,         pattern=r"^vclose_"))
+    app.add_handler(_CQH(cb_goto_vtrades,   pattern=r"^goto_vtrades$"))
+    app.add_handler(_CQH(cb_goto_trades,    pattern=r"^goto_trades$"))
+
     # ── معالج الأخطاء ──
     app.add_error_handler(error_handler)
 
@@ -554,9 +577,14 @@ async def hourly_alert_job(context: ContextTypes.DEFAULT_TYPE):
                     for sig_info in strong_signals_data:
                         if sig_info["confidence"] < 0.80:
                             continue
-                        _max_buy = _vw_h.total_value * 0.10
-                        _buy_amt = min(sig_info.get("approved_size", _max_buy), _max_buy)
-                        _buy_amt = max(_buy_amt, 50)
+                        # إصلاح #612: حجم الصفقة بناءً على Confidence وحجم المحفظة
+                        _conf     = sig_info["confidence"]
+                        _vw_total = _vw_h.total_value
+                        # Confidence 80-89% → 10% | 89%+ → 15%
+                        _pct     = 0.15 if _conf >= 0.89 else 0.10
+                        _max_buy = _vw_total * _pct
+                        _buy_amt = min(_max_buy, _vw_h.balance * 0.95)
+                        _buy_amt = max(_buy_amt, 100)  # حد أدنى $100
                         _result  = _vw_h.buy(
                             symbol     = sig_info["symbol"],
                             price      = sig_info["price"],
