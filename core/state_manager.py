@@ -607,6 +607,80 @@ class StateManager:
 
         return True, "✅ يمكنك التحديث"
 
+    # ══ نظام قيود التنفيذ الآلي (Q1-Q5) ══════════════════════
+    # اليومي:  5 صفقات × 5%  = 25% من المحفظة
+    # الأسبوعي: 2 صفقات × 7.5% = 15%
+    # الشهري:  3 صفقات × 10% = 30%
+
+    TRADE_LIMITS = {
+        "daily":   {"max_trades": 5,  "pct_per_trade": 0.05,  "window_hours": 24},
+        "weekly":  {"max_trades": 2,  "pct_per_trade": 0.075, "window_hours": 168},
+        "monthly": {"max_trades": 3,  "pct_per_trade": 0.10,  "window_hours": 720},
+    }
+
+    def get_trade_log(self, user_id: int) -> dict:
+        """سجل الصفقات المنفَّذة حسب النوع."""
+        return self._get_user(user_id).get("auto_trade_log", {
+            "daily": [], "weekly": [], "monthly": []})
+
+    def save_trade_log(self, user_id: int, log: dict):
+        """يحفظ سجل الصفقات."""
+        ud = self._get_user(user_id)
+        ud["auto_trade_log"] = log
+        self._set_user(user_id, ud)
+        if self._redis_ok:
+            try: self._redis_set_user(user_id, ud)
+            except: pass
+
+    def can_execute_trade(self, user_id: int, symbol: str,
+                          scan_type: str, portfolio_value: float) -> tuple:
+        """
+        يتحقق إذا كان يمكن تنفيذ صفقة جديدة.
+        يُعيد (can_trade: bool, amount_usd: float, reason: str)
+        """
+        import time as _t
+        limits = self.TRADE_LIMITS.get(scan_type)
+        if not limits:
+            return False, 0, f"نوع مسح غير معروف: {scan_type}"
+
+        log = self.get_trade_log(user_id)
+        scan_log = log.get(scan_type, [])
+        now = _t.time()
+        window = limits["window_hours"] * 3600
+
+        # تنظيف السجلات القديمة خارج النافذة الزمنية
+        scan_log = [t for t in scan_log if now - t.get("ts", 0) < window]
+
+        # فحص عدد الصفقات
+        if len(scan_log) >= limits["max_trades"]:
+            return False, 0, (f"وصلت للحد الأقصى {limits['max_trades']} "
+                               f"صفقات {scan_type} في هذه الفترة")
+
+        # فحص تكرار نفس العملة في نفس نوع المسح (Q4)
+        traded_symbols = [t.get("symbol") for t in scan_log]
+        if symbol in traded_symbols:
+            return False, 0, (f"العملة {symbol} مُنفَّذة بالفعل في "
+                               f"مسح {scan_type} هذه الفترة")
+
+        # حساب المبلغ
+        amount = portfolio_value * limits["pct_per_trade"]
+        return True, amount, "✅ مسموح"
+
+    def record_auto_trade(self, user_id: int, symbol: str,
+                           scan_type: str, amount: float):
+        """يُسجّل صفقة آلية منفَّذة."""
+        import time as _t
+        log = self.get_trade_log(user_id)
+        if scan_type not in log:
+            log[scan_type] = []
+        log[scan_type].append({
+            "symbol":    symbol,
+            "amount":    amount,
+            "ts":        _t.time(),
+            "scan_type": scan_type,
+        })
+        self.save_trade_log(user_id, log)
+
     def get_virtual_wallet(self, user_id: int) -> dict:
         """يقرأ المحفظة من Redis مباشرة (مفتاح منفصل = لا يُفقَد عند Restart)."""
         if self._redis_ok:
