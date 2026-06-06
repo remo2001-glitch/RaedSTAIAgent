@@ -1592,6 +1592,14 @@ async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     strategy = _sm_pr.get_strategy_config(user_id)
     tier_name = _sm_pr.get_tier_name(user_id)
 
+    # D4: فحص موافقة إخلاء المسؤولية
+    from core.state_manager import state_manager as _sm_pf
+    if not _sm_pf.has_disclaimer_consent(user_id, "general"):
+        await update.message.reply_text(
+            "⚠️ يجب الموافقة على إخلاء المسؤولية أولاً.\n"
+            "اكتب /disclaimer للمراجعة والموافقة.")
+        return
+
     if not profile:
         # لم يُكمل الاستبيان بعد
         await _start_survey(update, context)
@@ -1626,7 +1634,24 @@ async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def _start_survey(update, context):
-    """بدء الاستبيان الشخصي."""
+    """بدء الاستبيان الشخصي — مع إخلاء المسؤولية أولاً."""
+    from core.state_manager import state_manager as _sm_srv
+    user_id = update.effective_user.id
+
+    # D3: فحص موافقة إخلاء المسؤولية
+    if not _sm_srv.has_disclaimer_consent(user_id, "survey"):
+        buttons = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ أوافق وأبدأ الاستبيان",
+                                 callback_data="disclaimer_accept_survey"),
+            InlineKeyboardButton("❌ لاحقاً", callback_data="disclaimer_reject"),
+        ]])
+        await update.message.reply_text(
+            _sm_srv.DISCLAIMER_TEXT,
+            parse_mode="Markdown",
+            reply_markup=buttons)
+        return
+
+    # المستخدم وافق — نبدأ الاستبيان
     context.user_data["survey_step"] = 1
     buttons = InlineKeyboardMarkup([[
         InlineKeyboardButton("💰 حفظ رأس المال",  callback_data="survey_goal_preserve"),
@@ -1857,6 +1882,122 @@ async def cb_vclose(update, context):
             pass
 
 
+# ══ إخلاء المسؤولية + تعديل قيود الجلسة ════════════════════
+
+async def cmd_disclaimer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """عرض إخلاء المسؤولية للموافقة عليه."""
+    from core.state_manager import state_manager as _sm_dis
+    user_id = update.effective_user.id
+    consent_type = (context.args[0] if context.args else "general")
+
+    if _sm_dis.has_disclaimer_consent(user_id, consent_type):
+        await update.message.reply_text(
+            "✅ لقد وافقت على إخلاء المسؤولية مسبقاً.\n"
+            "سجلاتك محفوظة.")
+        return
+
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    buttons = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ أوافق على الشروط",
+                             callback_data=f"disclaimer_accept_{consent_type}"),
+        InlineKeyboardButton("❌ لا أوافق",
+                             callback_data="disclaimer_reject"),
+    ]])
+    await update.message.reply_text(
+        _sm_dis.DISCLAIMER_TEXT,
+        parse_mode="Markdown",
+        reply_markup=buttons)
+
+
+async def cb_disclaimer_accept(update, context):
+    """تسجيل موافقة المستخدم على إخلاء المسؤولية."""
+    query = update.callback_query
+    await query.answer("✅ تم تسجيل موافقتك")
+    from core.state_manager import state_manager as _sm_da
+    user_id = query.from_user.id
+
+    # استخراج نوع الموافقة
+    parts = query.data.split("_")  # disclaimer_accept_TYPE
+    consent_type = parts[2] if len(parts) > 2 else "general"
+
+    # حفظ الموافقة للأبد
+    _sm_da.save_disclaimer_consent(user_id, consent_type)
+
+    await query.edit_message_text(
+        "✅ *شكراً — تم تسجيل موافقتك*\n\n"
+        "موافقتك محفوظة بشكل دائم في سجلاتك.\n"
+        "يمكنك الآن متابعة استخدام رائد.",
+        parse_mode="Markdown")
+
+    # إذا كان الإجراء تعديل القيود، افتح نافذة التعديل
+    if consent_type == "session_limits":
+        context.user_data["awaiting_session_limits"] = True
+        await query.message.reply_text(
+            "⚙️ *تعديل قيود الجلسة*\n\n"
+            "أرسل القيود بالصيغة التالية:\n"
+            "`daily_trades=5 daily_pct=10`\n"
+            "`weekly_trades=2 weekly_pct=12`\n\n"
+            "_التعديلات تُطبَّق على هذه الجلسة فقط_",
+            parse_mode="Markdown")
+
+
+async def cb_disclaimer_reject(update, context):
+    """رفض إخلاء المسؤولية."""
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(
+        "❌ لم توافق على الشروط.\n"
+        "لا يمكن متابعة هذا الإجراء بدون موافقة.")
+
+
+async def cmd_set_limits(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """تعديل قيود الجلسة للذهبي+."""
+    from core.state_manager import state_manager as _sm_sl
+    user_id = update.effective_user.id
+    tier    = _sm_sl.get_tier(user_id)
+
+    if tier not in ("gold", "diamond", "admin"):
+        await update.message.reply_text(
+            "🔒 هذه الميزة للباقة الذهبية وأعلى فقط.")
+        return
+
+    # تحقق من موافقة إخلاء المسؤولية
+    if not _sm_sl.has_disclaimer_consent(user_id, "session_limits"):
+        context.user_data["pending_action"] = "set_limits"
+        # إرسال إخلاء المسؤولية
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        buttons = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ أوافق على الشروط",
+                                 callback_data="disclaimer_accept_session_limits"),
+            InlineKeyboardButton("❌ لا أوافق", callback_data="disclaimer_reject"),
+        ]])
+        await update.message.reply_text(
+            _sm_sl.DISCLAIMER_TEXT +
+            "\n\n⚠️ *تعديل قيود التداول يتطلب موافقتك على إخلاء المسؤولية*",
+            parse_mode="Markdown",
+            reply_markup=buttons)
+        return
+
+    # المستخدم وافق مسبقاً — عرض الإعدادات الحالية
+    session = _sm_sl.get_session_limits(user_id)
+    lines = [
+        "⚙️ *قيود الجلسة الحالية*",
+        "━━━━━━━━━━━━━━━━━━",
+        "",
+        f"• يومي:  {session.get('daily',{}).get('max_trades',5)} صفقات × "
+        f"{session.get('daily',{}).get('pct_per_trade',0.15)*100:.0f}%",
+        f"• أسبوعي: {session.get('weekly',{}).get('max_trades',2)} صفقات × "
+        f"{session.get('weekly',{}).get('pct_per_trade',0.15)*100:.0f}%",
+        f"• شهري:  {session.get('monthly',{}).get('max_trades',3)} صفقات × "
+        f"{session.get('monthly',{}).get('pct_per_trade',0.15)*100:.0f}%",
+        "",
+        "_أرسل `/setlimits daily=5,10 weekly=2,12 monthly=3,10`_",
+        "_مثال: 5 صفقات يومية بـ 10% لكل صفقة_",
+    ]
+    await update.message.reply_text(
+        "\n".join(lines), parse_mode="Markdown")
+
+
 async def cb_goto_vtrades(update, context):
     await update.callback_query.answer()
     await cmd_vtrades(update, context)
@@ -1898,6 +2039,11 @@ def register(app):
     app.add_handler(CallbackQueryHandler(cb_vclose,       pattern=r"^vclose_"))
     app.add_handler(CallbackQueryHandler(cb_goto_vtrades, pattern=r"^goto_vtrades$"))
     app.add_handler(CallbackQueryHandler(cb_goto_trades,  pattern=r"^goto_trades$"))
+    # D3+D4+R5: إخلاء المسؤولية + قيود الجلسة
+    app.add_handler(CommandHandler("disclaimer", cmd_disclaimer))
+    app.add_handler(CommandHandler("setlimits",  cmd_set_limits))
+    app.add_handler(CallbackQueryHandler(cb_disclaimer_accept, pattern=r"^disclaimer_accept_"))
+    app.add_handler(CallbackQueryHandler(cb_disclaimer_reject, pattern=r"^disclaimer_reject$"))
 
 @require_tier("setcustom")
 async def cmd_setcustom(update: Update, context: ContextTypes.DEFAULT_TYPE):
