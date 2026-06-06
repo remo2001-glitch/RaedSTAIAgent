@@ -20,6 +20,9 @@ from core.middleware    import require_tier
 from core.config        import E, MSG
 from core.database      import db
 
+def _sig() -> str:
+    return "\n\n─────────────────\n📊 رائد التداول الذكي"
+
 logger = logging.getLogger(__name__)
 
 # منصات محجوبة من Railway بسبب قيود IP
@@ -1231,7 +1234,12 @@ async def cmd_vtrades(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines  = ["📋 *الصفقات الافتراضية المفتوحة*", "━━━━━━━━━━━━━━━━━━", ""]
     buttons_list = []
 
-    for sym, pos in vw.positions.items():
+    # إصلاح #663: dedup المراكز (منع التكرار)
+    seen_syms = set()
+    for sym, pos in list(vw.positions.items()):
+        if sym in seen_syms:
+            continue
+        seen_syms.add(sym)
         # السعر الحالي
         cur_price = pos["avg_price"]
         if engine:
@@ -1780,56 +1788,73 @@ async def cb_profile_violations(update, context):
 async def cb_vclose(update, context):
     """إغلاق صفقة افتراضية كاملة أو جزئية."""
     query = update.callback_query
-    await query.answer()
+    try:
+        await query.answer()
+    except Exception:
+        pass
+    if not query or not query.from_user:
+        return
+
     user_id = query.from_user.id
     from core.state_manager import state_manager as _sm_vc
     from core.virtual_wallet import VirtualWallet as _VW_vc
 
-    parts   = query.data.split("_")  # vclose_BTCUSDT_100
-    sym     = parts[1] if len(parts) > 1 else ""
-    pct     = int(parts[2]) if len(parts) > 2 else 100
+    try:
+        # parsing آمن: "vclose_SOLUSDT_100" أو "vclose_SOL_100"
+        rest  = query.data[7:]            # نُزيل "vclose_"
+        parts = rest.rsplit("_", 1)       # نقسم من اليمين مرة واحدة
+        sym   = parts[0] if parts else ""
+        pct   = int(parts[1]) if len(parts) > 1 else 100
 
-    vw_data = _sm_vc.get_virtual_wallet(user_id) or {}
-    vw      = _VW_vc(vw_data)
+        vw_data = _sm_vc.get_virtual_wallet(user_id) or {}
+        vw      = _VW_vc(vw_data)
 
-    if sym not in vw.positions:
-        await query.edit_message_text(f"❌ لا يوجد مركز مفتوح على {sym}")
-        return
+        if sym not in vw.positions:
+            await query.edit_message_text(f"❌ لا يوجد مركز مفتوح على {sym}")
+            return
 
-    # السعر الحالي
-    engine    = context.bot_data.get("raed_engine")
-    cur_price = vw.positions[sym]["avg_price"]
-    if engine:
+        # السعر الحالي
+        engine    = context.bot_data.get("raed_engine")
+        cur_price = vw.positions[sym]["avg_price"]
+        if engine:
+            try:
+                pd = await engine.data_layer.get_price(sym.replace("USDT",""))
+                if pd: cur_price = float(pd.get("price", cur_price))
+            except Exception:
+                pass
+
+        # حساب الكمية
+        qty    = vw.positions[sym]["quantity"]
+        sell_q = qty if pct == 100 else qty * (pct / 100)
+
+        result = vw.sell(sym, cur_price, sell_q)
+        if result.get("ok"):
+            _sm_vc.save_virtual_wallet(user_id, vw.to_dict())
+            pnl  = result.get("trade", {}).get("pnl", 0)
+            sign = "+" if pnl >= 0 else ""
+            try:
+                if engine:
+                    engine.drift_monitor.record_outcome(pnl > 0)
+            except Exception:
+                pass
+            _close_type = "كامل" if pct == 100 else f"{pct}%"
+            await query.edit_message_text(
+                f"✅ *تم الإغلاق*\n\n"
+                f"• {sym} {_close_type}\n"
+                f"• سعر الإغلاق: ${cur_price:,.4f}\n"
+                f"• PnL: {sign}${pnl:,.2f}\n"
+                f"• الرصيد: ${vw.balance:,.2f}\n\n"
+                "🎮 /vtrades لعرض الصفقات",
+                parse_mode="Markdown")
+        else:
+            await query.edit_message_text(f"❌ {result.get('msg','خطأ في الإغلاق')}")
+
+    except Exception as _cve:
+        logger.error(f"cb_vclose error: {_cve}")
         try:
-            pd = await engine.data_layer.get_price(sym.replace("USDT",""))
-            if pd: cur_price = float(pd.get("price", cur_price))
-        except: pass
-
-    # حساب الكمية
-    qty    = vw.positions[sym]["quantity"]
-    sell_q = qty if pct == 100 else qty * (pct / 100)
-
-    result = vw.sell(sym, cur_price, sell_q)
-    if result.get("ok"):
-        _sm_vc.save_virtual_wallet(user_id, vw.to_dict())
-        pnl = result.get("trade", {}).get("pnl", 0)
-        sign = "+" if pnl >= 0 else ""
-        # تسجيل في drift_monitor
-        try:
-            if engine:
-                engine.drift_monitor.record_outcome(pnl > 0)
-        except: pass
-        _close_type = "كامل" if pct == 100 else f"{pct}%"
-        await query.edit_message_text(
-            f"✅ *تم الإغلاق*\n\n"
-            f"• {sym} {_close_type}\n"
-            f"• سعر الإغلاق: ${cur_price:,.4f}\n"
-            f"• PnL: {sign}${pnl:,.2f}\n"
-            f"• الرصيد: ${vw.balance:,.2f}\n\n"
-            "🎮 /vtrades لعرض الصفقات",
-            parse_mode="Markdown")
-    else:
-        await query.edit_message_text(f"❌ {result.get('msg','خطأ')}")
+            await query.edit_message_text(f"❌ خطأ: {str(_cve)[:100]}")
+        except Exception:
+            pass
 
 
 async def cb_goto_vtrades(update, context):
