@@ -438,14 +438,17 @@ def _build_professional_block(
     # إصلاح #471: فقط إذا ratio حقيقي (> 0) نُضيف flag
     if _whale_ratio > 0 and _whale_ratio < 0.6:
         _conf_flags = list(_conf_flags) + ["الحيتان تتراكم ✓"]
-    # إصلاح #540: RSI extreme + BB = تأكيدات قوية
+    # إصلاح #619/#651: Volume Spike يُضاف كـ Confirmation Flag
+    if _vol_ratio >= 1.5:
+        _conf_flags = list(_conf_flags) + [f"Volume Spike {_vol_ratio:.1f}x ✓"]
+    # إصلاح #540: RSI extreme + BB
     if rsi < 20:
         _conf_flags = list(_conf_flags) + [f"RSI ذروة بيع ({rsi:.0f}) ✓"]
     elif rsi > 80:
         _conf_flags = list(_conf_flags) + [f"RSI ذروة شراء ({rsi:.0f}) ✓"]
-    if _bb_pos_v < 0.1:
+    if _bb_pos_v < 0.15:
         _conf_flags = list(_conf_flags) + ["BB تحت الحد السفلي ✓"]
-    elif _bb_pos_v > 0.9:
+    elif _bb_pos_v > 0.85:
         _conf_flags = list(_conf_flags) + ["BB فوق الحد العلوي ✓"]
 
     _flags_found = len(_conf_flags)
@@ -485,24 +488,33 @@ def _build_professional_block(
     f236   = fib.get("0.236", price * 1.06) if fib else price * 1.06
     f382   = fib.get("0.382", price * 1.10) if fib else price * 1.10
     # إصلاح #439: Aggressive = عند الدعم (أدنى) | Conservative = بعد تأكيد (أعلى)
-    # إصلاح #538: Entry Aggressive = أفضل نقطة للشراء (عند/قرب الدعم)
-    # لا يكون أقل من الدعم بأكثر من ATR واحد
-    if ns > 0 and price * 0.97 < ns < price:
-        # الدعم قريب ومعقول
-        entry_agg = ns
+    # إصلاح #652: Entry Aggressive دائماً < Entry Conservative
+    # Aggressive = أدنى سعر نستهدف (عند الدعم)
+    # Conservative = بعد تأكيد الارتداد (أقرب للسعر الحالي)
+    if ns > 0 and price * 0.94 < ns < price:
+        entry_agg = ns  # عند دعم فيبو
     else:
-        # بدون دعم واضح: نستخدم السعر الحالي مع خصم بسيط
-        entry_agg = price * (1 - atr_dec * 0.3)
-    # Conservative = بعد تأكيد الارتداد (أعلى من Aggressive)
-    entry_cons = min(entry_agg * (1 + atr_dec * 0.4), price * 0.999)
+        entry_agg = price * (1 - atr_dec * 0.8)  # أدنى من السعر الحالي
+    # Conservative: بين entry_agg والسعر الحالي
+    _cons_offset = (price - entry_agg) * 0.4  # 40% من المسافة
+    entry_cons = entry_agg + _cons_offset
+    entry_cons = min(entry_cons, price * 0.998)  # لا يتجاوز السعر الحالي
+    # ضمان: Aggressive < Conservative
+    if entry_agg >= entry_cons:
+        entry_cons = entry_agg * 1.005
 
     # ── TP متدرج حسب نوع الصفقة ──────────────────────────────
     if _scenario == "counter_trend_bounce":
-        # إصلاح #516/#539: Scalp أهداف متمايزة
-        tp1_v = nr_fib if (nr_fib > price and 0.02 < abs(nr_fib-price)/price < 0.06) else price * (1 + atr_dec * 1.5)
-        # TP2 يجب أن يكون على الأقل 3% بعد TP1
-        tp2_min = tp1_v * 1.03
-        tp2_v = f236 if (f236 > tp2_min) else tp1_v * (1 + atr_dec * 1.5)
+        # إصلاح #622: Scalp — TP1 ≤ 6% و TP2 ≤ 10%
+        _tp1_pct = min(0.06, atr_dec * 1.5)  # max 6%
+        _tp2_pct = min(0.10, atr_dec * 2.5)  # max 10%
+        tp1_v = price * (1 + _tp1_pct)
+        # استخدام Fib إذا كان ضمن النطاق المعقول
+        if nr_fib > price and 0.02 < abs(nr_fib-price)/price <= 0.06:
+            tp1_v = nr_fib
+        tp2_v = tp1_v * (1 + min(0.04, atr_dec))  # TP2 = TP1 + 4% max
+        # تأكد أن TP2 لا يتجاوز 10% من السعر الحالي
+        tp2_v = min(tp2_v, price * 1.10)
         tp3_v = None
         _time_exit = "3 أيام"
         _trade_dur = "ساعات — 3 أيام (Scalp)"
@@ -517,9 +529,12 @@ def _build_professional_block(
         _time_exit = "5 أيام"
         _trade_dur = "2–5 أيام"
 
-    # R/R واقعي (سقف 1:4)
-    rr_real = abs(tp1_v - entry_agg) / max(abs(pro_sl - entry_agg), 0.0001)
-    rr_real = round(min(max(rr_real, 1.0), 4.0), 1)
+    # إصلاح #620: R/R من Entry Aggressive إلى TP1 vs SL
+    _sl_real = pro_sl if (pro_sl > 0 and pro_sl < entry_agg) else entry_agg * (1 - atr_dec * 1.5)
+    _risk     = abs(entry_agg - _sl_real)
+    _reward   = abs(tp1_v - entry_agg)
+    rr_real   = _reward / max(_risk, 0.0001)
+    rr_real   = round(min(max(rr_real, 1.0), 4.0), 1)
 
     # Worst-Case
     wc_loss = abs(price - pro_sl) / max(price, 0.001) * 100

@@ -594,8 +594,9 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if len(_fca_c) >= 30 and _fca_p > 0:
                 _fca = _calc_price_forecast(
                     _fca_c, days=30, fear_greed=fear_val,
-                    btc_dominance=float((regime.metrics or {})
-                                        .get("btc_dominance", 50) or 50),
+                    btc_dominance=float(
+                        (regime.metrics or {}).get("btc_dominance") or
+                        btc_dom or 50),
                     market_regime=regime.description_ar,
                 )
                 if _fca:
@@ -609,7 +610,15 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "⚠️ خطة استرشادية — القرار النهائي للمستخدم",
             "🤖 رائد التداول الذكي",
         ]
-        await msg.edit_text(_clean("\n".join(lines)), parse_mode=ParseMode.MARKDOWN)
+        # T3: أزرار تفاعل
+        _fb_kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ أتفق مع الخطة", callback_data="plan_agree"),
+            InlineKeyboardButton("💬 لدي ملاحظة",   callback_data="plan_comment"),
+        ]])
+        await msg.edit_text(
+            _clean("\n".join(lines)),
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=_fb_kb)
 
     except Exception as e:
         logger.error(f"cmd_plan_month: {e}", exc_info=True)
@@ -627,6 +636,37 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 @require_tier("planweek")
+# ══ Plan Start — سؤال أولاً (T3) ══════════════════════════════════════════════
+
+@require_tier("planweek")
+async def cmd_planweek_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """T3: نقطة دخول /planweek — يسأل عام أم محدد."""
+    buttons = InlineKeyboardMarkup([[
+        InlineKeyboardButton("📊 عام (حسب باقتي)", callback_data="plan_w_general"),
+        InlineKeyboardButton("🎯 عملات محددة",     callback_data="plan_w_custom"),
+    ]])
+    await update.message.reply_text(
+        "📅 *الخطة الأسبوعية*\n\n"
+        "هل تريد خطة عامة لأهم الأصول حسب باقتك،\n"
+        "أم تحليل عملات محددة؟\n\n"
+        "_للعملات المحددة: أرسل اسماءها بعد الاختيار_",
+        parse_mode="Markdown", reply_markup=buttons)
+
+
+@require_tier("planmonth")
+async def cmd_planmonth_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """T3: نقطة دخول /planmonth — يسأل عام أم محدد."""
+    buttons = InlineKeyboardMarkup([[
+        InlineKeyboardButton("📊 عام (حسب باقتي)", callback_data="plan_m_general"),
+        InlineKeyboardButton("🎯 عملات محددة",     callback_data="plan_m_custom"),
+    ]])
+    await update.message.reply_text(
+        "📅 *الخطة الشهرية*\n\n"
+        "هل تريد خطة عامة لأهم الأصول حسب باقتك،\n"
+        "أم تحليل عملات محددة؟",
+        parse_mode="Markdown", reply_markup=buttons)
+
+
 async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine = _eng(context)
     if not engine:
@@ -825,8 +865,9 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _fc = _calc_price_forecast(
                     _fc_candles, days=30,
                     fear_greed=fear_val,
-                    btc_dominance=float((getattr(regime, "metrics", {}) or {})
-                                        .get("btc_dominance", 50) or 50),
+                    btc_dominance=float(
+                        (getattr(regime, "metrics", {}) or {}).get("btc_dominance") or
+                        btc_dom or 50),
                     market_regime=regime.description_ar,
                 )
                 if _fc:
@@ -902,7 +943,12 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🤖 رائد التداول الذكي",
         ]
 
-        await msg.edit_text(_clean("\n".join(lines)), parse_mode=ParseMode.MARKDOWN)
+        # T3: أزرار تفاعل
+        _fb_kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ أتفق مع الخطة", callback_data="plan_agree"),
+            InlineKeyboardButton("💬 لدي ملاحظة",   callback_data="plan_comment"),
+        ]])
+        await msg.edit_text(_clean("\n".join(lines)), parse_mode=ParseMode.MARKDOWN, reply_markup=_fb_kb)
 
     except Exception as e:
         logger.error(f"cmd_plan_week: {e}")
@@ -1224,11 +1270,72 @@ async def cmd_reject(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def register(app):
-    app.add_handler(CommandHandler("planmonth",  cmd_plan_month))
-    app.add_handler(CommandHandler("planweek",   cmd_plan_week))
+    from telegram.ext import CallbackQueryHandler as _CQH
+    # أوامر الخطط — entry point جديد (T3)
+    app.add_handler(CommandHandler("planmonth",  cmd_planmonth_entry))
+    app.add_handler(CommandHandler("planweek",   cmd_planweek_entry))
+    # الأوامر الكاملة (تُستدعى من callbacks)
+    app.add_handler(CommandHandler("planmonth_full", cmd_plan_month))
+    app.add_handler(CommandHandler("planweek_full",  cmd_plan_week))
     app.add_handler(CommandHandler("portfolio",  cmd_portfolio))
     app.add_handler(CommandHandler("stats",      cmd_stats))
     app.add_handler(CommandHandler("approve",    cmd_approve))
     app.add_handler(CommandHandler("reject",     cmd_reject))
+    # Callbacks للخطط
+    app.add_handler(_CQH(cb_plan_agree,   pattern=r"^plan_agree$"))
+    app.add_handler(_CQH(cb_plan_comment, pattern=r"^plan_comment$"))
+    app.add_handler(_CQH(cb_plan_general, pattern=r"^plan_(w|m)_general$"))
+    app.add_handler(_CQH(cb_plan_custom,  pattern=r"^plan_(w|m)_custom$"))
 
 # راسالة انتظار: 📋 الأصول في وضع المراقبة — لم تصل لشروط الدخول بعد
+
+
+# ══ Callbacks: Plan feedback (T3+T5) ══════════════════════════════════════════
+
+async def cb_plan_agree(update, context):
+    """المستخدم يتفق مع الخطة."""
+    query = update.callback_query
+    await query.answer("✅ تم التسجيل")
+    await query.edit_message_reply_markup(reply_markup=None)
+    await query.message.reply_text(
+        "✅ ممتاز! خطتك مُسجَّلة.\n"
+        "رائد سيُتابع معك التقدم في التقرير الأسبوعي.")
+
+
+async def cb_plan_comment(update, context):
+    """المستخدم لديه ملاحظة."""
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_reply_markup(reply_markup=None)
+    # حفظ state لانتظار الملاحظة
+    context.user_data["awaiting_plan_comment"] = True
+    await query.message.reply_text(
+        "💬 *شاركني ملاحظتك على الخطة*\n\n"
+        "اكتب ملاحظتك أو رأيك، وسأأخذها بعين الاعتبار.\n"
+        "_رائد سيتذكر رأيك ويستخدمه في التحليلات القادمة_",
+        parse_mode="Markdown")
+
+
+async def cb_plan_general(update, context):
+    """تنفيذ خطة عامة."""
+    query = update.callback_query
+    await query.answer()
+    plan_type = "week" if "plan_w" in query.data else "month"
+    context.args = []
+    if plan_type == "week":
+        await cmd_plan_week(update, context)
+    else:
+        await cmd_plan_month(update, context)
+
+
+async def cb_plan_custom(update, context):
+    """طلب إدخال عملات محددة."""
+    query = update.callback_query
+    await query.answer()
+    plan_type = "week" if "plan_w" in query.data else "month"
+    context.user_data["awaiting_plan_symbols"] = plan_type
+    await query.edit_message_text(
+        "🎯 *أدخل رموز العملات*\n\n"
+        "مثال: BTC ETH SOL XRP\n"
+        "_(مفصولة بمسافة)_",
+        parse_mode="Markdown")
