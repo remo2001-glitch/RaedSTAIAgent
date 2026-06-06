@@ -721,41 +721,45 @@ class RaedEngine:
                         # ── Virtual Wallet: تنفيذ فوري لكل مستخدم autotrade ──
                         from core.virtual_wallet import VirtualWallet as _VW
                         from core.state_manager  import state_manager as _sm_vw
-                        # استخدام state_manager (Redis) بدلاً من db (RAM)
-                        # لضمان استمرارية الصفقات عند Restart
+                        # Q1-Q5: تحديد نوع المسح لتطبيق القيود
+                        import datetime as _dt_scan
+                        _now_h = _dt_scan.datetime.now(_dt_scan.timezone.utc).hour
+                        _scan_type = "daily"  # الافتراضي = مسح ساعي
+
                         _autotrade_uids = _sm_vw.get_autotrade_users()
                         if not _autotrade_uids:
                             logger.info("Virtual trade: لا يوجد مستخدمون autotrade نشطون")
                         for _uid in _autotrade_uids:
                             try:
-                                # تحميل المحفظة من Redis عبر state_manager
+                                # تحميل المحفظة من Redis
                                 _wdata = _sm_vw.get_virtual_wallet(_uid)
                                 if not _wdata:
-                                    _wdata = {
-                                        "balance":   10000.0,
-                                        "invested":  0.0,
-                                        "profit":    0.0,
-                                        "positions": {},
-                                        "history":   [],
-                                    }
+                                    _wdata = {"balance": 10000.0, "invested": 0.0,
+                                              "profit": 0.0, "positions": {}, "history": []}
                                 _vw = _VW(_wdata)
 
-                                # تنفيذ buy() — amount مقيَّد بـ 10% من المحفظة
-                                _max_buy = _vw.total_value * 0.10
-                                _buy_amt = min(float(risk.approved_size or 500), _max_buy)
+                                # Q1-Q5: فحص قيود التنفيذ
+                                _can, _buy_amt, _limit_reason = _sm_vw.can_execute_trade(
+                                    _uid, s["symbol"], _scan_type, _vw.total_value)
+                                if not _can:
+                                    logger.info(f"Trade limit [{_scan_type}] {s['symbol']}: {_limit_reason}")
+                                    continue
+                                _buy_amt = min(_buy_amt, _vw.balance * 0.95)
                                 _buy_amt = max(_buy_amt, 50)
-                                _result  = _vw.buy(
+
+                                _result = _vw.buy(
                                     symbol     = s["symbol"],
                                     price      = s["price"],
                                     amount_usd = _buy_amt,
                                 )
                                 if _result.get("ok"):
-                                    # حفظ في Redis
                                     _sm_vw.save_virtual_wallet(_uid, _vw.to_dict())
+                                    # Q1-Q5: تسجيل الصفقة
+                                    _sm_vw.record_auto_trade(_uid, s["symbol"], _scan_type, _buy_amt)
                                     trade_rec["virtual_executed"] = True
                                     logger.info(
                                         f"✅ Virtual buy: {s['symbol']} "
-                                        f"${_buy_amt:,.0f} for user {_uid}")
+                                        f"${_buy_amt:,.0f} [{_scan_type}] for user {_uid}")
                                     # إشعار تأكيد للمستخدم (#608)
                                     _sfn_notify = getattr(self, "_send_fn", None)
                                     if _sfn_notify:
