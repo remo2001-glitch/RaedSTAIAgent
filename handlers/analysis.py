@@ -412,7 +412,17 @@ def _build_professional_block(
 
     # Funding Rate signal
     _fund_pct = float(_fund.get("rate_pct", 0) or 0)
-    _fund_sig = _fund.get("signal", "")
+    # إصلاح #518: signal يعكس الحالة الحقيقية
+    if _fund_pct < -0.02:
+        _fund_sig = "🟢 سالب جداً (ضغط على Shorts — فرصة Longs)"
+    elif _fund_pct < -0.005:
+        _fund_sig = "🟢 سالب (فرصة Long)"
+    elif _fund_pct > 0.02:
+        _fund_sig = "🔴 مرتفع جداً (ضغط على Longs)"
+    elif _fund_pct > 0.005:
+        _fund_sig = "🟡 إيجابي (محايد)"
+    else:
+        _fund_sig = _fund.get("signal", "⚪ محايد")
     # Open Interest signal
     _oi_chg   = float(_oi.get("oi_change_pct", 0) or 0)
     _oi_sig   = _oi.get("signal", "")
@@ -428,6 +438,15 @@ def _build_professional_block(
     # إصلاح #471: فقط إذا ratio حقيقي (> 0) نُضيف flag
     if _whale_ratio > 0 and _whale_ratio < 0.6:
         _conf_flags = list(_conf_flags) + ["الحيتان تتراكم ✓"]
+    # إصلاح #540: RSI extreme + BB = تأكيدات قوية
+    if rsi < 20:
+        _conf_flags = list(_conf_flags) + [f"RSI ذروة بيع ({rsi:.0f}) ✓"]
+    elif rsi > 80:
+        _conf_flags = list(_conf_flags) + [f"RSI ذروة شراء ({rsi:.0f}) ✓"]
+    if _bb_pos_v < 0.1:
+        _conf_flags = list(_conf_flags) + ["BB تحت الحد السفلي ✓"]
+    elif _bb_pos_v > 0.9:
+        _conf_flags = list(_conf_flags) + ["BB فوق الحد العلوي ✓"]
 
     _flags_found = len(_conf_flags)
     _confirmed   = _flags_found >= 2
@@ -466,16 +485,24 @@ def _build_professional_block(
     f236   = fib.get("0.236", price * 1.06) if fib else price * 1.06
     f382   = fib.get("0.382", price * 1.10) if fib else price * 1.10
     # إصلاح #439: Aggressive = عند الدعم (أدنى) | Conservative = بعد تأكيد (أعلى)
-    entry_agg  = ns if ns > 0 and ns < price * 0.99 else price * (1 - atr_dec * 0.5)
-    # Conservative = عند reclaim الدعم + ATR صغير (أعلى من Aggressive)
-    entry_cons = entry_agg * (1 + atr_dec * 0.3)
-    entry_cons = min(entry_cons, price * 0.999)  # لا يتجاوز السعر الحالي
+    # إصلاح #538: Entry Aggressive = أفضل نقطة للشراء (عند/قرب الدعم)
+    # لا يكون أقل من الدعم بأكثر من ATR واحد
+    if ns > 0 and price * 0.97 < ns < price:
+        # الدعم قريب ومعقول
+        entry_agg = ns
+    else:
+        # بدون دعم واضح: نستخدم السعر الحالي مع خصم بسيط
+        entry_agg = price * (1 - atr_dec * 0.3)
+    # Conservative = بعد تأكيد الارتداد (أعلى من Aggressive)
+    entry_cons = min(entry_agg * (1 + atr_dec * 0.4), price * 0.999)
 
     # ── TP متدرج حسب نوع الصفقة ──────────────────────────────
     if _scenario == "counter_trend_bounce":
-        # Scalp: هدف قريب فقط (2-5%)
-        tp1_v = nr_fib if (nr_fib > price and abs(nr_fib-price)/price < 0.08) else price * (1 + atr_dec * 1.5)
-        tp2_v = f236   if (f236 > tp1_v  and abs(f236-price)/price < 0.12)   else price * (1 + atr_dec * 2.5)
+        # إصلاح #516/#539: Scalp أهداف متمايزة
+        tp1_v = nr_fib if (nr_fib > price and 0.02 < abs(nr_fib-price)/price < 0.06) else price * (1 + atr_dec * 1.5)
+        # TP2 يجب أن يكون على الأقل 3% بعد TP1
+        tp2_min = tp1_v * 1.03
+        tp2_v = f236 if (f236 > tp2_min) else tp1_v * (1 + atr_dec * 1.5)
         tp3_v = None
         _time_exit = "3 أيام"
         _trade_dur = "ساعات — 3 أيام (Scalp)"
@@ -785,15 +812,18 @@ def _build_scenarios_context(
 
 
 def _fmt_volume(vol: float) -> str:
-    """تنسيق الحجم بوحدة مناسبة: T/B/M$."""
+    """تنسيق الحجم بوحدة مناسبة: B/M$."""
     if vol <= 0:
         return "N/A"
-    if vol >= 1e12:
-        return f"{vol/1e12:.2f}T$"
-    elif vol >= 1e9:
+    # إصلاح #515: vol > 1T يعني contracts وليس USD → نقسم على 1000
+    if vol >= 1e13:
+        vol = vol / 1000
+    if vol >= 1e9:
         return f"{vol/1e9:.1f}B$"
     elif vol >= 1e6:
         return f"{vol/1e6:.1f}M$"
+    elif vol >= 1e3:
+        return f"{vol/1e3:.1f}K$"
     else:
         return f"{vol:,.0f}$"
 
