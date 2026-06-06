@@ -81,10 +81,26 @@ class Database:
             await self.save_user(user)
 
     async def get_virtual_wallet(self, user_id):
+        """يقرأ من state_manager (Redis) أولاً للاستمرارية."""
+        try:
+            from core.state_manager import state_manager as _sm_db
+            vw = _sm_db.get_virtual_wallet(user_id)
+            if vw:
+                return vw
+        except Exception:
+            pass
+        # fallback للـ RAM store
         user = await self.get_user(user_id)
         return user.get("virtual_wallet", {}) if user else {}
 
     async def update_virtual_wallet(self, user_id, wallet):
+        """يحفظ في state_manager (Redis) + RAM store."""
+        try:
+            from core.state_manager import state_manager as _sm_db
+            _sm_db.save_virtual_wallet(user_id, wallet)
+        except Exception:
+            pass
+        # أيضاً في RAM store
         user = await self.get_user(user_id)
         if user:
             user["virtual_wallet"] = wallet

@@ -649,38 +649,42 @@ class RaedEngine:
 
                         # ── Virtual Wallet: تنفيذ فوري لكل مستخدم autotrade ──
                         from core.virtual_wallet import VirtualWallet as _VW
-                        from core.database import db as _db
-                        from core.state_manager import state_manager as _sm_at
-                        # إصلاح #569: استخدام get_autotrade_users() بدلاً من _user_portfolios
-                        _autotrade_uids = _sm_at.get_autotrade_users()
+                        from core.state_manager  import state_manager as _sm_vw
+                        # استخدام state_manager (Redis) بدلاً من db (RAM)
+                        # لضمان استمرارية الصفقات عند Restart
+                        _autotrade_uids = _sm_vw.get_autotrade_users()
                         if not _autotrade_uids:
                             logger.info("Virtual trade: لا يوجد مستخدمون autotrade نشطون")
                         for _uid in _autotrade_uids:
                             try:
-                                pass  # autotrade_on مؤكد من get_autotrade_users
-                                # تحميل المحفظة من database
-                                _wdata = await _db.get_virtual_wallet(_uid)
+                                # تحميل المحفظة من Redis عبر state_manager
+                                _wdata = _sm_vw.get_virtual_wallet(_uid)
                                 if not _wdata:
-                                    _user = await _db.get_or_create_user(
-                                        _uid, "", "")
-                                    _wdata = _user.get("virtual_wallet", {})
+                                    _wdata = {
+                                        "balance":   10000.0,
+                                        "invested":  0.0,
+                                        "profit":    0.0,
+                                        "positions": {},
+                                        "history":   [],
+                                    }
                                 _vw = _VW(_wdata)
 
-                                # تنفيذ buy()
-                                _result = _vw.buy(
+                                # تنفيذ buy() — amount مقيَّد بـ 10% من المحفظة
+                                _max_buy = _vw.total_value * 0.10
+                                _buy_amt = min(float(risk.approved_size or 500), _max_buy)
+                                _buy_amt = max(_buy_amt, 50)
+                                _result  = _vw.buy(
                                     symbol     = s["symbol"],
                                     price      = s["price"],
-                                    amount_usd = float(risk.approved_size or 500),
+                                    amount_usd = _buy_amt,
                                 )
                                 if _result.get("ok"):
-                                    # حفظ المحفظة المحدّثة
-                                    await _db.update_virtual_wallet(
-                                        _uid, _vw.to_dict())
+                                    # حفظ في Redis — يصمد عند Restart
+                                    _sm_vw.save_virtual_wallet(_uid, _vw.to_dict())
                                     trade_rec["virtual_executed"] = True
                                     logger.info(
                                         f"✅ Virtual buy: {s['symbol']} "
-                                        f"${risk.approved_size:,.0f} "
-                                        f"for user {_uid}")
+                                        f"${_buy_amt:,.0f} for user {_uid}")
                                 else:
                                     logger.warning(
                                         f"Virtual buy rejected {s['symbol']} "
@@ -740,8 +744,11 @@ class RaedEngine:
                     )
                 lines.append("")
 
+            from core.state_manager import state_manager as _sm_stat
+            _at_active = bool(_sm_stat.get_autotrade_users())
             if strong_signals and not executed:
-                lines.append("⚡ *فرص قوية (autotrade مُوقَف)*")
+                _at_lbl = "✅ autotrade نشط — جاري التنفيذ" if _at_active else "فرص قوية (autotrade مُوقَف)"
+                lines.append(f"⚡ *{_at_lbl}*")
                 for s in strong_signals:
                     dir_ar = "🟢 شراء" if s["direction"] == "long" else "🔴 بيع"
                     lines.append(

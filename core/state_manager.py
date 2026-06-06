@@ -442,6 +442,19 @@ class StateManager:
         return [int(uid) for uid in self._state.get("users", {}).keys()
                 if str(uid).isdigit()]
 
+    # ── Virtual Wallet (Redis-persistent) ──────────────────────
+    def get_virtual_wallet(self, user_id: int) -> dict:
+        """يُعيد بيانات المحفظة الافتراضية من Redis."""
+        key = f"vw:{user_id}"
+        return self._state.get("wallets", {}).get(str(user_id), {})
+
+    def save_virtual_wallet(self, user_id: int, wallet_data: dict):
+        """يحفظ بيانات المحفظة الافتراضية في Redis."""
+        if "wallets" not in self._state:
+            self._state["wallets"] = {}
+        self._state["wallets"][str(user_id)] = wallet_data
+        self._save_state()
+
     def get_autotrade_users(self) -> list:
         result = []
         for uid_str, data in self._state.get("users", {}).items():

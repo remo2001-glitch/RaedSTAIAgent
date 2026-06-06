@@ -435,7 +435,7 @@ class NewsEngine:
             )
             self.session = _temp_session
 
-        result = None  # إصلاح #458: تعريف مسبق لمنع UnboundLocalError
+        result = None  # إصلاح #458
         try:
             # محاولة Groq
             result = await self._call_groq(prompt, GROQ_MODEL)
@@ -515,7 +515,6 @@ class NewsEngine:
             # إصلاح #274: إذا json_mode=False → النتيجة نص حر
             if not json_mode:
                 return {"summary_ar": content.strip(), "source": "groq_text"}
-            result = None  # إصلاح #509: تعريف مبكر
             result = json.loads(content)
             # إصلاح #229: استخراج مرن من أي JSON
             if "sentiment" in result and "sentiment_score" in result:
@@ -729,19 +728,21 @@ class NewsEngine:
         prompt = (
             f"أنت محلل فني محايد متخصص في الكريبتو."
             f" البيانات: {symbol} | السعر: ${price:,.4g}"
+            f" | التغيير 24h: {price_change_24h:+.2f}%"
             f" | RSI: {rsi:.0f} | Fear & Greed: {fear_greed}"
             f" | السوق: {regime_desc}."
             f"{_cs}"
-            " اكتب تحليلاً نصياً احترافياً 4-5 جمل باللغة العربية بدون markdown:"
-            " 1-الاتجاه الحالي (SAR، EMA، MACD) وسياق السوق."
-            " 2-تفسير السيناريوهات الواردة بأسلوب محايد."
-            " 3-أي سيناريو أكثر احتمالاً مع السبب بناءً على البيانات."
-            " 4-تحذير واحد مهم للمتداول."
-            " اكتب مباشرة بدون مقدمة. لا توصيات مطلقة بالشراء/البيع."
+            " المطلوب: اكتب تحليلاً نصياً احترافياً باللغة العربية بدون markdown."
+            " استخدم الأرقام والسيناريوهات الواردة أعلاه كمرجع."
+            " اكتب 4-5 جمل تغطي:"
+            " 1-الاتجاه العام وموقع SAR وMACD."
+            " 2-تفسير السيناريوهات بأسلوب احترافي محايد."
+            " 3-أي سيناريو أكثر احتمالاً ولماذا (بناءً على البيانات فقط)."
+            " اكتب مباشرة بدون مقدمة ولا استنتاجات مطلقة."
         )
 
 
-        result = None  # إصلاح #509: تعريف مبكر جذري
+        result = None  # إصلاح #509
         try:
             # إصلاح #274: json_mode=False → نص حر مباشرةً
             result = await self._call_groq(prompt, GROQ_MODEL, json_mode=False)
