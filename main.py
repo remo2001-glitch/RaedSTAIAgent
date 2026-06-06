@@ -448,28 +448,8 @@ def build_app() -> Application:
     plan_handlers.register(app)
     trading_handlers.register(app)
 
-    # ── T1/T2/T4: أوامر جديدة ──────────────────────────
-    from handlers.commands import (
-        cmd_vtrades, cmd_profile, _start_survey,
-        cb_vclose, cb_goto_vtrades, cb_goto_trades,
-        cb_survey_goal, cb_survey_risk, cb_survey_hold,
-        cb_survey_exp, cb_survey_exec,
-        cb_profile_violations,
-    )
-    from telegram.ext import CallbackQueryHandler as _CQH
-    app.add_handler(CommandHandler("vtrades",  cmd_vtrades))
-    app.add_handler(CommandHandler("profile",  cmd_profile))
-    # Survey callbacks
-    app.add_handler(_CQH(cb_survey_goal,    pattern=r"^survey_goal_"))
-    app.add_handler(_CQH(cb_survey_risk,    pattern=r"^survey_risk_"))
-    app.add_handler(_CQH(cb_survey_hold,    pattern=r"^survey_hold_"))
-    app.add_handler(_CQH(cb_survey_exp,     pattern=r"^survey_exp_"))
-    app.add_handler(_CQH(cb_survey_exec,    pattern=r"^survey_exec_"))
-    app.add_handler(_CQH(cb_profile_violations, pattern=r"^profile_violations$"))
-    # vtrades callbacks
-    app.add_handler(_CQH(cb_vclose,         pattern=r"^vclose_"))
-    app.add_handler(_CQH(cb_goto_vtrades,   pattern=r"^goto_vtrades$"))
-    app.add_handler(_CQH(cb_goto_trades,    pattern=r"^goto_trades$"))
+
+    # T1/T2/T4 مُسجَّلة في trading_handlers.register() ✅
 
     # ── معالج الأخطاء ──
     app.add_error_handler(error_handler)
