@@ -557,20 +557,24 @@ async def hourly_alert_job(context: ContextTypes.DEFAULT_TYPE):
                     for sig_info in strong_signals_data:
                         if sig_info["confidence"] < 0.80:
                             continue
-                        # إصلاح #612: حجم الصفقة بناءً على Confidence وحجم المحفظة
-                        _conf     = sig_info["confidence"]
+                        # Q1-Q5: تطبيق قيود التنفيذ الآلي
+                        _sym_q    = sig_info["symbol"]
                         _vw_total = _vw_h.total_value
-                        # Confidence 80-89% → 10% | 89%+ → 15%
-                        _pct     = 0.15 if _conf >= 0.89 else 0.10
-                        _max_buy = _vw_total * _pct
-                        _buy_amt = min(_max_buy, _vw_h.balance * 0.95)
-                        _buy_amt = max(_buy_amt, 100)  # حد أدنى $100
+                        _can, _buy_amt, _reason = _sm_h.can_execute_trade(
+                            uid, _sym_q, "daily", _vw_total)
+                        if not _can:
+                            logger.info(f"Trade limit {_sym_q}: {_reason}")
+                            continue
+                        _buy_amt = min(_buy_amt, _vw_h.balance * 0.95)
+                        _buy_amt = max(_buy_amt, 50)  # حد أدنى $50
                         _result  = _vw_h.buy(
                             symbol     = sig_info["symbol"],
                             price      = sig_info["price"],
                             amount_usd = _buy_amt,
                         )
                         if _result.get("ok"):
+                            # Q1-Q5: تسجيل الصفقة لتفعيل القيود
+                            _sm_h.record_auto_trade(uid, _sym_q, "daily", _buy_amt)
                             _executed_syms.append(
                                 f"• {sig_info['symbol']} ${_buy_amt:,.0f}")
 
