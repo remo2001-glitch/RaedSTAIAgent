@@ -737,6 +737,46 @@ class StateManager:
         amount = portfolio_value * pct
         return True, amount, "✅ مسموح"
 
+    def can_auto_execute(self, user_id: int, symbol: str,
+                          portfolio_value: float,
+                          vw_positions: dict = None) -> tuple:
+        """
+        الفحص الموحد قبل أي تنفيذ آلي (K2+K3).
+        يُعيد (can: bool, amount: float, reason: str)
+        """
+        import time as _t
+        # 1. فحص position مفتوح (K1)
+        if vw_positions and symbol in vw_positions:
+            return False, 0, f"مركز {symbol} مفتوح بالفعل"
+
+        # 2. فحص القيود اليومية الموحدة
+        log  = self.get_trade_log(user_id)
+        now  = _t.time()
+        lim  = self.TRADE_LIMITS["daily"]
+        window = lim["window_hours"] * 3600
+        daily_log = [t for t in log.get("daily", [])
+                     if now - t.get("ts", 0) < window]
+
+        # 3. فحص عدد الصفقات
+        if len(daily_log) >= lim["max_trades"]:
+            return False, 0, (f"الحد اليومي: {lim['max_trades']} صفقات")
+
+        # 4. فحص إجمالي التعرض (K3)
+        total_invested = sum(t.get("amount", 0) for t in daily_log)
+        max_daily_usd  = portfolio_value * 0.25  # 25% يومي
+        if total_invested >= max_daily_usd:
+            return False, 0, f"الحد اليومي: 25% = ${max_daily_usd:,.0f}"
+
+        # 5. فحص تكرار العملة
+        if symbol in [t.get("symbol") for t in daily_log]:
+            return False, 0, f"{symbol} مُنفَّذة اليوم"
+
+        # حساب المبلغ المتاح
+        remaining  = max_daily_usd - total_invested
+        amount     = min(portfolio_value * lim["pct_per_trade"], remaining)
+        amount     = max(amount, 50)
+        return True, amount, "✅ مسموح"
+
     def get_trade_log(self, user_id: int) -> dict:
         """سجل الصفقات المنفَّذة حسب النوع."""
         return self._get_user(user_id).get("auto_trade_log", {
