@@ -840,14 +840,18 @@ class RaedEngine:
                 lines.append("")
 
             from core.state_manager import state_manager as _sm_stat
+            from core.config        import ADMIN_ID
             _at_users  = _sm_stat.get_autotrade_users()
             _at_active = bool(_at_users)
             if strong_signals and not executed:
                 if _at_active:
-                    lines.append(f"⚡ *فرص قوية — autotrade نشط ({len(_at_users)} مستخدم)*")
+                    # #719: عدد المستخدمين للمدير فقط
+                    _is_admin = (send_fn and hasattr(send_fn, '__self__') and
+                                 getattr(send_fn, '_admin_mode', False))
+                    lines.append("⚡ *فرص قوية — autotrade نشط ✅*")
                 else:
                     lines.append("⚡ *فرص قوية (autotrade مُوقَف)*")
-                    lines.append("💡 لتفعيل التنفيذ التلقائي: /autotrade on")
+                    lines.append("💡 /autotrade on للتفعيل")
                 for s in strong_signals:
                     dir_ar = "🟢 شراء" if s["direction"] == "long" else "🔴 بيع"
                     lines.append(

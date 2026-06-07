@@ -496,7 +496,7 @@ class MicrostructureLayer:
                 bid_count = len(buy_walls)
                 lines.append(f"• أعلى أمر شراء (Bid): ${top_bid['price']:,.2f} — ${top_bid['value_usd']/1e6:.2f}M | {bid_count} أمر")
             else:
-                lines.append("• أعلى أمر شراء (Bid): غير متاح")
+                lines.append("• أعلى أمر شراء (Bid): لا جدران كبيرة — السوق سائل")
             if sell_walls:
                 top_ask   = sell_walls[0]
                 ask_count = len(sell_walls)
