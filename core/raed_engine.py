@@ -851,18 +851,30 @@ class RaedEngine:
                     lines.append("⚡ *فرص قوية — autotrade نشط ✅*")
                 else:
                     lines.append("⚡ *فرص قوية (autotrade مُوقَف)*")
-                    lines.append("💡 /autotrade on للتفعيل")
                 for s in strong_signals:
                     dir_ar = "🟢 شراء" if s["direction"] == "long" else "🔴 بيع"
                     lines.append(
-                        f"• {s['symbol']} {dir_ar} | "
+                        f"🚨 {s['symbol']} {dir_ar} | "
                         f"ثقة: {s['confidence']:.0%} | "
                         f"${s['price']:,.2f}"
                     )
-                lines += [
-                    "",
-                    "💡 لتفعيل التنفيذ التلقائي: /autotrade on",
-                ]
+                # إصلاح #720/#727
+                _open_warn_lines = []
+                for _uid_w in (_at_users if _at_active else []):
+                    try:
+                        _wdata_w = _sm_stat.get_virtual_wallet(_uid_w) or {}
+                        _open_syms_w = list((_wdata_w.get("positions") or {}).keys())
+                        _same = [s["symbol"] for s in strong_signals if s["symbol"] in _open_syms_w]
+                        if _same:
+                            _open_warn_lines.append(f"⚠️ صفقات مفتوحة على: {', '.join(_same)}")
+                    except Exception:
+                        pass
+                if _open_warn_lines:
+                    lines += [""] + _open_warn_lines + ["💡 /vtrades للمراجعة"]
+                elif _at_active:
+                    lines.append("💡 /vtrades لمتابعة الصفقات")
+                else:
+                    lines.append("💡 /autotrade on للتفعيل")
 
             lines.append(f"\n⏰ {self.scheduler.next_scan_ar()}")
             return "\n".join(lines)
