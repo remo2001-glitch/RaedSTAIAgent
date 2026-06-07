@@ -575,7 +575,7 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 week_plan = [
                     f"• أسبوع 1: دخول تكتيكي محدود {_deploy_pct:.0%} (${_deployed:,.0f}) في {_pos_names} — ذروة بيع تاريخية",
                     f"• أسبوع 2: مراقبة — وقف خسارة صارم إذا كسر الدعم | RSI {_rsi_label}",
-                    f"• أسبوع 3: Fear & Greed < 25 → زيادة تدريجية ({_fg_label})",
+                    f"• أسبوع 3: Fear & Greed < 25 → {'زيادة تدريجية' if candidates else 'انتظر تأكيد ارتداد'} ({_fg_label})",
                     f"• أسبوع 4: مراجعة المراكز — احتفظ بـ ${_cash:,.0f} سيولة احتياطية",
                 ]
             else:
@@ -583,7 +583,8 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 week_plan = [
                     f"• أسبوع 1: احتفظ بـ 100% سيولة (${user_portfolio:,.0f}) — RSI يرتد فوق 30 ({_rsi_label})",
                     f"• أسبوع 2: مراقبة مستويات الدعم ودخول تدريجي عند ارتداد RSI فوق 35",
-                    f"• أسبوع 3: Fear & Greed < 25 → ابدأ التجميع ({_fg_label})",
+                    # إصلاح #864: أسبوع 3 فقط إذا يوجد أصول مؤهلة
+                    f"• أسبوع 3: Fear & Greed < 25 → {'ابدأ التجميع' if allocation and any(a.allocation > 0 for a in allocation) else 'انتظر تأكيد انعكاس'} ({_fg_label})",
                     "• أسبوع 4: تقييم: هل تشكّل قاع؟ قرار الدخول الكامل",
                 ]
         elif regime.regime in (Regime.BULL_TREND, Regime.ACCUMULATION):
@@ -712,7 +713,16 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
         symbols    = ["BTC", "ETH", "BNB", "SOL"]
         sym_str2   = "BTC, ETH, BNB, SOL"
         plan_label = "خطة السوق العامة — Top 4"
-    msg = await update.message.reply_text(
+    # إصلاح #875: دعم msg من callback
+    _msg_ov_w = context.user_data.pop("_plan_msg_override", None)
+    if _msg_ov_w:
+        msg = _msg_ov_w
+        try:
+            await msg.edit_text("📅 جاري بناء الخطة الأسبوعية...")
+        except Exception:
+            pass
+    else:
+        msg = await update.message.reply_text(
         f"📅 جاري بناء {plan_label}...\n"
         "⏳ قد يستغرق 1-3 دقائق — يُرجى الانتظار"
     )
@@ -836,20 +846,24 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         _tp_m, _sl_m = 2.0, 1.2
                     if signal.confidence >= 0.40:
                         entry = min(max(fib_382, price * (1 - atr_v * 0.5)), price * 0.999)
-                        # إصلاح #827: TP محدود + R/R صحيح
-                        _tp1_pct = min(0.08, atr_v * _tp_m)   # max 8%
-                        _tp2_pct = min(0.12, atr_v * _tp_m * 1.4)  # max 12%
+                        # إصلاح #827/#870: TP وR/R صحيح
+                        _tp1_pct = min(0.06, atr_v * _tp_m)   # max 6%
+                        _tp2_pct = min(0.09, atr_v * _tp_m * 1.4)  # max 9%
                         tp1   = price * (1 + _tp1_pct)
                         tp2   = price * (1 + _tp2_pct)
-                        sl    = entry * (1 - min(atr_v * _sl_m, 0.08))  # max SL 8%
-                        _risk = max(entry - sl, 0.0001)
-                        _rew  = max(tp1 - entry, 0.0001)
-                        rr    = min(_rew / _risk, 4.0)  # سقف R/R = 4
-                        entry_lines = [
-                            f"  📍 دخول: {_fmt_price(entry)} | وقف: {_fmt_price(sl)} ({abs(entry-sl)/max(entry,0.001)*100:.1f}%-)",
-                            f"  🎯 هدف1: {_fmt_price(tp1)} (+{_tp1_pct*100:.1f}%) | هدف2: {_fmt_price(tp2)} (+{_tp2_pct*100:.1f}%)",
-                            f"  📊 {('R/R: 1:' + f'{rr:.1f}') if rr >= 1.0 else '⚠️ R/R غير مناسب'} | ATR: {atr_v*100:.1f}%",
-                        ]
+                        sl    = entry * (1 - min(atr_v * _sl_m, 0.07))
+                        _risk = max(price - sl, 0.0001)
+                        _rew  = max(tp1 - price, 0.0001)
+                        rr    = min(_rew / _risk, 4.0)
+                        # إصلاح #871: إخفاء الإدخال إذا R/R < 1.2
+                        if rr < 1.2:
+                            entry_lines = []
+                        else:
+                            entry_lines = [
+                                f"  📍 دخول: {_fmt_price(entry)} | وقف: {_fmt_price(sl)} ({abs(price-sl)/max(price,0.001)*100:.1f}%-)",
+                                f"  🎯 هدف1: {_fmt_price(tp1)} (+{_tp1_pct*100:.1f}%) | هدف2: {_fmt_price(tp2)} (+{_tp2_pct*100:.1f}%)",
+                                f"  📊 R/R: 1:{rr:.1f} | ATR: {atr_v*100:.1f}%",
+                            ]
                     elif signal.confidence >= 0.40 and signal.direction == "short":
                         entry = min(fib_618, price * (1 + atr_v * 0.3))
                         tp1   = price * (1 - atr_v * 1.5)
@@ -932,21 +946,21 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 week_lines = [
                     f"• أسبوع 1: دخول تكتيكي محدود (25%) في {_buy_names} — RSI={_rsi_pw:.0f} ذروة بيع تاريخية",
                     f"• أسبوع 2: مراقبة — وقف صارم إذا كسر الدعم | زيادة عند RSI > 25",
-                    f"• أسبوع 3: Fear & Greed < 25 → زيادة تدريجية ({_fg_lbl})",
+                    f"• أسبوع 3: Fear & Greed < 25 → {'زيادة تدريجية' if entry_syms else 'انتظر تأكيد ارتداد'} ({_fg_lbl})",
                     "• أسبوع 4: مراجعة المراكز وقرار الاستمرار",
                 ]
             elif _buy_signals and _rsi_pw < 30:
                 week_lines = [
                     f"• أسبوع 1: انتظار تأكيد — RSI يرتد فوق 30 ({_rsi_lbl})",
                     f"• أسبوع 2: دخول تدريجي في {_buy_names} عند ارتداد RSI فوق 35",
-                    f"• أسبوع 3: Fear & Greed < 25 → ابدأ التجميع ({_fg_lbl})",
+                    f"• أسبوع 3: Fear & Greed < 25 → {'ابدأ التجميع' if entry_syms else 'انتظر تأكيد ارتداد'} ({_fg_lbl})",
                     "• أسبوع 4: تقييم القاع — قرار الدخول الكامل",
                 ]
             else:
                 week_lines = [
                     f"• أسبوع 1: لا دخول — RSI يرتد فوق 30 ({_rsi_lbl})",
                     "• أسبوع 2: دخول تدريجي عند ارتداد RSI فوق 35",
-                    f"• أسبوع 3: Fear & Greed < 25 → ابدأ التجميع ({_fg_lbl})",
+                    f"• أسبوع 3: Fear & Greed < 25 → {'ابدأ التجميع' if entry_syms else 'انتظر تأكيد ارتداد'} ({_fg_lbl})",
                     "• أسبوع 4: تقييم القاع — قرار الدخول الكامل",
                 ]
         elif regime.regime.value in ("bull_trend", "accumulation"):
@@ -1388,25 +1402,33 @@ async def cb_plan_comment(update, context):
 
 
 async def cb_plan_general(update, context):
-    """تنفيذ خطة عامة — إصلاح #776: استخدام query.message."""
+    """تنفيذ خطة عامة — إصلاح #867: معالجة شاملة لـ msg."""
     query = update.callback_query
-    await query.answer("⏳ جاري إعداد الخطة...")
+    try:
+        await query.answer("⏳ جاري إعداد الخطة...")
+    except Exception:
+        pass
     plan_type = "week" if "plan_w" in query.data else "month"
-    # إرسال رسالة تحميل
-    msg = await query.message.reply_text("⏳ جاري تحليل السوق وإعداد الخطة...")
-    context.user_data["plan_msg_id"] = msg.message_id
-    context.user_data["plan_chat_id"] = query.message.chat_id
-    # استدعاء الدالة مباشرة مع تمرير msg
+    msg = None
+    try:
+        msg = await query.message.reply_text("⏳ جاري تحليل السوق وإعداد الخطة...")
+    except Exception as _e:
+        import logging
+        logging.getLogger("plan").error(f"cb_plan_general reply_text: {_e}")
+        return
+    # تمرير msg بشكل آمن
+    context.user_data["_plan_msg_override"] = msg
     try:
         if plan_type == "week":
-            await _run_planweek(update, context, msg)
+            await cmd_plan_week(update, context)
         else:
-            await _run_planmonth(update, context, msg)
+            await cmd_plan_month(update, context)
     except Exception as e:
         import logging
-        logging.getLogger("plan").error(f"cb_plan_general: {e}")
+        logging.getLogger("plan").error(f"cb_plan_general: {e}", exc_info=True)
         try:
-            await msg.edit_text(f"❌ خطأ في إعداد الخطة: {str(e)[:100]}")
+            if msg:
+                await msg.edit_text(f"❌ خطأ في إعداد الخطة: {str(e)[:100]}")
         except Exception:
             pass
 
