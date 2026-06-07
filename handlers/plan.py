@@ -1137,7 +1137,12 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # حساب القيم الحقيقية من virtual wallet
         _vw_balance    = _vw.balance   if _vw else portfolio_val
         _vw_invested   = _vw.invested  if _vw else 0.0
-        _vw_total      = _vw.total_value if _vw else portfolio_val
+        # إصلاح #703: القيمة الكلية = balance + قيمة المراكز الحالية
+        _positions_value = 0.0
+        if _vw and _vw.positions:
+            for sym, pos in _vw.positions.items():
+                _positions_value += pos["cost"]  # نستخدم cost كتقدير
+        _vw_total = (_vw.balance + _positions_value) if _vw else portfolio_val
         _vw_positions  = _vw.positions  if _vw else {}
         _vw_history    = _vw.history    if _vw else []
         _open_count    = len(_vw_positions)
@@ -1149,7 +1154,9 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _avg_win       = (sum(t["pnl"] for t in _wins) / max(len(_wins), 1)) if _wins else 0
         _losses        = [t for t in _sells if t.get("pnl", 0) <= 0]
         _avg_loss      = (sum(t["pnl"] for t in _losses) / max(len(_losses), 1)) if _losses else 0
-        _drawdown_pct  = max(0, (portfolio_val - _vw_total) / portfolio_val * 100)
+        # إصلاح #707: Drawdown يشمل PnL الحي
+        _current_total = _vw_total + _live_pnl if _vw else portfolio_val
+        _drawdown_pct  = max(0, (portfolio_val - _current_total) / portfolio_val * 100)
 
         # حساب PnL الحي للمراكز المفتوحة
         _live_pnl = 0.0

@@ -206,7 +206,25 @@ async def cmd_live(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         lines.append(f"  • {_t.symbol}: هدف ${_t.take_profit:,.4f} | وقف ${_t.stop_loss:,.4f}")
                 if balance.total > 0 and not trades:
                     lines += ["", "💡 معظم رأس المال متاح — جرب /signal لفرص جديدة"]
-                lines.append("\nللفصل: /live off")
+                # إضافة ملخص المحفظة الافتراضية
+                from core.state_manager import state_manager as _sm_tr
+                from core.virtual_wallet import VirtualWallet as _VW_tr
+                _vw_tr = _VW_tr(_sm_tr.get_virtual_wallet(user_id) or {})
+                lines += [
+                    "",
+                    "━━━━━━━━━━━━━━━━━━",
+                    "🎮 *المحفظة الافتراضية*",
+                    f"• الرصيد: ${_vw_tr.balance:,.2f} | مراكز: {len(_vw_tr.positions)}",
+                    "",
+                    "⚠️ يمكن إيقاف التداول الحقيقي في أي وقت: /live off",
+                ]
+                # أزرار إضافية (#722/#724)
+                trade_buttons = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("📊 تفاصيل الصفقات", callback_data="real_trades_detail"),
+                    InlineKeyboardButton("⏳ الأوامر المعلقة", callback_data="real_orders_pending"),
+                ],[
+                    InlineKeyboardButton("🎮 الصفقات الافتراضية", callback_data="goto_vtrades"),
+                ]])
             else:
                 # عرض تفاصيل المحفظة الافتراضية
                 port_v     = engine.get_user_portfolio(user_id)
@@ -1025,8 +1043,10 @@ async def cmd_autotrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(
                 "✅ *التداول الآلي مُفعَّل*\n"
                 "━━━━━━━━━━━━━━━━━━\n"
-                f"الوضع: {mode}\n"
                 f"الباقة: {tier_name}\n\n"
+                "📊 *نشط في:*\n"
+                "🎮 المحفظة الافتراضية: ✅ — /vtrades للمتابعة\n"
+                f"💰 التداول الحقيقي: {'✅ ' + mode.replace('💰 حقيقي (','').rstrip(')') if has_live else '❌ غير مربوط — /live للربط'}\n\n"
                 "⏰ *جدول المسح*\n"
                 "01:00 · 05:00 · 09:00 · 13:00 · 17:00 · 21:00 KSA\n\n"
                 "للإيقاف الفوري: /autotrade off",
@@ -1051,10 +1071,15 @@ async def cmd_autotrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "🤖 *التداول الآلي — رائد*\n"
                 "━━━━━━━━━━━━━━━━━━\n"
                 f"الحالة: {'✅ مُفعَّل' if is_on else '❌ مُوقَف'}\n"
-                f"الوضع: {mode}\n"
                 f"الباقة: {tier_name}\n\n"
-                f"{schedule_text}"
-                f"{'للإيقاف: /autotrade off' if is_on else 'للتفعيل: /autotrade on'}",
+                + (
+                    "📊 *نشط في:*\n"
+                    "🎮 افتراضي: ✅ — /vtrades للمتابعة\n"
+                    f"💰 حقيقي: {'✅ ' + mode.replace('💰 حقيقي (','').rstrip(')') if has_live else '❌ غير مربوط'}\n\n"
+                    if is_on else ""
+                )
+                + f"{schedule_text}"
+                + f"{'للإيقاف: /autotrade off' if is_on else 'للتفعيل: /autotrade on'}",
                 parse_mode=ParseMode.MARKDOWN)
 
     except Exception as e:
@@ -1909,6 +1934,114 @@ async def cmd_disclaimer(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=buttons)
 
 
+# ══ Callbacks: wallet buttons ════════════════════════════════
+
+async def cb_real_trades_detail(update, context):
+    """تفاصيل الصفقات الحقيقية."""
+    query = update.callback_query
+    await query.answer()
+    await query.message.reply_text(
+        "📊 *تفاصيل الصفقات الحقيقية*\n\n"
+        "استخدم /trades لعرض الصفقات المفتوحة الحقيقية.",
+        parse_mode="Markdown")
+
+
+async def cb_real_orders_pending(update, context):
+    """الأوامر المعلقة الحقيقية."""
+    query = update.callback_query
+    await query.answer()
+    engine = context.bot_data.get("raed_engine")
+    user_id = query.from_user.id
+    if not engine:
+        await query.message.reply_text("❌ النظام لم يُهيَّأ بعد")
+        return
+    try:
+        live_info = getattr(engine, "_live_users", {}).get(user_id, {})
+        om = live_info.get("order_manager")
+        if om and hasattr(om, "_pending_orders"):
+            orders = list(om._pending_orders.values())
+            if orders:
+                lines = ["⏳ *الأوامر المعلقة*", "━━━━━━━━━━━━━━━━━━", ""]
+                for o in orders[:10]:
+                    lines.append(f"• {o.get('symbol','')} | {o.get('type','')} | ${o.get('price',0):,.4f}")
+                await query.message.reply_text("\n".join(lines), parse_mode="Markdown")
+            else:
+                await query.message.reply_text("✅ لا توجد أوامر معلقة حالياً.")
+        else:
+            await query.message.reply_text("ℹ️ لا توجد أوامر معلقة.")
+    except Exception as e:
+        await query.message.reply_text(f"❌ خطأ: {str(e)[:100]}")
+
+
+async def cb_vhistory(update, context):
+    """عرض تاريخ الصفقات الافتراضية."""
+    query = update.callback_query
+    try:
+        await query.answer()
+        from core.state_manager import state_manager as _sm_vh
+        from core.virtual_wallet import VirtualWallet as _VW_vh
+        uid = query.from_user.id
+        vw  = _VW_vh(_sm_vh.get_virtual_wallet(uid) or {})
+        sells = [t for t in vw.history if t.get("type") == "sell"]
+        if not sells:
+            await query.message.reply_text(
+                "📋 لا توجد صفقات مغلقة بعد.\n"
+                "الصفقات تُغلق تلقائياً عند بلوغ TP أو SL.")
+            return
+        lines = ["📋 *تاريخ الصفقات المغلقة*", "━━━━━━━━━━━━━━━━━━", ""]
+        for t in sells[-10:]:  # آخر 10 صفقات
+            pnl  = t.get("pnl", 0)
+            sign = "+" if pnl >= 0 else ""
+            emoji = "✅" if pnl >= 0 else "❌"
+            ts = t.get("time","")[:10]
+            lines.append(f"{emoji} {t.get('symbol','')} | {ts} | {sign}${pnl:,.2f}")
+        await query.message.reply_text("\n".join(lines), parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"cb_vhistory: {e}")
+        await query.message.reply_text("❌ خطأ في جلب التاريخ")
+
+
+async def cb_vreset_confirm(update, context):
+    """تأكيد إعادة ضبط المحفظة الافتراضية."""
+    query = update.callback_query
+    try:
+        await query.answer()
+        buttons = InlineKeyboardMarkup([[
+            InlineKeyboardButton("⚠️ نعم، أعد الضبط", callback_data="vreset_execute"),
+            InlineKeyboardButton("❌ إلغاء",           callback_data="vreset_cancel"),
+        ]])
+        await query.message.reply_text(
+            "⚠️ *تأكيد إعادة الضبط*\n\n"
+            "سيتم حذف جميع صفقاتك الافتراضية وإعادة الرصيد إلى $10,000.\n"
+            "هل أنت متأكد؟",
+            parse_mode="Markdown",
+            reply_markup=buttons)
+    except Exception as e:
+        logger.error(f"cb_vreset_confirm: {e}")
+
+
+async def cb_vreset_execute(update, context):
+    """تنفيذ إعادة ضبط المحفظة."""
+    query = update.callback_query
+    try:
+        await query.answer()
+        from core.state_manager import state_manager as _sm_re
+        from core.virtual_wallet import VirtualWallet as _VW_re
+        uid = query.from_user.id
+        vw  = _VW_re({})
+        _sm_re.save_virtual_wallet(uid, vw.to_dict())
+        await query.edit_message_text(
+            "✅ تمت إعادة الضبط!\n💵 الرصيد الجديد: $10,000")
+    except Exception as e:
+        await query.edit_message_text(f"❌ خطأ: {e}")
+
+
+async def cb_vreset_cancel(update, context):
+    query = update.callback_query
+    await query.answer("تم الإلغاء")
+    await query.edit_message_text("✅ تم إلغاء إعادة الضبط.")
+
+
 async def cb_disclaimer_accept(update, context):
     """تسجيل موافقة المستخدم على إخلاء المسؤولية."""
     query = update.callback_query
@@ -1944,10 +2077,14 @@ async def cb_disclaimer_accept(update, context):
 async def cb_disclaimer_reject(update, context):
     """رفض إخلاء المسؤولية."""
     query = update.callback_query
-    await query.answer()
-    await query.edit_message_text(
-        "❌ لم توافق على الشروط.\n"
-        "لا يمكن متابعة هذا الإجراء بدون موافقة.")
+    try:
+        await query.answer("تم الرفض")
+        await query.edit_message_text(
+            "❌ لم توافق على الشروط.\n"
+            "لا يمكن متابعة هذا الإجراء بدون موافقة.\n\n"
+            "يمكنك الموافقة لاحقاً عبر /disclaimer")
+    except Exception as e:
+        logger.error(f"cb_disclaimer_reject: {e}")
 
 
 async def cmd_set_limits(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1999,16 +2136,71 @@ async def cmd_set_limits(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cb_goto_vtrades(update, context):
-    await update.callback_query.answer()
-    await cmd_vtrades(update, context)
+    query = update.callback_query
+    await query.answer()
+    # إصلاح #683: نُنشئ update مؤقت مع message صحيح
+    try:
+        # نستخدم query.message مباشرة
+        user_id = query.from_user.id
+        from core.state_manager import state_manager as _sm_gv
+        from core.virtual_wallet import VirtualWallet as _VW_gv
+        vw_data = _sm_gv.get_virtual_wallet(user_id) or {}
+        vw = _VW_gv(vw_data) if vw_data else _VW_gv({})
+        if not vw.positions:
+            await query.message.reply_text(
+                "📋 *الصفقات الافتراضية*\n\n"
+                "لا توجد صفقات مفتوحة حالياً.\n"
+                "سيتم التنفيذ تلقائياً عند وجود إشارة قوية ≥ 80% ✅",
+                parse_mode="Markdown")
+            return
+        engine = context.bot_data.get("raed_engine")
+        lines  = ["📋 *الصفقات الافتراضية المفتوحة*", "━━━━━━━━━━━━━━━━━━", ""]
+        buttons_list = []
+        seen_syms = set()
+        for sym, pos in vw.positions.items():
+            if sym in seen_syms: continue
+            seen_syms.add(sym)
+            cur_price = pos["avg_price"]
+            if engine:
+                try:
+                    pd = await engine.data_layer.get_price(sym.replace("USDT",""))
+                    if pd: cur_price = float(pd.get("price", cur_price))
+                except: pass
+            live_pnl = (cur_price - pos["avg_price"]) * pos["quantity"]
+            pnl_pct  = live_pnl / max(pos["cost"], 1) * 100
+            sign     = "+" if live_pnl >= 0 else ""
+            emoji    = "📈" if live_pnl >= 0 else "📉"
+            lines += [
+                f"*{sym}*",
+                f"• دخول: ${pos['avg_price']:,.4f} | الحالي: ${cur_price:,.4f}",
+                f"• PnL: {emoji} {sign}${live_pnl:,.2f} ({sign}{pnl_pct:.1f}%)",
+                f"• TP: ${pos.get('take_profit',0):,.4f} | SL: ${pos.get('stop_loss',0):,.4f}",
+                "",
+            ]
+            buttons_list.append([
+                InlineKeyboardButton(f"✅ إغلاق {sym} كامل", callback_data=f"vclose_{sym}_100"),
+                InlineKeyboardButton("50% إغلاق",            callback_data=f"vclose_{sym}_50"),
+            ])
+        lines.append(f"💰 الرصيد المتاح: ${vw.balance:,.2f}")
+        await query.message.reply_text(
+            "\n".join(lines),
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(buttons_list) if buttons_list else None)
+    except Exception as e:
+        logger.error(f"cb_goto_vtrades: {e}")
+        await query.message.reply_text("❌ خطأ في جلب الصفقات")
 
 
 async def cb_goto_trades(update, context):
-    await update.callback_query.answer()
-    context.args = []
-    # /trades موجود في trading.py
-    from handlers.trading import cmd_trades
-    await cmd_trades(update, context)
+    query = update.callback_query
+    await query.answer()
+    try:
+        await query.message.reply_text(
+            "💱 *الصفقات الحقيقية*\n\n"
+            "استخدم /trades لعرض صفقاتك الحقيقية المفتوحة.",
+            parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"cb_goto_trades: {e}")
 
 
 def register(app):
@@ -2044,6 +2236,14 @@ def register(app):
     app.add_handler(CommandHandler("setlimits",  cmd_set_limits))
     app.add_handler(CallbackQueryHandler(cb_disclaimer_accept, pattern=r"^disclaimer_accept_"))
     app.add_handler(CallbackQueryHandler(cb_disclaimer_reject, pattern=r"^disclaimer_reject$"))
+    # real trading callbacks
+    app.add_handler(CallbackQueryHandler(cb_real_trades_detail,  pattern=r"^real_trades_detail$"))
+    app.add_handler(CallbackQueryHandler(cb_real_orders_pending, pattern=r"^real_orders_pending$"))
+    # wallet buttons
+    app.add_handler(CallbackQueryHandler(cb_vhistory,      pattern=r"^vhistory$"))
+    app.add_handler(CallbackQueryHandler(cb_vreset_confirm,pattern=r"^vreset_confirm$"))
+    app.add_handler(CallbackQueryHandler(cb_vreset_execute,pattern=r"^vreset_execute$"))
+    app.add_handler(CallbackQueryHandler(cb_vreset_cancel, pattern=r"^vreset_cancel$"))
 
 @require_tier("setcustom")
 async def cmd_setcustom(update: Update, context: ContextTypes.DEFAULT_TYPE):

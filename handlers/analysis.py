@@ -654,7 +654,8 @@ def _build_professional_block(
         f"{'☑' if ns > 0 and price >= ns * 0.995 else '□'} Reclaim الدعم {_fmt_price(ns) if ns else 'N/A'}",
         f"{'☑' if tech.get('macd_hist', 0) > 0 else '□'} MACD إيجابي",
         f"{'☑' if _whale_ratio > 0 and _whale_ratio < 0.6 else '□'} On-chain تراكم (Whale Ratio < 0.6)",
-        f"{'☑' if _fund_pct < 0 else '□'} Funding Rate مناسب",
+        # #694: Funding Rate يُحسب فقط إذا كانت البيانات حقيقية
+        f"{'☑' if _fund_pct < -0.001 else ('□' if _fund_pct == 0 else '□')} Funding Rate مناسب",
     ])
 
     return "\n".join(parts)
@@ -1310,7 +1311,9 @@ async def cmd_events(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     try:
         state   = engine.event_risk.assess()
-        text_ev = engine.event_risk.format_upcoming_ar(hours=72)
+        # #716: توحيد النافذة الزمنية — نفس ما يستخدمه assess()
+        _ev_window = 168  # أسبوع كامل
+        text_ev = engine.event_risk.format_upcoming_ar(hours=_ev_window)
         import re as _re
         text_ev = _re.sub(r'(بعد\s*)(\d+)(ساعة)', r'بعد \2 ساعة', text_ev)
         lines   = [
@@ -1402,7 +1405,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     engine.data_layer.get_fear_greed(),
                     engine.data_layer.get_btc_dominance(),
                     return_exceptions=True
-                ), timeout=45.0
+                ), timeout=30.0
             )
         except asyncio.TimeoutError:
             await msg.edit_text(
@@ -1816,7 +1819,7 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     engine.data_layer.get_fear_greed(),
                     engine.data_layer.get_btc_dominance(),
                     return_exceptions=True
-                ), timeout=45.0
+                ), timeout=30.0
             )
         except asyncio.TimeoutError:
             await msg.edit_text(
