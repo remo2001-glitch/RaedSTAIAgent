@@ -557,16 +557,15 @@ async def hourly_alert_job(context: ContextTypes.DEFAULT_TYPE):
                     for sig_info in strong_signals_data:
                         if sig_info["confidence"] < 0.80:
                             continue
-                        # Q1-Q5: تطبيق قيود التنفيذ الآلي
-                        _sym_q    = sig_info["symbol"]
-                        _vw_total = _vw_h.total_value
-                        _can, _buy_amt, _reason = _sm_h.can_execute_trade(
-                            uid, _sym_q, "daily", _vw_total)
+                        # K2+K3: الفحص الموحد
+                        _sym_q = sig_info["symbol"]
+                        _can, _buy_amt, _reason = _sm_h.can_auto_execute(
+                            uid, _sym_q, _vw_h.total_value, _vw_h.positions)
                         if not _can:
-                            logger.info(f"Trade limit {_sym_q}: {_reason}")
+                            logger.info(f"Auto skip {_sym_q}: {_reason}")
                             continue
                         _buy_amt = min(_buy_amt, _vw_h.balance * 0.95)
-                        _buy_amt = max(_buy_amt, 50)  # حد أدنى $50
+                        _buy_amt = max(_buy_amt, 50)
                         _result  = _vw_h.buy(
                             symbol     = sig_info["symbol"],
                             price      = sig_info["price"],
