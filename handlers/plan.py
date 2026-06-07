@@ -9,8 +9,8 @@ import asyncio
 import logging
 import re
 
-from telegram import Update
-from telegram.ext import ContextTypes, CommandHandler, MessageHandler, filters
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ContextTypes, CommandHandler, MessageHandler, filters, CallbackQueryHandler
 from telegram.constants import ParseMode
 from core.middleware import require_tier
 try:
@@ -1090,14 +1090,37 @@ async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     pass
         _dd_p = max(0, (portfolio_val - _vw_total) / portfolio_val * 100)
 
+        # #757: تحديث إجمالي المحفظة ليشمل PnL الحي
+        _real_total = _vw_total + _live_pnl_p
+        _real_invested = _vw_p.invested if _vw_p else 0
         text = _clean(engine.capital_engine.format_ar(allocation, regime))
+        # استبدال إجمالي المحفظة في النص بالقيمة الحقيقية
+        text = text.replace(
+            f"إجمالي المحفظة:  ${portfolio_val:,.0f}",
+            f"إجمالي المحفظة:  ${_real_total:,.0f}"
+        )
         text += (
             f"\n\n⚖️ *حالة المخاطر*\n"
             f"• Drawdown: {_dd_p:.1f}%\n"
             f"• PnL الحي: ${_live_pnl_p:+,.2f}\n"
             f"• صفقات مفتوحة: {_open_p}"
         )
-        await msg.edit_text(text, parse_mode=ParseMode.MARKDOWN)
+        # #759: أزرار التنقل
+        _uid_port = update.effective_user.id
+        _has_live_port = False
+        try:
+            _eng_port = context.bot_data.get("raed_engine")
+            if _eng_port and hasattr(_eng_port, "get_user_exchange"):
+                _has_live_port = bool(_eng_port.get_user_exchange(_uid_port))
+        except Exception:
+            pass
+        _port_btns = [[InlineKeyboardButton("🎮 الصفقات الافتراضية", callback_data="goto_vtrades")]]
+        if _has_live_port:
+            _port_btns[0].append(InlineKeyboardButton("💱 الصفقات الحقيقية", callback_data="goto_real_trades"))
+        await msg.edit_text(
+            text,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup(_port_btns))
 
     except Exception as e:
         logger.error(f"cmd_portfolio: {e}", exc_info=True)

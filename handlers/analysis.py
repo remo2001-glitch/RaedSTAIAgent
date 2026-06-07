@@ -258,9 +258,9 @@ def _build_professional_block(
     elif macd_hist > 0:
         reasons.append("• MACD موجب (زخم شراء)")
     if rsi < 30:
-        reasons.append(f"• RSI = {rsi:.0f} → ذروة بيع (فرصة انتعاش)")
+        reasons.append(f"• RSI = {int(rsi)} → ذروة بيع (فرصة انتعاش)")
     elif rsi > 70:
-        reasons.append(f"• RSI = {rsi:.0f} → ذروة شراء (خطر تصحيح)")
+        reasons.append(f"• RSI = {int(rsi)} → ذروة شراء (خطر تصحيح)")
     else:
         reasons.append(f"• RSI = {rsi:.0f}")
     ns = fib.get("nearest_support", 0)
@@ -475,6 +475,11 @@ def _build_professional_block(
         _decision_label = "[HIGH] — حجم 25–35%"
         _pos_size_rule  = f"25% — ثقة عالية"
 
+    # إصلاح #730/#736: WAIT عند volume ضعيف في counter-trend scalp
+    if _scenario == "counter_trend_bounce" and _vol_ratio < 0.8:
+        _decision_label = "[WAIT] — حجم ضعيف للـ scalp"
+        _pos_size_rule  = "0% — انتظر تأكيد الحجم ≥ 0.8x"
+
     # تحديث vol_pct من _decision_label
     if _conf_score < 40:
         vol_pct = 0
@@ -505,16 +510,13 @@ def _build_professional_block(
 
     # ── TP متدرج حسب نوع الصفقة ──────────────────────────────
     if _scenario == "counter_trend_bounce":
-        # إصلاح #622: Scalp — TP1 ≤ 6% و TP2 ≤ 10%
-        _tp1_pct = min(0.06, atr_dec * 1.5)  # max 6%
-        _tp2_pct = min(0.10, atr_dec * 2.5)  # max 10%
+        # إصلاح #622/#729: TP من الحساب فقط — لا Fibonacci في counter-trend
+        _tp1_pct = min(0.06, atr_dec * 1.2)   # max 6% للـ scalp
+        _tp2_pct = min(0.09, atr_dec * 2.0)   # max 9%
         tp1_v = price * (1 + _tp1_pct)
-        # استخدام Fib إذا كان ضمن النطاق المعقول
-        if nr_fib > price and 0.02 < abs(nr_fib-price)/price <= 0.06:
-            tp1_v = nr_fib
-        tp2_v = tp1_v * (1 + min(0.04, atr_dec))  # TP2 = TP1 + 4% max
-        # تأكد أن TP2 لا يتجاوز 10% من السعر الحالي
-        tp2_v = min(tp2_v, price * 1.10)
+        tp2_v = price * (1 + _tp2_pct)
+        # ضمان: TP2 > TP1 بفارق لا يقل عن 2%
+        tp2_v = max(tp2_v, tp1_v * 1.02)
         tp3_v = None
         _time_exit = "3 أيام"
         _trade_dur = "ساعات — 3 أيام (Scalp)"

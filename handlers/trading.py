@@ -742,7 +742,18 @@ async def cmd_trades(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     ))
                 except Exception: pass
         if not trades:
-            await update.message.reply_text("📋 لا توجد صفقات مُسجَّلة بعد\n💡 جرّب /execute لتنفيذ صفقة"); return
+            from core.state_manager import state_manager as _sm_nt
+            from core.virtual_wallet import VirtualWallet as _VW_nt
+            _vw_nt = _VW_nt(_sm_nt.get_virtual_wallet(user_id) or {})
+            _nb = InlineKeyboardMarkup([[
+                InlineKeyboardButton("🎮 الصفقات الافتراضية", callback_data="goto_vtrades"),
+            ]])
+            await update.message.reply_text(
+                "📋 *التداول الحقيقي*\n\n"
+                "لا توجد صفقات حقيقية مُسجَّلة.\n"
+                f"🎮 الصفقات الافتراضية المفتوحة: {len(_vw_nt.positions)}",
+                parse_mode="Markdown", reply_markup=_nb)
+            return
 
         lines = ["📋 *آخر الصفقات الحقيقية*","━━━━━━━━━━━━━━━━━━",""]
         for t in trades:
@@ -1036,17 +1047,17 @@ async def cmd_autotrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if action in ("on", "تشغيل"):
             _sm.set_autotrade_on(user_id, True)
-            # تفعيل engine flag أيضاً
             _eng_ref = _eng(context)
             if _eng_ref:
                 _eng_ref.auto_trade_enabled = True
+            has_live = bool(ex_info)  # إصلاح #725
             await update.message.reply_text(
                 "✅ *التداول الآلي مُفعَّل*\n"
                 "━━━━━━━━━━━━━━━━━━\n"
                 f"الباقة: {tier_name}\n\n"
                 "📊 *نشط في:*\n"
                 "🎮 المحفظة الافتراضية: ✅ — /vtrades للمتابعة\n"
-                f"💰 التداول الحقيقي: {'✅ ' + mode.replace('💰 حقيقي (','').rstrip(')') if has_live else '❌ غير مربوط — /live للربط'}\n\n"
+                f"💰 التداول الحقيقي: {'✅ ' + ex_info['name'].upper() if has_live else '❌ غير مربوط — /live للربط'}\n\n"
                 "⏰ *جدول المسح*\n"
                 "01:00 · 05:00 · 09:00 · 13:00 · 17:00 · 21:00 KSA\n\n"
                 "للإيقاف الفوري: /autotrade off",
@@ -1067,6 +1078,8 @@ async def cmd_autotrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "⏰ *جدول المسح*\n"
                 "01:00 · 05:00 · 09:00 · 13:00 · 17:00 · 21:00 KSA\n\n"
             ) if is_on else ""
+            _has_live_st = bool(ex_info)
+            _live_name   = ex_info['name'].upper() if _has_live_st else ""
             await update.message.reply_text(
                 "🤖 *التداول الآلي — رائد*\n"
                 "━━━━━━━━━━━━━━━━━━\n"
@@ -1075,7 +1088,7 @@ async def cmd_autotrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 + (
                     "📊 *نشط في:*\n"
                     "🎮 افتراضي: ✅ — /vtrades للمتابعة\n"
-                    f"💰 حقيقي: {'✅ ' + mode.replace('💰 حقيقي (','').rstrip(')') if has_live else '❌ غير مربوط'}\n\n"
+                    f"💰 حقيقي: {'✅ ' + _live_name if _has_live_st else '❌ غير مربوط'}\n\n"
                     if is_on else ""
                 )
                 + f"{schedule_text}"
@@ -1213,12 +1226,22 @@ async def cmd_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines += ["", "💱 *المحفظة الحقيقية*"]
     try:
         engine = context.bot_data.get("raed_engine")
-        if engine:
-            ex_info = engine.get_user_exchange(user_id) if hasattr(engine, "get_user_exchange") else None
-            if ex_info:
-                lines.append(f"• المنصة: {ex_info.get('exchange','').upper()} ✅")
-            else:
-                lines.append("• غير مربوطة — /live لربط منصة تداول")
+        _ex_inf = None
+        if engine and hasattr(engine, "get_user_exchange"):
+            _ex_inf = engine.get_user_exchange(user_id)
+        if _ex_inf:
+            # جلب الرصيد الحقيقي
+            try:
+                _bal = await _ex_inf["exchange"].get_balance("USDT")
+                lines += [
+                    f"• المنصة: {_ex_inf.get('name','').upper()} ✅",
+                    f"• USDT متاح: ${_bal.free:,.2f}",
+                    f"• الإجمالي: ${_bal.total:,.2f}",
+                ]
+            except Exception:
+                lines.append(f"• المنصة: {_ex_inf.get('name','').upper()} ✅ (جاري جلب الرصيد...)")
+        else:
+            lines.append("• غير مربوطة — /live لربط منصة تداول")
     except Exception:
         lines.append("• غير مربوطة — /live لربط منصة تداول")
 
