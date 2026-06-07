@@ -409,16 +409,16 @@ def _build_professional_block(
         _vol_prof = "no_demand"
     _vol_ratio= tech.get("vol_ratio",  1.0)
     _bb_pos_raw = tech.get("bb_pos", None)
-    # إصلاح #787: إذا لا بيانات BB، نستنتج من RSI
+    # إصلاح #787/#850: RSI يُعدِّل BB عند الإجماع
     if _bb_pos_raw is None:
-        if rsi < 20:
-            _bb_pos_v = 0.05   # تحت الحد السفلي
-        elif rsi > 80:
-            _bb_pos_v = 0.95   # فوق الحد العلوي
-        else:
-            _bb_pos_v = 0.5    # default
+        _bb_pos_v = 0.5  # default
     else:
         _bb_pos_v = float(_bb_pos_raw)
+    # RSI في ذروة بيع/شراء يُعدِّل BB إذا كان متعارضاً
+    if rsi < 20 and _bb_pos_v > 0.3:
+        _bb_pos_v = min(_bb_pos_v, 0.15)   # تحت الحد السفلي
+    elif rsi > 80 and _bb_pos_v < 0.7:
+        _bb_pos_v = max(_bb_pos_v, 0.85)   # فوق الحد العلوي
     _scenario = tech.get("scenario",   "")
     _conf_flags = tech.get("conf_flags", [])
     _atr_val  = tech.get("atr_value",  0)
@@ -549,10 +549,10 @@ def _build_professional_block(
         _time_exit = "5 أيام"
         _trade_dur = "2–5 أيام"
 
-    # إصلاح #620: R/R من Entry Aggressive إلى TP1 vs SL
-    _sl_real = pro_sl if (pro_sl > 0 and pro_sl < entry_agg) else entry_agg * (1 - atr_dec * 1.5)
-    _risk     = abs(entry_agg - _sl_real)
-    _reward   = abs(tp1_v - entry_agg)
+    # إصلاح #620/#852: R/R من السعر الحالي لا Entry
+    _sl_real = pro_sl if (pro_sl > 0 and pro_sl < price) else price * (1 - atr_dec * 1.5)
+    _risk     = abs(price - _sl_real)
+    _reward   = abs(tp1_v - price)
     rr_real   = _reward / max(_risk, 0.0001)
     rr_real   = round(min(max(rr_real, 1.0), 4.0), 1)
 
@@ -620,7 +620,8 @@ def _build_professional_block(
     # 4. Entry + TP (مع مراعاة #440: لا TP عند WAIT)
     # إصلاح #785: TP% من السعر الحالي للمستخدم وليس من entry
     tp1_pct = abs(tp1_v - price) / max(price, 0.001) * 100
-    tp2_pct = abs(tp2_v - entry_agg) / max(entry_agg, 0.001) * 100
+        # إصلاح #849: tp2_pct من السعر الحالي
+    tp2_pct = abs(tp2_v - price) / max(price, 0.001) * 100 if tp2_v else 0
     entry_lines = [
         "",
         "*📍 مناطق الدخول والخروج*",
