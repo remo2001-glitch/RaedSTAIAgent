@@ -483,9 +483,16 @@ def _build_professional_block(
     if _conf_score < 40:
         _decision_label = "[WAIT] — لا صفقة نشطة"
         _pos_size_rule  = "0% — انتظر مؤشرات أقوى"
+        # إصلاح #908: action يتوافق مع decision
+        if hasattr(regime, 'action') and regime.action == "trade_normal":
+            try: object.__setattr__(regime, 'action', 'avoid')
+            except: pass
     elif _conf_score < 60:
         _decision_label = "[LOW] — حجم 3–5% فقط"
         _pos_size_rule  = f"5% — ثقة منخفضة"
+        if hasattr(regime, 'action') and regime.action == "trade_normal":
+            try: object.__setattr__(regime, 'action', 'reduce_size')
+            except: pass
     elif _conf_score < 80:
         _decision_label = "[NORMAL] — حجم 10–20%"
         _pos_size_rule  = f"12% — ثقة متوسطة"
@@ -543,8 +550,11 @@ def _build_professional_block(
         _time_exit = "14 يوم"
         _trade_dur = "1–3 أسابيع (Swing)"
     else:
-        tp1_v = price * (1 + atr_dec * 1.8)
-        tp2_v = price * (1 + atr_dec * 3.0)
+        # إصلاح #905: mean_reversion وbullish — TP معقول
+        _tp1_mult = 1.2 if _scenario in ("bullish_continuation",) else 0.8
+        _tp2_mult = 2.0 if _scenario in ("bullish_continuation",) else 1.5
+        tp1_v = price * (1 + min(atr_dec * _tp1_mult, 0.08))   # max 8%
+        tp2_v = price * (1 + min(atr_dec * _tp2_mult, 0.12))   # max 12%
         tp3_v = None
         _time_exit = "5 أيام"
         _trade_dur = "2–5 أيام"
@@ -919,16 +929,26 @@ async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     try:
-        items = await engine.data_layer.get_news(
-            currencies=",".join(symbols), limit=20)
-        items = items or []
+        # إصلاح #924: timeout صارم + fallback
+        import asyncio as _aio_n
+        try:
+            items = await _aio_n.wait_for(
+                engine.data_layer.get_news(
+                    currencies=",".join(symbols), limit=20),
+                timeout=20.0)
+            items = items or []
+        except (_aio_n.TimeoutError, Exception) as _ne:
+            logger.warning(f"news fetch failed: {_ne}")
+            items = []
 
         try:
-            analysis = await engine.news_engine.analyze(items, symbols)
+            analysis = await _aio_n.wait_for(
+                engine.news_engine.analyze(items, symbols),
+                timeout=15.0)
             if not analysis or not isinstance(analysis, dict):
                 analysis = engine.news_engine._neutral_analysis()
         except Exception as e:
-            logger.warning(f"news analyze error: {e}")
+            logger.warning(f"news analyze: {e}")
             analysis = engine.news_engine._neutral_analysis()
 
         try:
@@ -938,14 +958,17 @@ async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
         text = engine.news_engine.format_ar(items, analysis)
-        text = _clean_md(text)
+        text = _clean_md(text) if text else ""
         if not text:
             text = "📰 لا توجد أخبار متاحة حالياً. حاول لاحقاً."
         await msg.edit_text(text, parse_mode=ParseMode.MARKDOWN,
                             disable_web_page_preview=True)
     except Exception as e:
-        logger.error(f"cmd_news: {e}")
-        await msg.edit_text("❌ خطأ في جلب الأخبار. حاول مجدداً")
+        logger.error(f"cmd_news: {e}", exc_info=True)
+        try:
+            await msg.edit_text("📰 تعذَّر جلب الأخبار حالياً. حاول مجدداً لاحقاً.")
+        except Exception:
+            pass
 
 
 # ════════════════════════════════════════════════════════════════
