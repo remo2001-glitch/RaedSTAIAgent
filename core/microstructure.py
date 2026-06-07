@@ -326,16 +326,20 @@ class MicrostructureLayer:
             except (ValueError, TypeError):
                 continue
 
-        # إصلاح #627: fallback لأفضل bid/ask إذا لا جدران
+        # إصلاح #627/#919: fallback فقط إذا best bid/ask >= $10K
         if not buy_walls and bids_raw:
             try:
                 p, q = float(bids_raw[0][0]), float(bids_raw[0][1])
-                buy_walls = [{"price": p, "value_usd": p*q, "is_best": True}]
+                val = p * q
+                if val >= 10_000:  # لا نُعرِض جدراناً أقل من $10K
+                    buy_walls = [{"price": p, "value_usd": val, "is_best": True}]
             except: pass
         if not sell_walls and asks_raw:
             try:
                 p, q = float(asks_raw[0][0]), float(asks_raw[0][1])
-                sell_walls = [{"price": p, "value_usd": p*q, "is_best": True}]
+                val = p * q
+                if val >= 10_000:
+                    sell_walls = [{"price": p, "value_usd": val, "is_best": True}]
             except: pass
 
         buy_val  = sum(w["value_usd"] for w in buy_walls)

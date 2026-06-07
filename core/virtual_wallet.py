@@ -55,6 +55,13 @@ class VirtualWallet:
         """
         symbol = symbol.upper()
 
+        # إصلاح K1/#840/#898: رفض الشراء إذا يوجد مركز مفتوح
+        if symbol in self.positions:
+            return {
+                "ok": False,
+                "msg": f"⚠️ لديك مركز مفتوح على {symbol} بالفعل — أغلقه أولاً"
+            }
+
         # فحص الرصيد
         if amount_usd > self.balance:
             return {"ok": False, "msg": f"{E['error']} رصيدك غير كافٍ. المتاح: ${self.balance:,.2f}"}
