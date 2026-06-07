@@ -52,7 +52,7 @@ DEFAULT_RISK_CONFIG = {
     "min_confidence":       0.60,   # عُدِّل: 65% → 60%     # عتبة الثقة الدنيا
     # Stop/Target افتراضي
     "default_stop_pct":     0.05,     # 5%
-    "default_target_pct":   0.10,     # 10%
+    "default_target_pct":   0.06,     # إصلاح #805: 6% للـ scalp/counter-trend
     "min_rr_ratio":         1.5,      # نسبة Risk/Reward دنيا
     # تعديلات الحالة
     "volatility_scale":     True,     # تقليل الحجم عند ارتفاع التقلب
