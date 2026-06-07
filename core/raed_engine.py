@@ -449,7 +449,23 @@ class RaedEngine:
 
             if alerts:
                 header = "⚡ تنبيه رائد — إشارات قوية\n━━━━━━━━━━━━━━━━━━\n\n"
-                footer = "\n\n⚠️ راجع /signal للتفاصيل"
+                # إصلاح #802: تنبيه بصفقات مفتوحة على نفس العملة
+                _open_warn = ""
+                try:
+                    from core.state_manager import state_manager as _sm_cs
+                    for _uid_cs in _sm_cs.get_autotrade_users():
+                        _vw_cs = _sm_cs.get_virtual_wallet(_uid_cs) or {}
+                        _open_cs = list((_vw_cs.get("positions") or {}).keys())
+                        _same_cs = [s for a in alerts for s in top_symbols
+                                    if s in a and s in _open_cs]
+                        if _same_cs:
+                            _open_warn = (f"\n\n⚠️ لديك صفقات مفتوحة على: "
+                                          f"{', '.join(set(_same_cs))}\n"
+                                          f"💡 /vtrades للمراجعة")
+                            break
+                except Exception:
+                    pass
+                footer = _open_warn or "\n\n💡 /signal للتفاصيل الكاملة"
                 await send_fn(header + "\n\n".join(alerts) + footer)
                 logger.info(f"تنبيه: {len(alerts)} إشارة قوية أُرسلت")
         except Exception as e:
@@ -845,9 +861,7 @@ class RaedEngine:
             _at_active = bool(_at_users)
             if strong_signals and not executed:
                 if _at_active:
-                    # #719: عدد المستخدمين للمدير فقط
-                    _is_admin = (send_fn and hasattr(send_fn, '__self__') and
-                                 getattr(send_fn, '_admin_mode', False))
+                    # #719: عدد المستخدمين للمدير فقط — إصلاح #834
                     lines.append("⚡ *فرص قوية — autotrade نشط ✅*")
                 else:
                     lines.append("⚡ *فرص قوية (autotrade مُوقَف)*")
@@ -876,7 +890,7 @@ class RaedEngine:
                 else:
                     lines.append("💡 /autotrade on للتفعيل")
 
-            lines.append(f"\n⏰ {self.scheduler.next_scan_ar()}")
+            lines.append(f"\n{self.scheduler.next_scan_ar()}")
             return "\n".join(lines)
 
         except Exception as e:
