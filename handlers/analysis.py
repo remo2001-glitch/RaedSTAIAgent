@@ -224,6 +224,11 @@ def _build_professional_block(
     يُعرض في /signal و /analyze فقط
     """
     conf      = signal.confidence
+    # إصلاح #809: تعريف _vol_ratio من candles
+    try:
+        _vol_ratio = float(getattr(signal, "vol_ratio", 1.0) or 1.0)
+    except Exception:
+        _vol_ratio = 1.0
     direction = signal.direction
     tech      = getattr(signal, "technicals", {}) or {}
     adx       = _calc_adx(candles) or float(tech.get("adx", 0) or 0)

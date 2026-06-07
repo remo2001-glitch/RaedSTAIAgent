@@ -256,12 +256,21 @@ def _format_forecast_ar(symbol: str, price: float, fc: dict, days: int = 30) -> 
         f"  🟡 محتمل (Base):       {p_fmt(base)} ({base_pct:+.1f}%)",
         f"  🔴 متحفظ (Bear):       {p_fmt(bear)} ({bear_pct:+.1f}%)",
         "",
-        f"📐 *أهداف فيبوناتشي (Elliott):*",
-        f"  🎯 هدف 1 (1.272): {p_fmt(fc.get('fib_t1',0))}",
-        f"  🎯 هدف 2 (1.618): {p_fmt(fc.get('fib_t2',0))}",
-        f"  🎯 هدف 3 (2.618): {p_fmt(fc.get('fib_t3',0))}",
-        f"  🛡️ دعم 1 (0.382): {p_fmt(fc.get('fib_s1',0))}",
-        f"  🛡️ دعم 2 (0.618): {p_fmt(fc.get('fib_s2',0))}",
+        # إصلاح #818: في السوق الهابط نُظهر فقط مستويات الدعم
+        *(
+            [
+                f"📐 *أهداف فيبوناتشي (Elliott):*",
+                f"  🎯 هدف 1 (1.272): {p_fmt(fc.get('fib_t1',0))}",
+                f"  🎯 هدف 2 (1.618): {p_fmt(fc.get('fib_t2',0))}",
+                f"  🛡️ دعم 1 (0.382): {p_fmt(fc.get('fib_s1',0))}",
+                f"  🛡️ دعم 2 (0.618): {p_fmt(fc.get('fib_s2',0))}",
+            ] if fc.get('trend_dir') != 'down'
+            else [
+                f"📐 *مستويات الدعم الرئيسية:*",
+                f"  🛡️ دعم 1 (0.382): {p_fmt(fc.get('fib_s1',0))}",
+                f"  🛡️ دعم 2 (0.618): {p_fmt(fc.get('fib_s2',0))}",
+            ]
+        ),
         "",
         f"⚠️ التنبؤ استرشادي — الأسواق غير متوقعة",
     ]
@@ -300,7 +309,7 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sym_str    = "مسح شامل"
         plan_label = "مسح شامل للسوق"
     else:
-        symbols    = [a.upper() for a in args[:3]]
+        symbols    = [a.upper() for a in args[:7]]  # إصلاح #833: حد 7 عملات
         sym_str    = ", ".join(symbols)
         plan_label = f"خطة مخصصة لـ {sym_str}"
 
@@ -827,13 +836,18 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         _tp_m, _sl_m = 2.0, 1.2
                     if signal.confidence >= 0.40:
                         entry = min(max(fib_382, price * (1 - atr_v * 0.5)), price * 0.999)
-                        tp1   = entry * (1 + atr_v * _tp_m)
-                        tp2   = price * (1 + atr_v * _tp_m * 1.6)
-                        sl    = entry * (1 - atr_v * _sl_m)
-                        rr    = (tp1 - entry) / max(entry - sl, 0.0001)
+                        # إصلاح #827: TP محدود + R/R صحيح
+                        _tp1_pct = min(0.08, atr_v * _tp_m)   # max 8%
+                        _tp2_pct = min(0.12, atr_v * _tp_m * 1.4)  # max 12%
+                        tp1   = price * (1 + _tp1_pct)
+                        tp2   = price * (1 + _tp2_pct)
+                        sl    = entry * (1 - min(atr_v * _sl_m, 0.08))  # max SL 8%
+                        _risk = max(entry - sl, 0.0001)
+                        _rew  = max(tp1 - entry, 0.0001)
+                        rr    = min(_rew / _risk, 4.0)  # سقف R/R = 4
                         entry_lines = [
-                            f"  📍 دخول: {_fmt_price(entry)} | وقف: {_fmt_price(sl)} ({atr_v*120:.1f}%-)",
-                            f"  🎯 هدف1: {_fmt_price(tp1)} (+{atr_v*150:.1f}%) | هدف2: {_fmt_price(tp2)} (+{atr_v*250:.1f}%)",
+                            f"  📍 دخول: {_fmt_price(entry)} | وقف: {_fmt_price(sl)} ({abs(entry-sl)/max(entry,0.001)*100:.1f}%-)",
+                            f"  🎯 هدف1: {_fmt_price(tp1)} (+{_tp1_pct*100:.1f}%) | هدف2: {_fmt_price(tp2)} (+{_tp2_pct*100:.1f}%)",
                             f"  📊 {('R/R: 1:' + f'{rr:.1f}') if rr >= 1.0 else '⚠️ R/R غير مناسب'} | ATR: {atr_v*100:.1f}%",
                         ]
                     elif signal.confidence >= 0.40 and signal.direction == "short":
@@ -1411,7 +1425,20 @@ async def cb_plan_custom(update, context):
 
 
 async def handle_plan_symbols_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالجة إدخال رموز العملات المحددة — إصلاح #780/#781."""
+    """معالجة إدخال رموز العملات أو ملاحظات المستخدم — إصلاح #780/#832."""
+    # معالجة ملاحظات المستخدم على الخطة
+    if context.user_data.get("awaiting_plan_comment"):
+        context.user_data.pop("awaiting_plan_comment", None)
+        comment = (update.message.text or "").strip()
+        if comment:
+            from core.state_manager import state_manager as _sm_pc
+            _sm_pc.save_user_comment(update.effective_user.id, {
+                "text": comment, "type": "plan_comment"})
+        await update.message.reply_text(
+            "✅ شكراً! تم حفظ ملاحظتك.\n"
+            "رائد سيأخذها بعين الاعتبار في التحليلات القادمة 🎯")
+        return
+
     plan_type = context.user_data.get("awaiting_plan_symbols")
     if not plan_type:
         return  # لا ننتظر إدخال عملات
