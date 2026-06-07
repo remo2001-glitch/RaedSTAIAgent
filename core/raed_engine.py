@@ -755,6 +755,11 @@ class RaedEngine:
                                 _vw = _VW(_wdata)
 
                                 # Q1-Q5: فحص قيود التنفيذ
+                                # إصلاح #840: فحص مباشر للمراكز المفتوحة
+                                if s["symbol"] in (_vw.positions or {}):
+                                    logger.info(
+                                        f"Skip {s['symbol']}: صفقة مفتوحة بالفعل")
+                                    continue
                                 _can, _buy_amt, _limit_reason = _sm_vw.can_execute_trade(
                                     _uid, s["symbol"], _scan_type, _vw.total_value)
                                 if not _can:
