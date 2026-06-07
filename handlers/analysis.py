@@ -399,8 +399,21 @@ def _build_professional_block(
     _mp_ar    = _get_market_phase_ar(_mp) if _mp else ""
     _rsi_div  = tech.get("rsi_div",   "none")
     _vol_prof = tech.get("vol_profile", "normal")
+    # إصلاح #788: حجم ضعيف < 0.8x يُصنَّف دائماً no_demand
+    if _vol_ratio < 0.8 and _vol_prof not in ("climax_selling", "climax_buying"):
+        _vol_prof = "no_demand"
     _vol_ratio= tech.get("vol_ratio",  1.0)
-    _bb_pos_v = tech.get("bb_pos",     0.5)
+    _bb_pos_raw = tech.get("bb_pos", None)
+    # إصلاح #787: إذا لا بيانات BB، نستنتج من RSI
+    if _bb_pos_raw is None:
+        if rsi < 20:
+            _bb_pos_v = 0.05   # تحت الحد السفلي
+        elif rsi > 80:
+            _bb_pos_v = 0.95   # فوق الحد العلوي
+        else:
+            _bb_pos_v = 0.5    # default
+    else:
+        _bb_pos_v = float(_bb_pos_raw)
     _scenario = tech.get("scenario",   "")
     _conf_flags = tech.get("conf_flags", [])
     _atr_val  = tech.get("atr_value",  0)
@@ -600,7 +613,8 @@ def _build_professional_block(
         parts.extend(deriv_lines)
 
     # 4. Entry + TP (مع مراعاة #440: لا TP عند WAIT)
-    tp1_pct = abs(tp1_v - entry_agg) / max(entry_agg, 0.001) * 100
+    # إصلاح #785: TP% من السعر الحالي للمستخدم وليس من entry
+    tp1_pct = abs(tp1_v - price) / max(price, 0.001) * 100
     tp2_pct = abs(tp2_v - entry_agg) / max(entry_agg, 0.001) * 100
     entry_lines = [
         "",
@@ -1085,7 +1099,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             engine.data_layer.get_fear_greed(),
             engine.data_layer.get_news(currencies=symbol),
             engine.data_layer.get_btc_dominance(),
-            engine.data_layer.get_ohlcv_4h(symbol, 100),
+            engine.data_layer.get_ohlcv_4h(symbol, 50),
             return_exceptions=True
         )
         candles  = candles  if isinstance(candles, list) else []
@@ -1424,7 +1438,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(candles) < 10:
             logger.info(f"analyze: retry OHLCV for {symbol}")
             await asyncio.sleep(1)
-            retry_c = await engine.data_layer.get_ohlcv(symbol, "1d", 100)
+            retry_c = await engine.data_layer.get_ohlcv(symbol, "1d", 60)
             if isinstance(retry_c, list) and len(retry_c) >= 10:
                 candles = retry_c
 
@@ -1506,7 +1520,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     engine.data_layer.get_open_interest(symbol),
                     engine.data_layer.get_funding_rate(symbol),
                     engine.data_layer.get_whale_ratio(symbol),
-                    engine.data_layer.get_ohlcv_4h(symbol, 100),
+                    engine.data_layer.get_ohlcv_4h(symbol, 50),
                     engine.data_layer.get_onchain(),
                     return_exceptions=True,
                 ), timeout=15.0
@@ -1548,7 +1562,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"analyze_symbol ({symbol}): {_ae}")
             analysis = (f"📊 تحليل {symbol}\n"
                        f"السعر: {_fmt_price(price)} ({change_24h:+.2f}%)\n"
-                       f"RSI: {rsi:.0f} | السوق: {regime_desc}")
+                       f"RSI: {int(rsi)} | السوق: {regime_desc}")
 
         change_sign = "+" if change_24h >= 0 else ""
         # حساب مستويات دخول/خروج من ATR
@@ -1839,7 +1853,7 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(candles) < 10:
             logger.info(f"analyze: retry OHLCV for {symbol}")
             await asyncio.sleep(1)
-            retry_c = await engine.data_layer.get_ohlcv(symbol, "1d", 100)
+            retry_c = await engine.data_layer.get_ohlcv(symbol, "1d", 60)
             if isinstance(retry_c, list) and len(retry_c) >= 10:
                 candles = retry_c
 
@@ -1940,7 +1954,7 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "━━━━━━━━━━━━━━━━━━",
             f"💰 السعر: {_fmt_price(price)} ({change_sign}{change_24h:.2f}%)",
             f"🌍 السوق: {regime_desc}",
-            f"📈 RSI: {rsi:.0f} | Fear & Greed: {fear_val}",
+            f"📈 RSI: {int(rsi)} | Fear & Greed: {fear_val}",
             "",
             f"🎯 *التوصية: {direction}*",
             "",

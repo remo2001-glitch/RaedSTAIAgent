@@ -1057,7 +1057,7 @@ async def cmd_autotrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"الباقة: {tier_name}\n\n"
                 "📊 *نشط في:*\n"
                 "🎮 المحفظة الافتراضية: ✅ — /vtrades للمتابعة\n"
-                f"💰 التداول الحقيقي: {'✅ ' + ex_info['name'].upper() if has_live else '❌ غير مربوط — /live للربط'}\n\n"
+                f"💰 حقيقي: {'✅ ' + ex_info['name'].upper() + ' — /trades للمتابعة' if has_live else '❌ غير مربوط — /live للربط'}\n\n"
                 "⏰ *جدول المسح*\n"
                 "01:00 · 05:00 · 09:00 · 13:00 · 17:00 · 21:00 KSA\n\n"
                 "للإيقاف الفوري: /autotrade off",
@@ -1253,8 +1253,8 @@ async def cmd_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
         InlineKeyboardButton(f"{E['trash']} إعادة ضبط",  callback_data="vreset_confirm"),
     ]])
     await update.message.reply_text(
-        "\n".join(lines) + _sig(),
-        parse_mode=ParseMode.MARKDOWN,
+        "\n".join(lines),
+        parse_mode="Markdown",
         reply_markup=buttons)
 
 
@@ -2017,7 +2017,8 @@ async def cb_vhistory(update, context):
             sign = "+" if pnl >= 0 else ""
             emoji = "✅" if pnl >= 0 else "❌"
             ts = t.get("time","")[:10]
-            lines.append(f"{emoji} {t.get('symbol','')} | {ts} | {sign}${pnl:,.2f}")
+            pnl_pct = t.get("pnl_pct", 0) or (pnl / max(t.get("cost",1),1) * 100)
+            lines.append(f"{emoji} {t.get('symbol','')} | {ts} | {sign}${pnl:,.2f} ({sign}{abs(pnl_pct):.1f}%)")
         await query.message.reply_text("\n".join(lines), parse_mode="Markdown")
     except Exception as e:
         logger.error(f"cb_vhistory: {e}")

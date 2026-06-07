@@ -304,11 +304,20 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sym_str    = ", ".join(symbols)
         plan_label = f"خطة مخصصة لـ {sym_str}"
 
-    msg = await update.message.reply_text(
-        f"📋 جاري بناء {plan_label}...\n"
-        + ("⏳ المسح الشامل قد يستغرق 5-15 دقيقة — يُرجى الانتظار" if scan_mode
-           else "⏳ قد يستغرق 1-3 دقائق — يُرجى عدم تكرار الأمر")
-    )
+    # إصلاح #776: دعم msg من callback
+    _msg_ov = context.user_data.pop("_plan_msg_override", None)
+    if _msg_ov:
+        msg = _msg_ov
+        try:
+            await msg.edit_text(f"📋 جاري بناء {plan_label}...")
+        except Exception:
+            pass
+    else:
+        msg = await update.message.reply_text(
+            f"📋 جاري بناء {plan_label}...\n"
+            + ("⏳ المسح الشامل قد يستغرق 5-15 دقيقة — يُرجى الانتظار" if scan_mode
+               else "⏳ قد يستغرق 1-3 دقائق — يُرجى عدم تكرار الأمر")
+        )
     # إصلاح #178: semaphore للأوامر الثقيلة
     _heavy_sem_w = await engine.acquire_heavy()
     await _heavy_sem_w.acquire()
@@ -637,6 +646,19 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @require_tier("planweek")
 # ══ Plan Start — سؤال أولاً (T3) ══════════════════════════════════════════════
+
+async def _run_planweek(update, context, msg=None):
+    """تشغيل الخطة الأسبوعية — يستقبل msg اختيارياً من callback."""
+    # نُعيد توجيه context.user_data لـ cmd_plan_week
+    context.user_data["_plan_msg_override"] = msg
+    await cmd_plan_week(update, context)
+
+
+async def _run_planmonth(update, context, msg=None):
+    """تشغيل الخطة الشهرية — يستقبل msg اختيارياً من callback."""
+    context.user_data["_plan_msg_override"] = msg
+    await cmd_plan_month(update, context)
+
 
 @require_tier("planweek")
 async def cmd_planweek_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1316,6 +1338,11 @@ def register(app):
     app.add_handler(_CQH(cb_plan_comment, pattern=r"^plan_comment$"))
     app.add_handler(_CQH(cb_plan_general, pattern=r"^plan_(w|m)_general$"))
     app.add_handler(_CQH(cb_plan_custom,  pattern=r"^plan_(w|m)_custom$"))
+    # إصلاح #780: MessageHandler لإدخال العملات
+    app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND,
+        handle_plan_symbols_input
+    ), group=1)  # group=1 لأولوية أقل
 
 # راسالة انتظار: 📋 الأصول في وضع المراقبة — لم تصل لشروط الدخول بعد
 
@@ -1347,15 +1374,27 @@ async def cb_plan_comment(update, context):
 
 
 async def cb_plan_general(update, context):
-    """تنفيذ خطة عامة."""
+    """تنفيذ خطة عامة — إصلاح #776: استخدام query.message."""
     query = update.callback_query
-    await query.answer()
+    await query.answer("⏳ جاري إعداد الخطة...")
     plan_type = "week" if "plan_w" in query.data else "month"
-    context.args = []
-    if plan_type == "week":
-        await cmd_plan_week(update, context)
-    else:
-        await cmd_plan_month(update, context)
+    # إرسال رسالة تحميل
+    msg = await query.message.reply_text("⏳ جاري تحليل السوق وإعداد الخطة...")
+    context.user_data["plan_msg_id"] = msg.message_id
+    context.user_data["plan_chat_id"] = query.message.chat_id
+    # استدعاء الدالة مباشرة مع تمرير msg
+    try:
+        if plan_type == "week":
+            await _run_planweek(update, context, msg)
+        else:
+            await _run_planmonth(update, context, msg)
+    except Exception as e:
+        import logging
+        logging.getLogger("plan").error(f"cb_plan_general: {e}")
+        try:
+            await msg.edit_text(f"❌ خطأ في إعداد الخطة: {str(e)[:100]}")
+        except Exception:
+            pass
 
 
 async def cb_plan_custom(update, context):
@@ -1369,3 +1408,28 @@ async def cb_plan_custom(update, context):
         "مثال: BTC ETH SOL XRP\n"
         "_(مفصولة بمسافة)_",
         parse_mode="Markdown")
+
+
+async def handle_plan_symbols_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """معالجة إدخال رموز العملات المحددة — إصلاح #780/#781."""
+    plan_type = context.user_data.get("awaiting_plan_symbols")
+    if not plan_type:
+        return  # لا ننتظر إدخال عملات
+
+    # استخراج الرموز
+    text = (update.message.text or "").strip().upper()
+    symbols = [s.strip() for s in text.replace(',', ' ').split() if s.strip()]
+
+    if not symbols:
+        await update.message.reply_text("⚠️ لم أتعرف على رموز عملات — جرّب: BTC ETH SOL")
+        return
+
+    # مسح انتظار الإدخال
+    context.user_data.pop("awaiting_plan_symbols", None)
+
+    # تمرير الرموز كـ args
+    context.args = symbols
+    if plan_type == "week":
+        await cmd_plan_week(update, context)
+    else:
+        await cmd_plan_month(update, context)
