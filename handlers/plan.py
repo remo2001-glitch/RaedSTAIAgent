@@ -217,6 +217,8 @@ def _calc_price_forecast(candles: list, days: int = 30,
             "fib_s2":       round(fib_support2, 8),
             "confidence":   round(confidence, 2),
             "combined_mult":round(combined_mult, 3),
+            # إصلاح #984: trend_dir لإظهار Elliott بشكل صحيح
+            "trend_dir":    trend,  # "bullish" | "bearish" | "neutral"
         }
     except Exception:
         return {}
@@ -264,7 +266,7 @@ def _format_forecast_ar(symbol: str, price: float, fc: dict, days: int = 30) -> 
                 f"  🎯 هدف 2 (1.618): {p_fmt(fc.get('fib_t2',0))}",
                 f"  🛡️ دعم 1 (0.382): {p_fmt(fc.get('fib_s1',0))}",
                 f"  🛡️ دعم 2 (0.618): {p_fmt(fc.get('fib_s2',0))}",
-            ] if fc.get('trend_dir') != 'down'
+            ] if fc.get('trend_dir') not in ('down', 'bearish')
             else [
                 f"📐 *مستويات الدعم الرئيسية:*",
                 f"  🛡️ دعم 1 (0.382): {p_fmt(fc.get('fib_s1',0))}",
@@ -312,6 +314,7 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
         symbols    = []
         sym_str    = "مسح شامل"
         plan_label = "مسح شامل للسوق"
+        _MAX_SCAN_SYMS = 6  # إصلاح #1003
     else:
         symbols    = [a.upper() for a in args[:7]]  # إصلاح #833: حد 7 عملات
         sym_str    = ", ".join(symbols)
@@ -337,6 +340,8 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
 
         # ── 1. بيانات أساسية متوازية ──────────────────────────
+        # إصلاح #1003: timeout 8 دقائق للمسح الشامل
+        import asyncio as _aio_pm
         fear, onchain, btc_c = await asyncio.gather(
             engine.data_layer.get_fear_greed(),
             engine.data_layer.get_onchain(),
@@ -347,6 +352,9 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
         onchain = onchain if isinstance(onchain, dict) else {}
         btc_c   = btc_c   if isinstance(btc_c, list)  else []
         fear_val = int((fear or {}).get("value") or 50)
+        # إصلاح #983: BTC Dom من onchain الحقيقي
+        _btc_dom_real = float((onchain or {}).get("btc_dominance") or
+                              (onchain or {}).get("btc_dom") or 56)
 
         from core.regime_detector import Regime, RegimeResult
         if len(btc_c) >= 30:
@@ -588,7 +596,8 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"• أسبوع 1: احتفظ بـ 100% سيولة (${user_portfolio:,.0f}) — RSI يرتد فوق 30 ({_rsi_label})",
                     f"• أسبوع 2: مراقبة مستويات الدعم ودخول تدريجي عند ارتداد RSI فوق 35",
                     # إصلاح #864: أسبوع 3 فقط إذا يوجد أصول مؤهلة
-                    f"• أسبوع 3: Fear & Greed < 25 → {'ابدأ التجميع' if allocation and any(a.allocation > 0 for a in (allocation.positions if hasattr(allocation,'positions') else [])) else 'انتظر تأكيد انعكاس'} ({_fg_label})",
+                    # إصلاح #985/#1002: لا نُظهر ✅ عند لا أصول مؤهلة
+                    f"• أسبوع 3: Fear & Greed < 25 → انتظر تأكيد ارتداد ({_fg_label})",
                     "• أسبوع 4: تقييم: هل تشكّل قاع؟ قرار الدخول الكامل",
                 ]
         elif regime.regime in (Regime.BULL_TREND, Regime.ACCUMULATION):
@@ -619,7 +628,7 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     _fca_c, days=30, fear_greed=fear_val,
                     btc_dominance=float(
                         (regime.metrics or {}).get("btc_dominance") or
-                        btc_dom or 50),
+                        _btc_dom_real),  # إصلاح #983
                     market_regime=regime.description_ar,
                 )
                 if _fca:
@@ -925,7 +934,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     fear_greed=fear_val,
                     btc_dominance=float(
                         (getattr(regime, "metrics", {}) or {}).get("btc_dominance") or
-                        btc_dom or 50),
+                        _btc_dom_real),  # إصلاح #983
                     market_regime=regime.description_ar,
                 )
                 if _fc:

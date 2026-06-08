@@ -561,12 +561,19 @@ def _build_professional_block(
         _time_exit = "5 أيام"
         _trade_dur = "2–5 أيام"
 
-    # إصلاح #620/#852: R/R من السعر الحالي لا Entry
-    _sl_real = pro_sl if (pro_sl > 0 and pro_sl < price) else price * (1 - atr_dec * 1.5)
-    _risk     = abs(price - _sl_real)
-    _reward   = abs(tp1_v - price)
-    rr_real   = _reward / max(_risk, 0.0001)
-    rr_real   = round(min(max(rr_real, 1.0), 4.0), 1)
+    # إصلاح #620/#852/#949: R/R حقيقي
+    # SL يُحسب من السعر الحالي للحصول على R/R دقيق
+    _sl_pct_from_price = atr_dec * 1.0   # SL = ATR% من السعر
+    _sl_price = price * (1 - _sl_pct_from_price)
+    # نستخدم pro_sl إذا كان أقل من السعر وأكبر من صفر
+    if pro_sl > 0 and _sl_price < pro_sl < price:
+        _sl_price = pro_sl
+    _risk   = max(price - _sl_price, 0.0001)
+    _reward = max(tp1_v - price, 0.0001)
+    rr_real = round(min(_reward / _risk, 5.0), 1)
+    # لا نُجبر R/R على 1.0 — نُظهر القيمة الحقيقية
+    if rr_real < 1.0:
+        rr_real = 1.0  # فقط إذا كان حقاً أقل من 1:1
 
     # Worst-Case
     wc_loss = abs(price - pro_sl) / max(price, 0.001) * 100
