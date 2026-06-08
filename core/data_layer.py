@@ -86,7 +86,11 @@ _CG_MAP = {
     "MYRO":"myro",
     "RETARDIO":"retardio",
     "GIGA":"gigachad-memecoin",
-"ZRO":"layerzero","ASTER":"aster-network",    # ── إضافات ملاحظات #36,#38,#44 ──────────────────────────────
+"ZRO":"layerzero","ASTER":"aster-network",
+    # إصلاح #1006: عملات AI جديدة
+    "AIXBT":"aixbt-by-virtuals","VADER":"vader-protocol",
+    "HYPE":"hyperliquid","ONDO":"ondo-finance",
+    "PENDLE":"pendle","ENA":"ethena",    # ── إضافات ملاحظات #36,#38,#44 ──────────────────────────────
     "RSR":"reserve-rights-token",
     "QNT":"quant-network",
     "BLUR":"blur",
@@ -503,7 +507,6 @@ class DataLayer:
         candles = await self._hist_okx(symbol, min(limit, 300))
         if len(candles) >= 10:
             _store(key, candles, "ohlcv")
-            _set_cached_ohlcv(_ck, candles)
             return candles
 
         # ── CoinGecko fallback ─────────────────────────────────
@@ -511,20 +514,17 @@ class DataLayer:
         cg_candles = await self._ohlcv_coingecko(symbol, cg_days)
         if len(cg_candles) >= 10:
             _store(key, cg_candles, "ohlcv")
-            _set_cached_ohlcv(_ck, cg_candles)
             return cg_candles
 
         # ── Binance آخراً (محجوب عادةً على Railway) ───────────
         candles = await self._ohlcv_binance(symbol, interval, limit)
         if len(candles) >= 10:
             _store(key, candles, "ohlcv")
-            _set_cached_ohlcv(_ck, candles)
             return candles
 
         # إذا CoinGecko أعطى بيانات قليلة — نُعيدها على أي حال
         if cg_candles:
             _store(key, cg_candles, "ohlcv")
-            _set_cached_ohlcv(_ck, cg_candles)
             return cg_candles
 
         logger.error(f"get_ohlcv فشل لـ {symbol} — يُعيد []")
