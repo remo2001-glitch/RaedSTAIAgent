@@ -24,6 +24,7 @@ class LiveTrade:
     stop_loss:    float     # سعر وقف الخسارة
     take_profit:  float     # سعر الهدف
     order_id:          str   = ""
+    trailing_pct:      float = 0.0      # > 0 = Trailing Stop مُفعَّل
     status:            str   = "OPEN"   # OPEN | CLOSED | CANCELLED | PENDING
     exit_price:        float = 0.0
     pnl_usd:           float = 0.0
@@ -72,8 +73,17 @@ class OrderManager:
             logger.error(f"open_trade: qty={qty} غير صالح")
             return None
 
-        # تنفيذ الأمر
-        exec_price = limit_price if (order_type.upper()=="LIMIT" and limit_price>0)                      else (entry_price if order_type.lower()=="limit" else 0)
+        # إصلاح: تحديد سعر التنفيذ بوضوح
+        _is_limit = order_type.upper() == "LIMIT"
+        if _is_limit and limit_price > 0:
+            exec_price = limit_price   # Limit Order → سعر محدد
+        elif _is_limit and limit_price <= 0:
+            # Limit بدون سعر → نحوله Market لتجنب الخطأ
+            order_type  = "MARKET"
+            exec_price  = 0
+            logger.warning(f"LIMIT order بدون limit_price لـ {symbol} → تحويل لـ MARKET")
+        else:
+            exec_price  = 0   # MARKET → البورصة تُحدد السعر
         result = await self.exchange.place_order(
             symbol=symbol, side=side,
             qty=qty, order_type=order_type,
@@ -457,6 +467,19 @@ class OrderManager:
 
                 is_long = trade.side == "Buy"
 
+                # تحريك Trailing Stop إذا مُفعَّل
+                if getattr(trade, "trailing_pct", 0) > 0:
+                    t_pct = trade.trailing_pct
+                    if is_long:
+                        new_sl = price * (1 - t_pct / 100)
+                        if new_sl > trade.stop_loss:
+                            trade.stop_loss = new_sl
+                            logger.debug(f"Trailing SL تحرّك لـ {new_sl:.4f} ({trade.symbol})")
+                    else:
+                        new_sl = price * (1 + t_pct / 100)
+                        if new_sl < trade.stop_loss:
+                            trade.stop_loss = new_sl
+
                 # فحص Stop Loss
                 if is_long and price <= trade.stop_loss:
                     logger.warning(f"🛑 Stop Loss: {trade.trade_id} @ ${price:,.2f}")
@@ -481,6 +504,26 @@ class OrderManager:
     # ═══════════════════════════════════════════════════════════
     # Helpers
     # ═══════════════════════════════════════════════════════════
+    def set_trailing_stop(self, trade_id: str, trail_pct: float) -> bool:
+        """تفعيل Trailing Stop على صفقة مفتوحة."""
+        trade = self._trades.get(trade_id)
+        if not trade or trade.status != "OPEN":
+            return False
+        trade.trailing_pct = trail_pct
+        # SL الأولي = entry * (1 - trail_pct/100)
+        is_long = trade.side.lower() in ("buy","long")
+        if is_long:
+            new_sl = trade.entry_price * (1 - trail_pct / 100)
+            if new_sl > trade.stop_loss:
+                trade.stop_loss = new_sl
+        else:
+            new_sl = trade.entry_price * (1 + trail_pct / 100)
+            if new_sl < trade.stop_loss:
+                trade.stop_loss = new_sl
+        self._save_trade_to_redis(trade)
+        logger.info(f"Trailing Stop {trail_pct}% مُفعَّل لـ {trade_id}")
+        return True
+
     def get_open_trades(self, user_id: int = None) -> List[LiveTrade]:
         trades = [t for t in self._trades.values() if t.status == "OPEN"]
         if user_id:
