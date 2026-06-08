@@ -471,6 +471,75 @@ async def callback_execmode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     update.message = query.message
     await cmd_execute(update, context)
 
+async def _handle_trailing_stop(update, context, engine,
+                                   symbol: str, trail_pct: float):
+    """تفعيل Trailing Stop على صفقة مفتوحة."""
+    user_id = update.effective_user.id
+    msg = await update.message.reply_text(
+        f"🔍 جاري البحث عن صفقة مفتوحة لـ {symbol}...")
+
+    try:
+        # ابحث في virtual wallet أولاً
+        from core.state_manager import state_manager as _sm_ts
+        from core.virtual_wallet import VirtualWallet as _VW_ts
+        vw = _VW_ts(_sm_ts.get_virtual_wallet(user_id) or {})
+
+        sym_upper = symbol.upper()
+        if sym_upper in (vw.positions or {}):
+            pos = vw.positions[sym_upper]
+            entry = float(pos.get("avg_price", 0))
+            # Trailing Stop = entry * (1 - trail_pct/100)
+            trail_sl = entry * (1 - trail_pct / 100)
+            # تحديث SL في الـ position
+            vw.positions[sym_upper]["stop_loss"] = trail_sl
+            vw.positions[sym_upper]["trailing_pct"] = trail_pct
+            _sm_ts.save_virtual_wallet(user_id, vw.to_dict())
+            await msg.edit_text(
+                f"✅ *Trailing Stop مُفعَّل*\n\n"
+                f"🪙 {sym_upper} — محفظة افتراضية\n"
+                f"• سعر الدخول: ${entry:,.4f}\n"
+                f"• Trailing: {trail_pct:.1f}%\n"
+                f"• وقف الخسارة الحالي: ${trail_sl:,.4f}\n\n"
+                f"_يتحرك الوقف لأعلى تلقائياً مع ارتفاع السعر_",
+                parse_mode="Markdown")
+            return
+
+        # ابحث في التداول الحقيقي
+        has_live = engine.user_has_live_trading(user_id)
+        if has_live:
+            best_ex = await engine.find_best_exchange(user_id, sym_upper)
+            if best_ex:
+                om = best_ex.get("order_manager")
+                if om:
+                    trades = om.get_open_trades(user_id)
+                    trade  = next((t for t in trades if t.symbol == sym_upper), None)
+                    if trade:
+                        # تفعيل Trailing في order_manager
+                        if hasattr(om, "set_trailing_stop"):
+                            om.set_trailing_stop(trade.trade_id, trail_pct)
+                        else:
+                            # fallback: تحديث SL مباشرة
+                            trail_sl = trade.entry_price * (1 - trail_pct / 100)
+                            trade.stop_loss = trail_sl
+                        await msg.edit_text(
+                            f"✅ *Trailing Stop مُفعَّل — تداول حقيقي*\n\n"
+                            f"🪙 {sym_upper}\n"
+                            f"• Trailing: {trail_pct:.1f}%\n"
+                            f"• وقف الخسارة الحالي: ${trade.stop_loss:,.4f}",
+                            parse_mode="Markdown")
+                        return
+
+        await msg.edit_text(
+            f"⚠️ لا توجد صفقة مفتوحة لـ {sym_upper}\n"
+            f"افتح صفقة أولاً بـ `/execute {sym_upper} buy [مبلغ]`",
+            parse_mode="Markdown")
+
+    except Exception as e:
+        import logging
+        logging.getLogger("trading").error(f"_handle_trailing_stop: {e}")
+        await msg.edit_text(f"❌ خطأ: {str(e)[:100]}")
+
+
 async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine = _eng(context)
     if not engine:
@@ -479,8 +548,13 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args or []
     if len(args) < 2:
         await update.message.reply_text(
-            "⚠️ الاستخدام: /execute [رمز] [buy|sell] [مبلغ]\n"
-            "مثال: /execute BTC buy 500"); return
+            "⚡ *الاستخدام*\n\n"
+            "• Market:  `/execute BTC buy 500`\n"
+            "• Limit:   `/execute BTC buy 500 limit 60000`\n"
+            "• Sell:    `/execute BTC sell 500`\n"
+            "• Trailing: `/execute BTC trailstop 2`\n\n"
+            "_المبلغ بالدولار أو نسبة مثل `10%`_",
+            parse_mode="Markdown"); return
 
     symbol    = args[0].upper()
     direction = args[1].lower()
@@ -489,15 +563,29 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except (ValueError, TypeError):
         size_usd = 500.0
 
-    # M#90: قراءة Limit Price إذا حُدِّدت
-    limit_price = 0.0
+    # M#90: قراءة Limit Price وTrailing Stop
+    limit_price  = 0.0
+    trail_pct    = 0.0
+
+    # تنسيق: /execute BTC trailstop 2%
+    if direction in ("trailstop", "trailing", "trail"):
+        try:
+            trail_str = args[2].rstrip("%") if len(args) > 2 else "2"
+            trail_pct = float(trail_str)
+        except (ValueError, TypeError):
+            trail_pct = 2.0
+        await _handle_trailing_stop(update, context, engine, symbol, trail_pct)
+        return
+
     if len(args) >= 5 and args[3].lower() == "limit":
         try:
             limit_price = float(args[4])
+            if limit_price <= 0:
+                raise ValueError("سعر Limit يجب أن يكون > 0")
         except (ValueError, TypeError):
             await update.message.reply_text(
                 "⚠️ سعر Limit غير صحيح\n"
-                "مثال: `/execute FET buy 5 limit 0.259`",
+                "مثال: `/execute BTC buy 500 limit 60000`",
                 parse_mode="Markdown"); return
 
     if direction not in ("buy","sell","شراء","بيع"):
@@ -652,7 +740,13 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
             rr_ratio = float(risk.take_profit_pct or 10) / max(float(risk.stop_loss_pct or 5), 0.1)
             vol_m    = best_ex.get("volume_24h", 0) / 1e6
 
-            kb = build_confirm_keyboard(symbol, trade_dir, final_size, best_ex.get("name",""))
+            # إصلاح كارثي: تمرير sl/tp من risk_engine + limit_price
+            kb = build_confirm_keyboard(
+                symbol, trade_dir, final_size,
+                best_ex.get("name",""),
+                limit_price=limit_price,
+                sl_pct=float(risk.stop_loss_pct or 5.0),
+                tp_pct=float(risk.take_profit_pct or 6.0))
             # M#90: عرض نوع الأمر (Market أو Limit)
             if limit_price > 0:
                 is_b = direction == "long"
@@ -878,7 +972,14 @@ async def handle_trade_callback(update: Update,
             symbol    = parts[1]
             direction = parts[2]
             size_usd  = float(parts[3])
-            limit_p   = float(parts[4]) if len(parts) > 4 and parts[4] not in ("0", "0.0000") else 0.0
+            # إصلاح كارثي: قراءة limit_price و sl/tp من callback_data
+            # الصيغة: confirm_SYM_DIR_SIZE_LIMIT_SL_TP
+            limit_p  = float(parts[4]) if len(parts) > 4 else 0.0
+            _sl_cb   = float(parts[5]) if len(parts) > 5 else 5.0
+            _tp_cb   = float(parts[6]) if len(parts) > 6 else 6.0
+            # تطبيع limit_price
+            if limit_p < 0.0001:
+                limit_p = 0.0
 
             # اختيار أفضل منصة
             best_ex = await engine.find_best_exchange(user_id, symbol)
@@ -898,7 +999,7 @@ async def handle_trade_callback(update: Update,
                 om.add_pending_limit(
                     symbol=symbol, side="Buy" if is_bl else "Sell",
                     size_usd=size_usd, limit_price=limit_p,
-                    stop_loss_pct=5.0, take_profit_pct=10.0,
+                    stop_loss_pct=_sl_cb, take_profit_pct=_tp_cb,
                     user_id=user_id, auto_protect=can_p,
                 )
                 await query.edit_message_text(
@@ -970,9 +1071,12 @@ async def handle_trade_callback(update: Update,
                     actual_ot, actual_ep = "LIMIT", limit_p
             else:
                 actual_ot, actual_ep = "MARKET", price
+            # إصلاح كارثي: استخدام sl/tp من risk_engine
             trade = await om.open_trade(
                 symbol=symbol, side=side, size_usd=size_usd,
-                entry_price=actual_ep, stop_loss_pct=5.0, take_profit_pct=10.0,
+                entry_price=actual_ep,
+                stop_loss_pct=_sl_cb,
+                take_profit_pct=_tp_cb,
                 order_type=actual_ot, user_id=user_id,
                 limit_price=limit_p if actual_ot=="LIMIT" else 0.0)
 
@@ -1007,15 +1111,18 @@ async def handle_trade_callback(update: Update,
 def build_confirm_keyboard(symbol: str, direction: str,
                              size_usd: float,
                              exchange_name: str = "",
-                             limit_price: float = 0.0) -> InlineKeyboardMarkup:
+                             limit_price: float = 0.0,
+                             sl_pct: float = 5.0,
+                             tp_pct: float = 10.0) -> InlineKeyboardMarkup:
+    """إصلاح كارثي: يحفظ limit_price وsl/tp في callback_data."""
     ex_label = f" ({exchange_name.upper()})" if exchange_name else ""
+    # تشفير المعاملات: confirm_SYM_DIR_SIZE_LIMIT_SL_TP
+    cb_confirm = (f"confirm_{symbol}_{direction}_{size_usd:.0f}"
+                  f"_{limit_price:.4f}_{sl_pct:.2f}_{tp_pct:.2f}")
+    cb_cancel  = f"cancel_{symbol}_{direction}_{size_usd:.0f}"
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton(
-            f"✅ نفّذ الآن{ex_label}",
-            callback_data=f"confirm_{symbol}_{direction}_{size_usd:.0f}"),
-        InlineKeyboardButton(
-            "🚫 إلغاء",
-            callback_data=f"cancel_{symbol}_{direction}_{size_usd:.0f}"),
+        InlineKeyboardButton(f"✅ نفّذ الآن{ex_label}", callback_data=cb_confirm),
+        InlineKeyboardButton("🚫 إلغاء",                callback_data=cb_cancel),
     ]])
 
 
