@@ -1693,160 +1693,324 @@ async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(buttons) if buttons else None)
 
 
+
+# ══════════════════════════════════════════════════════════════
+# الاستبيان الشخصي المطوّر — رائد التداول الذكي
+# ══════════════════════════════════════════════════════════════
+
+_SURVEY_COUNTRIES = [
+    "🇸🇦 السعودية", "🇦🇪 الإمارات", "🇰🇼 الكويت", "🇶🇦 قطر",
+    "🇧🇭 البحرين", "🇴🇲 عُمان", "🇯🇴 الأردن", "🇪🇬 مصر",
+    "🇮🇶 العراق", "🇾🇪 اليمن", "🇸🇾 سوريا", "🇱🇧 لبنان",
+    "🇲🇦 المغرب", "🇩🇿 الجزائر", "🇹🇳 تونس", "🇱🇾 ليبيا",
+    "🇸🇩 السودان", "🇸🇴 الصومال", "🇹🇷 تركيا", "🇵🇰 باكستان",
+    "🇮🇳 الهند", "🇮🇩 إندونيسيا", "🇲🇾 ماليزيا",
+    "🇬🇧 المملكة المتحدة", "🇺🇸 الولايات المتحدة",
+    "🇩🇪 ألمانيا", "🇫🇷 فرنسا", "🇨🇦 كندا", "🇦🇺 أستراليا",
+    "🇸🇪 السويد", "🇨🇭 سويسرا", "🇳🇱 هولندا", "أخرى",
+]
+
+_PSY_QUESTIONS = [
+    {"q": "عندما ترى عملة ترتفع 20%-40% بسرعة، ماذا تفعل؟",
+     "opts": ["أ. أشتري فورًا","ب. أشتري بحجم صغير","ج. أراقب وأنتظر","د. لا أدخل إلا بخطة"]},
+    {"q": "كم مرة تدخل صفقة لأنك تخاف أن يفوتك القطار؟",
+     "opts": ["أ. كثيراً جداً","ب. أحياناً","ج. نادراً","د. أبداً تقريباً"]},
+    {"q": "إذا رأيت المؤثرين يضخون عملة، أنت عادةً:",
+     "opts": ["أ. أدخل سريعاً","ب. أتحقق ثم أدخل","ج. أستخدمها إشارة ثانوية","د. لا تؤثر عليّ"]},
+    {"q": "بعد خسارة صفقة، ما أول شيء تميل لفعله؟",
+     "opts": ["أ. أدخل فوراً للتعويض","ب. أزيد الحجم التالي","ج. أبتعد ثم أعود","د. أراجع وألتزم بالخطة"]},
+    {"q": "هل سبق أن ألغيت وقف الخسارة لأنك متأكد أن السوق سيعود؟",
+     "opts": ["أ. كثيراً","ب. أحياناً","ج. نادراً","د. لا"]},
+    {"q": "عندما تخسر، أي عبارة أقرب لك؟",
+     "opts": ["أ. لازم أعوض الآن","ب. أحتاج فرصة أسرع","ج. سأنتظر إشارة أفضل","د. الخسارة جزء من اللعبة"]},
+    {"q": "ما مستوى الرافعة الذي ترتاح له غالباً؟",
+     "opts": ["أ. عالية جداً","ب. متوسطة إلى عالية","ج. منخفضة إلى متوسطة","د. لا أستخدمها"]},
+    {"q": "إذا خسر حسابك بسرعة بسبب الرافعة، كيف تتصرف؟",
+     "opts": ["أ. أرفع الرافعة للتعويض","ب. أبقى بنفس الأسلوب","ج. أخفض المخاطرة","د. أتوقف وأعيد التقييم"]},
+    {"q": "ما الجملة الأقرب لأسلوبك في الرافعة؟",
+     "opts": ["أ. الرافعة فرصة","ب. سلاح يحتاج حذراً","ج. الحجم أهم من الرافعة","د. أفضل البقاء بدونها"]},
+    {"q": "كم مرة تدخل في عملات قليلة السيولة أو شديدة التذبذب؟",
+     "opts": ["أ. كثيراً","ب. أحياناً","ج. نادراً","د. أتجنبها غالباً"]},
+    {"q": "إذا كانت الصفقة جيدة لكن السيولة ضعيفة، ماذا تفعل؟",
+     "opts": ["أ. أدخل عادي","ب. أدخل بحجم أصغر","ج. أنتظر","د. أستبعدها"]},
+    {"q": "ما مدى تأثير السبريد والانزلاق السعري عليك؟",
+     "opts": ["أ. لا أهتم","ب. يزعجني أحياناً","ج. مهم جداً","د. عامل حاسم"]},
+    {"q": "هل لديك قواعد مكتوبة للدخول والخروج وإدارة المخاطر؟",
+     "opts": ["أ. لا","ب. بسيطة جداً","ج. نعم بشكل متوسط","د. نعم واضحة وملزمة"]},
+    {"q": "هل تسجل صفقاتك وتراجعها؟",
+     "opts": ["أ. لا","ب. نادراً","ج. أحياناً","د. دائماً"]},
+    {"q": "في يوم مليء بالتقلبات، أنت غالباً:",
+     "opts": ["أ. أتداول أكثر","ب. أندفع مع الحركة","ج. أراقب بحذر","د. ألتزم بالحد الأدنى"]},
+]
+
+_PSY_SCORES = {"أ": 1, "ب": 2, "ج": 3, "د": 4}
+
+
+def _calc_trader_type(answers: list) -> dict:
+    total = sum(_PSY_SCORES.get((a or "ب")[0], 2) for a in answers)
+    fomo  = sum(_PSY_SCORES.get((answers[i] or "ب")[0], 2) for i in [0,1,2,14] if i < len(answers))
+    rev   = sum(_PSY_SCORES.get((answers[i] or "ب")[0], 2) for i in [3,4,5]    if i < len(answers))
+    lev   = sum(_PSY_SCORES.get((answers[i] or "ب")[0], 2) for i in [6,7,8]    if i < len(answers))
+    liq   = sum(_PSY_SCORES.get((answers[i] or "ب")[0], 2) for i in [9,10,11,12,13] if i < len(answers))
+    if   total <= 24: p,d,a = "متداول دفاعي","يتجنب الاندفاع ويكره الفوضى. مناسب له تداول انتقائي جداً.","رافعة منخفضة وسيولة عالية هي أفضل صديق لك."
+    elif total <= 34: p,d,a = "متداول متوازن","يملك قابلية جيدة للتعلم والانضباط.","راقب FOMO عند الأخبار والضخ."
+    elif total <= 44: p,d,a = "متداول هجومي منضبط","يقبل السرعة والتقلب لكن يحتاج قواعد واضحة.","قوتك في السرعة — لكن اجعل المراجعة ركيزتك."
+    else:             p,d,a = "متداول عاطفي عالي المخاطرة","معرض لـ FOMO والانتقام والرافعة الزائدة.","النظام الآلي هو أفضل حماية لك من قراراتك العاطفية."
+    return {"pattern":p,"desc":d,"advice":a,"total":total,"fomo":fomo,"revenge":rev,"leverage":lev,"liquidity_disc":liq}
+
+
 async def _start_survey(update, context):
-    """بدء الاستبيان الشخصي — مع إخلاء المسؤولية أولاً."""
+    """بدء الاستبيان المطوّر."""
     from core.state_manager import state_manager as _sm_srv
     user_id = update.effective_user.id
-
-    # D3: فحص موافقة إخلاء المسؤولية
     if not _sm_srv.has_disclaimer_consent(user_id, "survey"):
         buttons = InlineKeyboardMarkup([[
-            InlineKeyboardButton("✅ أوافق وأبدأ الاستبيان",
-                                 callback_data="disclaimer_accept_survey"),
-            InlineKeyboardButton("❌ لاحقاً", callback_data="disclaimer_reject"),
+            InlineKeyboardButton("✅ أوافق وأبدأ",callback_data="disclaimer_accept_survey"),
+            InlineKeyboardButton("❌ لاحقاً",    callback_data="disclaimer_reject"),
         ]])
         await update.message.reply_text(
-            _sm_srv.DISCLAIMER_TEXT,
-            parse_mode="Markdown",
-            reply_markup=buttons)
+            _sm_srv.DISCLAIMER_TEXT, parse_mode="Markdown", reply_markup=buttons)
         return
-
-    # المستخدم وافق — نبدأ الاستبيان
-    context.user_data["survey_step"] = 1
-    buttons = InlineKeyboardMarkup([[
-        InlineKeyboardButton("💰 حفظ رأس المال",  callback_data="survey_goal_preserve"),
-        InlineKeyboardButton("📈 نمو معتدل",       callback_data="survey_goal_moderate"),
-        InlineKeyboardButton("🚀 نمو مرتفع",       callback_data="survey_goal_aggressive"),
-    ]])
+    context.user_data["survey_step"] = 0
+    context.user_data["survey_new"]  = {}
+    context.user_data["survey"]      = {}
+    days_btns = [[InlineKeyboardButton(str(d), callback_data=f"sv_day_{d}")
+                  for d in range(i, min(i+7, 32))] for i in range(1, 32, 7)]
     await update.message.reply_text(
-        "👤 *الاستبيان الشخصي — رائد*\n\n"
-        "سؤال 1/5: ما هدفك الأساسي من التداول؟",
-        parse_mode="Markdown",
-        reply_markup=buttons)
+        "👤 *الاستبيان الشخصي — رائد*\n\n📅 تاريخ الميلاد\nاختر اليوم:",
+        parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(days_btns))
+
+
+async def cb_sv_day(update, context):
+    query = update.callback_query; await query.answer()
+    context.user_data.setdefault("survey_new",{})["dob_day"] = int(query.data.split("_")[-1])
+    months = [["يناير","فبراير","مارس"],["أبريل","مايو","يونيو"],
+              ["يوليو","أغسطس","سبتمبر"],["أكتوبر","نوفمبر","ديسمبر"]]
+    btns = [[InlineKeyboardButton(m, callback_data=f"sv_month_{r*3+c+1}")
+             for c,m in enumerate(row)] for r,row in enumerate(months)]
+    await query.edit_message_text(
+        f"اليوم: {context.user_data['survey_new']['dob_day']}\nاختر الشهر:",
+        reply_markup=InlineKeyboardMarkup(btns))
+
+
+async def cb_sv_month(update, context):
+    query = update.callback_query; await query.answer()
+    context.user_data.setdefault("survey_new",{})["dob_month"] = int(query.data.split("_")[-1])
+    years = list(range(2006,1949,-1))
+    btns  = [[InlineKeyboardButton(str(y),callback_data=f"sv_year_{y}")
+              for y in years[i:i+5]] for i in range(0,30,5)]
+    await query.edit_message_text("اختر السنة:", reply_markup=InlineKeyboardMarkup(btns))
+
+
+async def cb_sv_year(update, context):
+    query = update.callback_query; await query.answer()
+    context.user_data.setdefault("survey_new",{})["dob_year"] = int(query.data.split("_")[-1])
+    btns = [[InlineKeyboardButton(c,callback_data=f"sv_co_{i}")
+             for i,c in [(r+j,_SURVEY_COUNTRIES[r+j])
+             for j in range(min(3,len(_SURVEY_COUNTRIES)-r))
+             if r+j < len(_SURVEY_COUNTRIES)]]
+            for r in range(0,len(_SURVEY_COUNTRIES),3)]
+    await query.edit_message_text("🌍 اختر بلدك:", reply_markup=InlineKeyboardMarkup(btns))
+
+
+async def cb_sv_country(update, context):
+    query = update.callback_query; await query.answer()
+    ci = int(query.data.split("_")[-1])
+    country = _SURVEY_COUNTRIES[ci] if ci < len(_SURVEY_COUNTRIES) else "أخرى"
+    context.user_data.setdefault("survey_new",{})["country"] = country
+    context.user_data["survey_step"] = 1
+    sv = context.user_data["survey_new"]
+    btns = InlineKeyboardMarkup([[
+        InlineKeyboardButton("💰 حفظ رأس المال", callback_data="survey_goal_preserve"),
+        InlineKeyboardButton("📈 نمو معتدل",      callback_data="survey_goal_moderate"),
+        InlineKeyboardButton("🚀 نمو مرتفع",      callback_data="survey_goal_aggressive"),
+    ]])
+    await query.edit_message_text(
+        f"✅ البلد: {country}\n\nسؤال 1/20: ما هدفك الأساسي من التداول؟",
+        parse_mode="Markdown", reply_markup=btns)
 
 
 async def cb_survey_goal(update, context):
-    """معالجة إجابة هدف التداول."""
-    query = update.callback_query
-    await query.answer()
-    goal_map = {
-        "survey_goal_preserve":    "حفظ رأس المال",
-        "survey_goal_moderate":    "نمو معتدل",
-        "survey_goal_aggressive":  "نمو مرتفع",
-    }
-    goal = goal_map.get(query.data, "نمو معتدل")
-    context.user_data["survey"] = {"goal": goal}
+    query = update.callback_query; await query.answer()
+    goal = {"survey_goal_preserve":"حفظ رأس المال","survey_goal_moderate":"نمو معتدل",
+            "survey_goal_aggressive":"نمو مرتفع"}.get(query.data,"نمو معتدل")
+    context.user_data.setdefault("survey_new",{})["goal"] = goal
+    context.user_data.setdefault("survey",{})["goal"]     = goal
     context.user_data["survey_step"] = 2
-
-    buttons = InlineKeyboardMarkup([[
-        InlineKeyboardButton("🟢 منخفض (5%)",   callback_data="survey_risk_low"),
-        InlineKeyboardButton("🟡 متوسط (10%)",  callback_data="survey_risk_medium"),
-        InlineKeyboardButton("🔴 مرتفع (20%+)", callback_data="survey_risk_high"),
+    btns = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🟢 منخفض (5%)",  callback_data="survey_risk_low"),
+        InlineKeyboardButton("🟡 متوسط (10%)", callback_data="survey_risk_medium"),
+        InlineKeyboardButton("🔴 مرتفع (20%+)",callback_data="survey_risk_high"),
     ]])
     await query.edit_message_text(
-        "👤 *الاستبيان الشخصي — رائد*\n\n"
-        f"✅ الهدف: {goal}\n\n"
-        "سؤال 2/5: ما أقصى خسارة تتحملها في صفقة واحدة؟",
-        parse_mode="Markdown",
-        reply_markup=buttons)
+        f"✅ الهدف: {goal}\n\nسؤال 2/20: ما أقصى خسارة تتحملها؟",
+        parse_mode="Markdown", reply_markup=btns)
 
 
 async def cb_survey_risk(update, context):
-    """معالجة مستوى المخاطرة."""
-    query = update.callback_query
-    await query.answer()
-    risk_map = {
-        "survey_risk_low":    "low",
-        "survey_risk_medium": "medium",
-        "survey_risk_high":   "high",
-    }
-    risk = risk_map.get(query.data, "medium")
-    context.user_data.setdefault("survey", {})["risk_level"] = risk
-
-    buttons = InlineKeyboardMarkup([[
-        InlineKeyboardButton("⚡ ساعات (Scalp)", callback_data="survey_hold_hours"),
-        InlineKeyboardButton("📅 أيام (Swing)",  callback_data="survey_hold_days"),
-        InlineKeyboardButton("📆 أسابيع (Long)", callback_data="survey_hold_weeks"),
+    query = update.callback_query; await query.answer()
+    risk = {"survey_risk_low":"low","survey_risk_medium":"medium","survey_risk_high":"high"}.get(query.data,"medium")
+    context.user_data.setdefault("survey_new",{})["risk_level"] = risk
+    context.user_data.setdefault("survey",{})["risk_level"]     = risk
+    context.user_data["survey_step"] = 3
+    btns = InlineKeyboardMarkup([[
+        InlineKeyboardButton("⚡ ساعات",callback_data="survey_hold_hours"),
+        InlineKeyboardButton("📅 أيام", callback_data="survey_hold_days"),
+        InlineKeyboardButton("📆 أسابيع",callback_data="survey_hold_weeks"),
     ]])
-    await query.edit_message_text(
-        "👤 *الاستبيان الشخصي — رائد*\n\n"
-        "سؤال 3/5: ما مدة الاحتفاظ المفضلة لديك؟",
-        parse_mode="Markdown",
-        reply_markup=buttons)
+    await query.edit_message_text("سؤال 3/20: ما مدة الاحتفاظ المفضلة؟",
+                                   parse_mode="Markdown", reply_markup=btns)
 
 
 async def cb_survey_hold(update, context):
-    """معالجة مدة الاحتفاظ."""
-    query = update.callback_query
-    await query.answer()
-    hold_map = {
-        "survey_hold_hours": "ساعات",
-        "survey_hold_days":  "أيام",
-        "survey_hold_weeks": "أسابيع",
-    }
-    hold = hold_map.get(query.data, "أيام")
-    context.user_data.setdefault("survey", {})["hold_period"] = hold
-
-    buttons = InlineKeyboardMarkup([[
-        InlineKeyboardButton("🌱 مبتدئ",   callback_data="survey_exp_beginner"),
-        InlineKeyboardButton("📊 متوسط",   callback_data="survey_exp_medium"),
-        InlineKeyboardButton("🏆 محترف",   callback_data="survey_exp_expert"),
+    query = update.callback_query; await query.answer()
+    hold = {"survey_hold_hours":"ساعات","survey_hold_days":"أيام","survey_hold_weeks":"أسابيع"}.get(query.data,"أيام")
+    context.user_data.setdefault("survey_new",{})["hold_period"] = hold
+    context.user_data.setdefault("survey",{})["hold_period"]     = hold
+    context.user_data["survey_step"] = 4
+    btns = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🌱 مبتدئ",callback_data="survey_exp_beginner"),
+        InlineKeyboardButton("📊 متوسط",callback_data="survey_exp_medium"),
+        InlineKeyboardButton("🏆 محترف",callback_data="survey_exp_expert"),
     ]])
-    await query.edit_message_text(
-        "👤 *الاستبيان الشخصي — رائد*\n\n"
-        "سؤال 4/5: ما مستوى خبرتك في التداول؟",
-        parse_mode="Markdown",
-        reply_markup=buttons)
+    await query.edit_message_text("سؤال 4/20: ما مستوى خبرتك؟",
+                                   parse_mode="Markdown", reply_markup=btns)
 
 
 async def cb_survey_exp(update, context):
-    """معالجة مستوى الخبرة."""
-    query = update.callback_query
-    await query.answer()
-    exp_map = {
-        "survey_exp_beginner": "مبتدئ",
-        "survey_exp_medium":   "متوسط",
-        "survey_exp_expert":   "محترف",
-    }
-    exp = exp_map.get(query.data, "متوسط")
-    context.user_data.setdefault("survey", {})["experience"] = exp
-
-    buttons = InlineKeyboardMarkup([[
+    query = update.callback_query; await query.answer()
+    exp = {"survey_exp_beginner":"مبتدئ","survey_exp_medium":"متوسط","survey_exp_expert":"محترف"}.get(query.data,"متوسط")
+    context.user_data.setdefault("survey_new",{})["experience"] = exp
+    context.user_data.setdefault("survey",{})["experience"]     = exp
+    context.user_data["survey_step"] = 5
+    btns = InlineKeyboardMarkup([[
         InlineKeyboardButton("✅ تلقائي",         callback_data="survey_exec_auto"),
-        InlineKeyboardButton("👁️ إشعار + موافقة", callback_data="survey_exec_manual"),
+        InlineKeyboardButton("👁 إشعار+موافقة",   callback_data="survey_exec_manual"),
     ]])
-    await query.edit_message_text(
-        "👤 *الاستبيان الشخصي — رائد*\n\n"
-        "سؤال 5/5: هل تريد تنفيذاً تلقائياً للصفقات أم موافقة يدوية؟",
-        parse_mode="Markdown",
-        reply_markup=buttons)
+    await query.edit_message_text("سؤال 5/20: تلقائي أم يدوي؟",
+                                   parse_mode="Markdown", reply_markup=btns)
 
 
 async def cb_survey_exec(update, context):
-    """إنهاء الاستبيان وحفظه."""
-    query = update.callback_query
-    await query.answer()
-    exec_map = {
-        "survey_exec_auto":   "تلقائي",
-        "survey_exec_manual": "يدوي",
+    query = update.callback_query; await query.answer()
+    exec_pref = {"survey_exec_auto":"تلقائي","survey_exec_manual":"يدوي"}.get(query.data,"تلقائي")
+    context.user_data.setdefault("survey_new",{})["execution"] = exec_pref
+    context.user_data.setdefault("survey",{})["execution"]     = exec_pref
+    context.user_data["survey_step"] = 6
+    context.user_data["psy_answers"] = []
+    await _show_psy_question(query, context, 0)
+
+
+async def _show_psy_question(query, context, q_idx: int):
+    if q_idx >= len(_PSY_QUESTIONS):
+        await _finish_survey(query, context); return
+    q     = _PSY_QUESTIONS[q_idx]
+    q_num = q_idx + 6
+    btns  = [[InlineKeyboardButton(opt, callback_data=f"sv_psy_{q_idx}_{opt[0]}")]
+              for opt in q["opts"]]
+    text  = f"📋 *سؤال {q_num}/20*\n\n{q['q']}"
+    try:
+        await query.edit_message_text(text, parse_mode="Markdown",
+                                       reply_markup=InlineKeyboardMarkup(btns))
+    except Exception:
+        await query.message.reply_text(text, parse_mode="Markdown",
+                                        reply_markup=InlineKeyboardMarkup(btns))
+
+
+async def cb_sv_psy(update, context):
+    query = update.callback_query; await query.answer()
+    parts = query.data.split("_")   # sv_psy_QIDX_LETTER
+    q_idx, answer = int(parts[2]), parts[3]
+    answers = context.user_data.setdefault("psy_answers", [])
+    while len(answers) <= q_idx: answers.append(None)
+    answers[q_idx] = answer
+    await _show_psy_question(query, context, q_idx + 1)
+
+
+async def _finish_survey(query, context):
+    from core.state_manager import state_manager as _sm_fs
+    user_id  = query.from_user.id
+    sv       = context.user_data.get("survey_new", {})
+    survey   = context.user_data.get("survey", {})
+    answers  = context.user_data.get("psy_answers", [])
+    result   = _calc_trader_type(answers)
+    full_profile = {
+        **survey,
+        "dob_day": sv.get("dob_day"), "dob_month": sv.get("dob_month"),
+        "dob_year": sv.get("dob_year"), "country": sv.get("country"),
+        "psy_answers": answers, "trader_type": result["pattern"],
+        "psy_scores": {"total":result["total"],"fomo":result["fomo"],
+                       "revenge":result["revenge"],"leverage":result["leverage"],
+                       "liquidity_disc":result["liquidity_disc"]},
     }
-    exec_pref = exec_map.get(query.data, "تلقائي")
-    survey = context.user_data.get("survey", {})
-    survey["execution"] = exec_pref
-
-    from core.state_manager import state_manager as _sm_sv
-    user_id = query.from_user.id
-    _sm_sv.save_profile(user_id, survey)
-
+    _sm_fs.save_profile(user_id, full_profile)
     await query.edit_message_text(
-        "✅ *الاستبيان مكتمل!*\n\n"
-        f"• الهدف: {survey.get('goal','—')}\n"
-        f"• المخاطرة: {survey.get('risk_level','—')}\n"
-        f"• مدة الاحتفاظ: {survey.get('hold_period','—')}\n"
-        f"• الخبرة: {survey.get('experience','—')}\n"
-        f"• التنفيذ: {exec_pref}\n\n"
-        "رائد سيخصص استراتيجيته بناءً على ملفك الشخصي 🎯",
+        "✅ *شكراً — الاستبيان مكتمل!*\n\n"
+        f"🎯 نمطك: *{result['pattern']}*\n\n"
+        f"💡 {result['desc']}\n\n"
+        f"📌 *نصيحة رائد:*\n{result['advice']}\n\n"
+        "─────────────────\n"
+        "_هذا الاستبيان استرشادي لمساعدتنا في بناء خطة تداول "
+        "تتناسب مع شخصيتك. القرار النهائي دائماً يعود إليك._",
         parse_mode="Markdown")
+    for k in ["survey_step","survey_new","psy_answers"]:
+        context.user_data.pop(k, None)
+
+
+
+
+async def cmd_survey_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """تقرير الاستبيان الكامل — للمدير فقط."""
+    from core.state_manager import state_manager as _sm_sr
+    from core.config        import ADMIN_ID
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("🔒 هذا الأمر للمدير فقط.")
+        return
+    # استهداف مستخدم معين
+    args = context.args or []
+    if not args:
+        await update.message.reply_text(
+            "⚙️ الاستخدام: /survey_report [user_id]\n"
+            "مثال: /survey_report 123456789")
+        return
+    try:
+        target_id = int(args[0])
+    except ValueError:
+        await update.message.reply_text("❌ user_id يجب أن يكون رقماً.")
+        return
+    profile = _sm_sr.get_profile(target_id)
+    if not profile:
+        await update.message.reply_text("⚠️ لا توجد بيانات لهذا المستخدم.")
+        return
+    scores = profile.get("psy_scores", {})
+    pattern = profile.get("trader_type", "غير محدد")
+    dob_d = profile.get("dob_day","?")
+    dob_m = profile.get("dob_month","?")
+    dob_y = profile.get("dob_year","?")
+    lines = [
+        f"📊 *تقرير الاستبيان — {target_id}*",
+        "━━━━━━━━━━━━━━━━━━",
+        f"🎂 تاريخ الميلاد: {dob_d}/{dob_m}/{dob_y}",
+        f"🌍 البلد: {profile.get('country','غير محدد')}",
+        "",
+        f"🎯 النمط: *{pattern}*",
+        "",
+        "📈 *النقاط (للمدير فقط):*",
+        f"• الإجمالي: {scores.get('total','?')}/60",
+        f"• FOMO: {scores.get('fomo','?')}/16",
+        f"• الانتقام: {scores.get('revenge','?')}/12",
+        f"• الرافعة: {scores.get('leverage','?')}/12",
+        f"• السيولة/الانضباط: {scores.get('liquidity_disc','?')}/20",
+        "",
+        "📋 *الاستبيان الأساسي:*",
+        f"• الهدف: {profile.get('goal','?')}",
+        f"• المخاطرة: {profile.get('risk_level','?')}",
+        f"• مدة الاحتفاظ: {profile.get('hold_period','?')}",
+        f"• الخبرة: {profile.get('experience','?')}",
+        f"• التنفيذ: {profile.get('execution','?')}",
+    ]
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
 async def cb_profile_violations(update, context):
@@ -2268,7 +2432,8 @@ def register(app):
     app.add_handler(CallbackQueryHandler(cb_goto_vtrades, pattern=r"^goto_vtrades$"))
     app.add_handler(CallbackQueryHandler(cb_goto_trades,  pattern=r"^goto_trades$"))
     # D3+D4+R5: إخلاء المسؤولية + قيود الجلسة
-    app.add_handler(CommandHandler("disclaimer", cmd_disclaimer))
+    app.add_handler(CommandHandler("survey_report", cmd_survey_report))
+    app.add_handler(CommandHandler("disclaimer",    cmd_disclaimer))
     app.add_handler(CommandHandler("setlimits",  cmd_set_limits))
     app.add_handler(CallbackQueryHandler(cb_disclaimer_accept, pattern=r"^disclaimer_accept_"))
     app.add_handler(CallbackQueryHandler(cb_disclaimer_reject, pattern=r"^disclaimer_reject$"))

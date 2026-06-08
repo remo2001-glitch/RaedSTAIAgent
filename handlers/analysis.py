@@ -1115,7 +1115,15 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # فحص الباقة
     user_id2 = update.effective_user.id
     tier2    = _sm.get_tier(user_id2)
-    if not is_symbol_allowed(symbol, tier2):
+    # إصلاح #1020: عملات كبيرة مُعتمَدة دائماً للذهبي+
+    _ALWAYS_ALLOWED = {
+        "XLM","STELLAR","ICP","FIL","VET","EOS","XTZ","ALGO",
+        "HBAR","EGLD","ONE","ZIL","ICX","WAVES","NEO","QTUM",
+        "KAVA","BAND","RSR","NMR","RLC","ANKR","SKL","CKB",
+    }
+    if tier2 in ("gold","diamond","admin") and symbol.upper() in _ALWAYS_ALLOWED:
+        pass  # مسموح
+    elif not is_symbol_allowed(symbol, tier2):
         await update.message.reply_text(
             (
                 f"⛔ *{symbol}* غير متاحة لباقتك الحالية\n\n"
@@ -1428,7 +1436,10 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # فحص الباقة للعملة المطلوبة
     tier_an = _sm.get_tier(user_id)
-    if not is_symbol_allowed(symbol, tier_an):
+    _LARGE_CAPS = {"XLM","ICP","FIL","VET","EOS","XTZ","ALGO","HBAR","EGLD","WAVES","NEO","QTUM"}
+    if tier_an in ("gold","diamond","admin") and symbol.upper() in _LARGE_CAPS:
+        pass  # إصلاح #1020: عملات كبيرة مسموحة للذهبي+
+    elif not is_symbol_allowed(symbol, tier_an):
         await update.message.reply_text(
             (
                 f"⛔ *{symbol}* غير متاحة لباقتك الحالية\n\n"
