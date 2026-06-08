@@ -773,6 +773,8 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ohlcv_sym = ohlcv_sym_raw  # بعد retry
         news_raw  = gathered[3+len(symbols)] if isinstance(gathered[3+len(symbols)], list) else []
         fear_val  = int((fear or {}).get("value") or 50)
+        _btc_dom_real = float((onchain or {}).get('btc_dominance') or
+                               (onchain or {}).get('btc_dom') or 56)  # #1017
 
         from core.regime_detector import Regime, RegimeResult
         if len(btc_c) >= 30:
@@ -963,21 +965,21 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 week_lines = [
                     f"• أسبوع 1: دخول تكتيكي محدود (25%) في {_buy_names} — RSI={_rsi_pw:.0f} ذروة بيع تاريخية",
                     f"• أسبوع 2: مراقبة — وقف صارم إذا كسر الدعم | زيادة عند RSI > 25",
-                    f"• أسبوع 3: Fear & Greed < 25 → {'زيادة تدريجية' if entry_syms else 'انتظر تأكيد ارتداد'} ({_fg_lbl})",
+                    f"• أسبوع 3: Fear & Greed < 25 → 'زيادة تدريجية عند تأكيد القاع' ({_fg_lbl})",
                     "• أسبوع 4: مراجعة المراكز وقرار الاستمرار",
                 ]
             elif _buy_signals and _rsi_pw < 30:
                 week_lines = [
                     f"• أسبوع 1: انتظار تأكيد — RSI يرتد فوق 30 ({_rsi_lbl})",
                     f"• أسبوع 2: دخول تدريجي في {_buy_names} عند ارتداد RSI فوق 35",
-                    f"• أسبوع 3: Fear & Greed < 25 → {'ابدأ التجميع' if entry_syms else 'انتظر تأكيد ارتداد'} ({_fg_lbl})",
+                    f"• أسبوع 3: Fear & Greed < 25 → 'ابدأ التجميع التدريجي إن تأكد الارتداد' ({_fg_lbl})",
                     "• أسبوع 4: تقييم القاع — قرار الدخول الكامل",
                 ]
             else:
                 week_lines = [
                     f"• أسبوع 1: لا دخول — RSI يرتد فوق 30 ({_rsi_lbl})",
                     "• أسبوع 2: دخول تدريجي عند ارتداد RSI فوق 35",
-                    f"• أسبوع 3: Fear & Greed < 25 → {'ابدأ التجميع' if entry_syms else 'انتظر تأكيد ارتداد'} ({_fg_lbl})",
+                    f"• أسبوع 3: Fear & Greed < 25 → 'ابدأ التجميع التدريجي إن تأكد الارتداد' ({_fg_lbl})",
                     "• أسبوع 4: تقييم القاع — قرار الدخول الكامل",
                 ]
         elif regime.regime.value in ("bull_trend", "accumulation"):
