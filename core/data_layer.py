@@ -323,6 +323,24 @@ async def _fetch(session: aiohttp.ClientSession, url: str,
     return None
 
 
+# ══ OHLCV Cache (إصلاح #688) ═══════════════════════════════
+import time as _cache_time
+
+_OHLCV_CACHE: dict = {}
+_CACHE_TTL = 60  # ثانية
+
+def _get_cached_ohlcv(key: str) -> list | None:
+    if key in _OHLCV_CACHE:
+        ts, data = _OHLCV_CACHE[key]
+        if _cache_time.time() - ts < _CACHE_TTL:
+            return data
+    return None
+
+def _set_cached_ohlcv(key: str, data: list) -> None:
+    if data:
+        _OHLCV_CACHE[key] = (_cache_time.time(), data)
+
+
 class DataLayer:
 
     def __init__(self, session: aiohttp.ClientSession,
@@ -485,6 +503,7 @@ class DataLayer:
         candles = await self._hist_okx(symbol, min(limit, 300))
         if len(candles) >= 10:
             _store(key, candles, "ohlcv")
+            _set_cached_ohlcv(_ck, candles)
             return candles
 
         # ── CoinGecko fallback ─────────────────────────────────
@@ -492,17 +511,20 @@ class DataLayer:
         cg_candles = await self._ohlcv_coingecko(symbol, cg_days)
         if len(cg_candles) >= 10:
             _store(key, cg_candles, "ohlcv")
+            _set_cached_ohlcv(_ck, cg_candles)
             return cg_candles
 
         # ── Binance آخراً (محجوب عادةً على Railway) ───────────
         candles = await self._ohlcv_binance(symbol, interval, limit)
         if len(candles) >= 10:
             _store(key, candles, "ohlcv")
+            _set_cached_ohlcv(_ck, candles)
             return candles
 
         # إذا CoinGecko أعطى بيانات قليلة — نُعيدها على أي حال
         if cg_candles:
             _store(key, cg_candles, "ohlcv")
+            _set_cached_ohlcv(_ck, cg_candles)
             return cg_candles
 
         logger.error(f"get_ohlcv فشل لـ {symbol} — يُعيد []")
