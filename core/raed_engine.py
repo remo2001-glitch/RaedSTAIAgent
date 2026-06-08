@@ -449,22 +449,23 @@ class RaedEngine:
 
             if alerts:
                 header = "⚡ تنبيه رائد — إشارات قوية\n━━━━━━━━━━━━━━━━━━\n\n"
-                # إصلاح #802: تنبيه بصفقات مفتوحة على نفس العملة
-                _open_warn = ""
+                # إصلاح #802/#928: تنبيه موحد بصفقات مفتوحة
                 try:
                     from core.state_manager import state_manager as _sm_cs
+                    # تجميع كل العملات المفتوحة لجميع المستخدمين
+                    _all_open = set()
                     for _uid_cs in _sm_cs.get_autotrade_users():
                         _vw_cs = _sm_cs.get_virtual_wallet(_uid_cs) or {}
-                        _open_cs = list((_vw_cs.get("positions") or {}).keys())
-                        _same_cs = [s for a in alerts for s in top_symbols
-                                    if s in a and s in _open_cs]
-                        if _same_cs:
-                            _open_warn = (f"\n\n⚠️ لديك صفقات مفتوحة على: "
-                                          f"{', '.join(set(_same_cs))}\n"
-                                          f"💡 /vtrades للمراجعة")
-                            break
+                        _all_open.update((_vw_cs.get("positions") or {}).keys())
+                    _sym_names = [s["symbol"] for s in strong_signals if isinstance(s, dict)]
+                    _same_cs = [s for s in _sym_names if s in _all_open]
+                    _open_warn = ""
+                    if _same_cs:
+                        _open_warn = (f"\n\n⚠️ صفقات مفتوحة على: "
+                                      f"{', '.join(set(_same_cs))}\n"
+                                      f"💡 /vtrades للمراجعة")
                 except Exception:
-                    pass
+                    _open_warn = ""
                 footer = _open_warn or "\n\n💡 /signal للتفاصيل الكاملة"
                 await send_fn(header + "\n\n".join(alerts) + footer)
                 logger.info(f"تنبيه: {len(alerts)} إشارة قوية أُرسلت")

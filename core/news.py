@@ -123,13 +123,8 @@ def _translate_news_title(title: str) -> str:
         ("an ",""),("the ",""),
     ]
 
-    # معالجة أنماط خاصة بعد القاموس
-    import re as _re2
-    # تحويل "X-Year-Old" → "X سنة"
-    result = _re2.sub(r'(\d+)-[Yy]ear-[Oo]ld', lambda m: f"{m.group(1)} سنة", result)
-    # تحويل "X-Year" → "X سنة"
-    result = _re2.sub(r'(\d+)-[Yy]ear', lambda m: f"{m.group(1)} سنة", result)
-    result = title
+    # إصلاح #962: result مُعرَّف مسبقاً دائماً
+    result = title  # تعريف مبكر قبل أي استخدام
     for en, ar in replacements:
         result = _re.sub(
             r"(?<![\w\u0600-\u06FF])" + _re.escape(en) + r"(?![\w\u0600-\u06FF])",
@@ -137,6 +132,10 @@ def _translate_news_title(title: str) -> str:
         )
     # تنظيف جمع إنجليزي متبقٍّ بعد ترجمة جذره
     result = _re.sub(r"([\u0600-\u06FF]{3,})(?:es|s)\b", lambda m: m.group(1), result)
+    # معالجة أنماط خاصة
+    import re as _re2
+    result = _re2.sub(r'(\d+)-[Yy]ear-[Oo]ld', lambda m: f"{m.group(1)} سنة", result)
+    result = _re2.sub(r'(\d+)-[Yy]ear', lambda m: f"{m.group(1)} سنة", result)
     return result
 
 
