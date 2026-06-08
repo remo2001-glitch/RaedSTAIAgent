@@ -304,8 +304,12 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     args      = context.args or []
     scan_mode = len(args) == 0
+    # إصلاح #964/#971: تعريف مسبق لجميع المتغيرات
+    entry_syms = []
+    candidates = []
+    allocation = None
     if scan_mode:
-        symbols    = []   # سيُحدَّد بعد جلب top_coins
+        symbols    = []
         sym_str    = "مسح شامل"
         plan_label = "مسح شامل للسوق"
     else:
@@ -584,7 +588,7 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"• أسبوع 1: احتفظ بـ 100% سيولة (${user_portfolio:,.0f}) — RSI يرتد فوق 30 ({_rsi_label})",
                     f"• أسبوع 2: مراقبة مستويات الدعم ودخول تدريجي عند ارتداد RSI فوق 35",
                     # إصلاح #864: أسبوع 3 فقط إذا يوجد أصول مؤهلة
-                    f"• أسبوع 3: Fear & Greed < 25 → {'ابدأ التجميع' if allocation and any(a.allocation > 0 for a in allocation) else 'انتظر تأكيد انعكاس'} ({_fg_label})",
+                    f"• أسبوع 3: Fear & Greed < 25 → {'ابدأ التجميع' if allocation and any(a.allocation > 0 for a in (allocation.positions if hasattr(allocation,'positions') else [])) else 'انتظر تأكيد انعكاس'} ({_fg_label})",
                     "• أسبوع 4: تقييم: هل تشكّل قاع؟ قرار الدخول الكامل",
                 ]
         elif regime.regime in (Regime.BULL_TREND, Regime.ACCUMULATION):
@@ -705,8 +709,12 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ النظام لم يُهيَّأ بعد"); return
 
     args    = context.args or []
+    # إصلاح #971: تعريف مسبق لجميع المتغيرات
+    entry_syms = []
+    candidates = []
+    allocation = None
     if args:
-        symbols  = [a.upper() for a in args[:4]]
+        symbols  = [a.upper() for a in args[:7]]
         sym_str2 = ", ".join(symbols)
         plan_label = f"خطة مخصصة لـ {sym_str2}"
     else:

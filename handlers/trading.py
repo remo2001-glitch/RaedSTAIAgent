@@ -137,7 +137,10 @@ async def cmd_live(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 om      = engine.get_user_order_manager(user_id)
                 trades  = om.get_open_trades(user_id) if om else []
                 pnl     = om.total_pnl(user_id) if om else 0
-                balance = await info["exchange"].get_balance("USDT")
+                import asyncio as _aio_live
+                balance = await _aio_live.wait_for(
+                    info["exchange"].get_balance("USDT"),
+                    timeout=15.0)
                 port_v  = engine.get_user_portfolio(user_id)
                 futures_ok = um.can_use_futures(user_id)
                 margin_ok  = um.can_use_margin(user_id)
@@ -315,7 +318,10 @@ async def cmd_live(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             if ok:
                 info    = engine.get_user_exchange(user_id)
-                balance = await info["exchange"].get_balance("USDT")
+                import asyncio as _aio_live
+                balance = await _aio_live.wait_for(
+                    info["exchange"].get_balance("USDT"),
+                    timeout=15.0)
 
                 # تشخيص الرصيد
                 balance_lines = []
@@ -1252,10 +1258,16 @@ async def cmd_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
         InlineKeyboardButton(f"{E['report']} تقرير كامل", callback_data="vhistory"),
         InlineKeyboardButton(f"{E['trash']} إعادة ضبط",  callback_data="vreset_confirm"),
     ]])
-    await update.message.reply_text(
-        "\n".join(lines),
-        parse_mode="Markdown",
-        reply_markup=buttons)
+    try:
+        await update.message.reply_text(
+            "\n".join(lines),
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=buttons)
+    except Exception as _we:
+        # fallback بدون Markdown إذا فشل
+        await update.message.reply_text(
+            "\n".join(lines),
+            reply_markup=buttons)
 
 
 # ══ /vtrades ══════════════════════════════════════════════════════════════════
