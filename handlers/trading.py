@@ -582,7 +582,13 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "_المبلغ بالدولار أو نسبة مثل `10%`_",
             parse_mode="Markdown"); return
 
-    symbol    = args[0].upper()
+    # تطبيع symbol: BTCUSDT → BTC, BTC/USDT → BTC, btc → BTC
+    raw_sym  = args[0].upper().strip()
+    for _sfx in ("USDT","BUSD","USDC"):
+        if raw_sym.endswith(_sfx) and len(raw_sym) > len(_sfx):
+            raw_sym = raw_sym[:-len(_sfx)]
+            break
+    symbol    = raw_sym.replace("/","").replace("-","")
     direction = args[1].lower()
     try:
         size_usd = float(args[2]) if len(args) > 2 else 500.0
@@ -642,9 +648,22 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         if _price_q <= 0:
             try:
-                _price_q = await engine.data_layer.get_price(symbol)
+                pd_q = await engine.data_layer.get_price(symbol)
+                if pd_q:
+                    _price_q = float(pd_q.get("price") or 0)
             except Exception:
                 pass
+        # إذا Limit Order → استخدم limit_price كبديل للسعر الحالي إذا فشل API
+        if _price_q <= 0 and limit_price > 0:
+            _price_q = limit_price
+        # إذا فشل السعر تماماً → أرسل رسالة واضحة بدلاً من crash
+        if _price_q <= 0:
+            await update.message.reply_text(
+                f"⚠️ *تعذَّر جلب سعر {symbol}*\n\n"
+                f"• جرّب بدون USDT: `/execute {symbol.replace('USDT','')} {direction} {size_usd:.0f}`\n"
+                f"• أو حدد السعر يدوياً: `/execute {symbol.replace('USDT','')} {direction} {size_usd:.0f} limit [السعر]`",
+                parse_mode="Markdown")
+            return
         # حساب sl/tp أولي من risk_engine إذا كان السعر متاحاً
         _sl_r, _tp_r = 5.0, 6.0  # قيم افتراضية آمنة
         if _price_q > 0:
@@ -729,15 +748,22 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
         fear     = (await engine.data_layer.get_fear_greed()) or {"value": 50}
         onchain  = (await engine.data_layer.get_onchain()) or {}
 
-        if not price_d:
-            await msg.edit_text(f"❌ لا يوجد سعر لـ {symbol}"); return
+        price = float((price_d or {}).get("price") or 0)
 
-        price    = float(price_d.get("price") or 0)
-        fear_val = int(fear.get("value") or 50)
+        # إذا فشل السعر وهناك limit_price → استخدمه كبديل
+        if price <= 0 and limit_price > 0:
+            price = limit_price
+            logger.info(f"cmd_execute: استخدام limit_price={limit_price} كسعر بديل لـ {symbol}")
 
         if price <= 0:
-            await msg.edit_text(f"❌ سعر {symbol} غير صالح"); return
+            await msg.edit_text(
+                f"⚠️ *تعذَّر جلب سعر {symbol}*\n\n"
+                f"• تأكد من رمز العملة (مثال: BTC وليس BTCUSDT)\n"
+                f"• أو حدد السعر يدوياً: `/execute {symbol} {direction} {size_usd:.0f} limit [السعر]`",
+                parse_mode="Markdown")
+            return
 
+        fear_val = int(fear.get("value") or 50)
         ev_mult, ev_reason = engine.event_risk.get_exposure_multiplier()
         if ev_mult == 0:
             await msg.edit_text(

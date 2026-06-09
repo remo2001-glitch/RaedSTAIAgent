@@ -1140,21 +1140,20 @@ async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.warning(f"portfolio {sym}: {e}")
 
         # ── 5. توزيع المحفظة ──────────────────────────────────
-        portfolio_val = float(engine.risk_engine.cfg.get("portfolio_size") or 10000)
+        # إصلاح ملاحظة #4: استخدام قيمة المحفظة الفعلية للمستخدم
+        from core.state_manager import state_manager as _sm_p
+        from core.virtual_wallet import VirtualWallet as _VW_p
+        _uid_p    = update.effective_user.id
+        _vw_p_d   = _sm_p.get_virtual_wallet(_uid_p) or {}
+        _vw_p     = _VW_p(_vw_p_d) if _vw_p_d else None
+        _vw_total = _vw_p.total_value if _vw_p else float(engine.risk_engine.cfg.get("portfolio_size") or 10000)
+        portfolio_val = _vw_total   # القيمة الفعلية من المحفظة الافتراضية
         allocation    = engine.capital_engine.allocate(
             candidates, portfolio_val, regime, ev_mult)
         risk_st       = engine.risk_engine.status_report(portfolio_val)
 
-        # قراءة virtual wallet الحقيقي من Redis
-        from core.virtual_wallet import VirtualWallet as _VW_p
-        from core.state_manager  import state_manager as _sm_p
-        _uid_p    = update.effective_user.id
-        _vw_p_d   = _sm_p.get_virtual_wallet(_uid_p) or {}
-        _vw_p     = _VW_p(_vw_p_d) if _vw_p_d else None
-        _open_p   = len(_vw_p.positions) if _vw_p else 0
-        _vw_total = _vw_p.total_value if _vw_p else portfolio_val
-
         # حساب PnL الحي
+        _open_p     = len(_vw_p.positions) if _vw_p else 0
         _live_pnl_p = 0.0
         if _vw_p and _vw_p.positions:
             for _sym_p, _pos_p in _vw_p.positions.items():
