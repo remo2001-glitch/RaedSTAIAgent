@@ -417,10 +417,15 @@ def _build_professional_block(
     else:
         _bb_pos_v = float(_bb_pos_raw)
     # RSI في ذروة بيع/شراء يُعدِّل BB إذا كان متعارضاً
-    if rsi < 20 and _bb_pos_v > 0.3:
-        _bb_pos_v = min(_bb_pos_v, 0.15)   # تحت الحد السفلي
-    elif rsi > 80 and _bb_pos_v < 0.7:
-        _bb_pos_v = max(_bb_pos_v, 0.85)   # فوق الحد العلوي
+    # إصلاح #1022: توسيع النطاق — RSI<25 يعني ذروة بيع → BB يجب أن يكون منخفض
+    if rsi < 25 and _bb_pos_v > 0.3:
+        _bb_pos_v = min(_bb_pos_v, 0.15)
+    elif rsi < 30 and _bb_pos_v > 0.5:
+        _bb_pos_v = min(_bb_pos_v, 0.30)
+    elif rsi > 75 and _bb_pos_v < 0.7:
+        _bb_pos_v = max(_bb_pos_v, 0.85)
+    elif rsi > 70 and _bb_pos_v < 0.5:
+        _bb_pos_v = max(_bb_pos_v, 0.65)
     _scenario = tech.get("scenario",   "")
     _conf_flags = tech.get("conf_flags", [])
     _atr_val  = tech.get("atr_value",  0)
