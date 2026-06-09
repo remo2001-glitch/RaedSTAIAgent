@@ -57,8 +57,8 @@ class Scheduler:
             if not hasattr(self, "_engine") or not self._engine:
                 return
             engine = self._engine
-            # تحقق من كل OrderManager نشط
-            for user_id, info in getattr(engine, "_live_users", {}).items():
+            # إصلاح BUG-D: raed_engine يستخدم _user_exchanges وليس _live_users
+            for user_id, info in getattr(engine, "_user_exchanges", {}).items():
                 om = info.get("order_manager")
                 if om and hasattr(om, "_check_limit_orders"):
                     await om._check_limit_orders(self._notify_user)
@@ -143,7 +143,8 @@ class Scheduler:
         try:
             engine = getattr(self, "_engine", None)
             if not engine: return
-            for user_id, info in getattr(engine, "_live_users", {}).items():
+            # إصلاح BUG-D: raed_engine يستخدم _user_exchanges وليس _live_users
+            for user_id, info in getattr(engine, "_user_exchanges", {}).items():
                 om = info.get("order_manager")
                 if not om or not hasattr(om, "get_lessons_summary"): continue
                 summary = om.get_lessons_summary(user_id)
@@ -177,8 +178,9 @@ class Scheduler:
             return
         try:
             from core.coins_list import update_coins_list_from_api
-            if hasattr(self.engine, "session") and self.engine.session:
-                ok = await update_coins_list_from_api(self.engine.session)
+            # إصلاح BUG-C: self._engine وليس self.engine
+            if hasattr(self, "_engine") and self._engine and hasattr(self._engine, "session") and self._engine.session:
+                ok = await update_coins_list_from_api(self._engine.session)
                 if ok:
                     self._last_coins_upd = now_ts
                     logger.info("✅ Scheduler: قائمة العملات مُحدَّثة شهرياً")

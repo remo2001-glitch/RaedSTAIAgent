@@ -449,16 +449,20 @@ class RaedEngine:
 
             if alerts:
                 header = "⚡ تنبيه رائد — إشارات قوية\n━━━━━━━━━━━━━━━━━━\n\n"
-                # إصلاح #802/#928: تنبيه موحد بصفقات مفتوحة
+                # تحقق من صفقات مفتوحة على نفس العملات المُنبَّه عنها
                 try:
                     from core.state_manager import state_manager as _sm_cs
-                    # تجميع كل العملات المفتوحة لجميع المستخدمين
                     _all_open = set()
                     for _uid_cs in _sm_cs.get_autotrade_users():
                         _vw_cs = _sm_cs.get_virtual_wallet(_uid_cs) or {}
                         _all_open.update((_vw_cs.get("positions") or {}).keys())
-                    _sym_names = [s["symbol"] for s in strong_signals if isinstance(s, dict)]
-                    _same_cs = [s for s in _sym_names if s in _all_open]
+                    # استخلاص أسماء العملات من نصوص alerts (مثل "🚨 إشارة قوية — BTC")
+                    _alerted_syms = []
+                    for _alert_line in alerts:
+                        for _s in top_symbols:
+                            if _s in _alert_line:
+                                _alerted_syms.append(_s + "USDT")
+                    _same_cs  = [s for s in _alerted_syms if s in _all_open]
                     _open_warn = ""
                     if _same_cs:
                         _open_warn = (f"\n\n⚠️ صفقات مفتوحة على: "
@@ -738,10 +742,18 @@ class RaedEngine:
                         # ── Virtual Wallet: تنفيذ فوري لكل مستخدم autotrade ──
                         from core.virtual_wallet import VirtualWallet as _VW
                         from core.state_manager  import state_manager as _sm_vw
-                        # Q1-Q5: تحديد نوع المسح لتطبيق القيود
-                        import datetime as _dt_scan
-                        _now_h = _dt_scan.datetime.now(_dt_scan.timezone.utc).hour
-                        _scan_type = "daily"  # الافتراضي = مسح ساعي
+                        # Q1-Q5: تحديد نوع المسح حسب توقيت الجلسة الفعلي
+                        # ksa_hour و session مُمرَّران من الـ Scheduler
+                        # الجلسة الصباحية (9-13 KSA) = weekly scan
+                        # الجلسة الأمريكية (22-01 KSA) = monthly scan
+                        # باقي الجلسات = daily scan
+                        if 9 <= ksa_hour < 13:
+                            _scan_type = "weekly"
+                        elif ksa_hour >= 22 or ksa_hour < 1:
+                            _scan_type = "monthly"
+                        else:
+                            _scan_type = "daily"
+                        logger.info(f"scan_type={_scan_type} | session={session} | ksa_hour={ksa_hour}")
 
                         _autotrade_uids = _sm_vw.get_autotrade_users()
                         if not _autotrade_uids:
@@ -755,10 +767,10 @@ class RaedEngine:
                                               "profit": 0.0, "positions": {}, "history": []}
                                 _vw = _VW(_wdata)
 
-                                # Q1-Q5: فحص قيود التنفيذ
-                                # K2+K3: الفحص الموحد
+                                # Q1-Q5+BUG-B: فحص القيود بالنوع الصحيح
                                 _can, _buy_amt, _limit_reason = _sm_vw.can_auto_execute(
-                                    _uid, s["symbol"], _vw.total_value, _vw.positions)
+                                    _uid, s["symbol"], _vw.total_value, _vw.positions,
+                                    scan_type=_scan_type)
                                 if not _can:
                                     logger.info(f"Auto skip {s['symbol']}: {_limit_reason}")
                                     continue

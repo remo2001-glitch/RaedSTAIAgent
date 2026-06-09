@@ -80,30 +80,17 @@ class VirtualWallet:
 
         quantity = amount_usd / price
 
-        # تحديث أو إنشاء مركز
-        if symbol in self.positions:
-            pos = self.positions[symbol]
-            total_qty   = pos["quantity"] + quantity
-            total_cost  = pos["avg_price"] * pos["quantity"] + price * quantity
-            avg_price   = total_cost / total_qty
-            self.positions[symbol] = {
-                **pos,
-                "quantity":  round(total_qty, 8),
-                "avg_price": round(avg_price, 6),
-                "cost":      round(total_cost, 2),
-                "updated_at": _now(),
-            }
-        else:
-            self.positions[symbol] = {
-                "symbol":     symbol,
-                "quantity":   round(quantity, 8),
-                "avg_price":  round(price, 6),
-                "cost":       round(amount_usd, 2),
-                "opened_at":  _now(),
-                "updated_at": _now(),
-                "stop_loss":  round(price * (1 - RISK["max_loss_pct"] / 100), 6),
-                "take_profit": round(price * (1 + RISK["take_profit_pct"] / 100), 6),
-            }
+        # إنشاء مركز جديد (الوصول هنا يضمن عدم وجود مركز مسبقاً)
+        self.positions[symbol] = {
+            "symbol":     symbol,
+            "quantity":   round(quantity, 8),
+            "avg_price":  round(price, 6),
+            "cost":       round(amount_usd, 2),
+            "opened_at":  _now(),
+            "updated_at": _now(),
+            "stop_loss":  round(price * (1 - RISK["max_loss_pct"] / 100), 6),
+            "take_profit": round(price * (1 + RISK["take_profit_pct"] / 100), 6),
+        }
 
         self.balance  -= amount_usd
         self.invested += amount_usd
@@ -153,14 +140,16 @@ class VirtualWallet:
         if qty_to_sell <= 0:
             return {"ok": False, "msg": f"{E['error']} كمية غير صالحة"}
 
-        # حساب الأرباح/الخسائر
-        cost_basis  = pos["avg_price"] * qty_to_sell
+        # حساب الأرباح/الخسائر — نستخدم pos["cost"] كمرجع وليس avg_price*qty
+        # لتجنب تراكم أخطاء التقريب وضمان توافق invested مع الواقع
+        cost_basis  = pos["cost"] if qty_to_sell >= pos["quantity"] else pos["avg_price"] * qty_to_sell
         sale_value  = price * qty_to_sell
         pnl         = sale_value - cost_basis
         pnl_pct     = (pnl / cost_basis * 100) if cost_basis > 0 else 0
 
         self.balance  += sale_value
-        self.invested -= cost_basis
+        # حماية: invested لا يمكن أن يصبح سالباً
+        self.invested  = max(0.0, round(self.invested - cost_basis, 2))
         self.profit   += pnl
 
         if qty_to_sell >= pos["quantity"]:

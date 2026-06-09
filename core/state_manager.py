@@ -739,42 +739,69 @@ class StateManager:
 
     def can_auto_execute(self, user_id: int, symbol: str,
                           portfolio_value: float,
-                          vw_positions: dict = None) -> tuple:
+                          vw_positions: dict = None,
+                          scan_type: str = "daily") -> tuple:
         """
-        الفحص الموحد قبل أي تنفيذ آلي (K2+K3).
+        الفحص الموحد قبل أي تنفيذ آلي (K1+K2+K3+Q4+Q5).
+        يفحص قيود النوع المُمرَّر (daily/weekly/monthly) + الحد اليومي الكلي.
         يُعيد (can: bool, amount: float, reason: str)
+
+        إصلاح BUG-B: كان يفحص "daily" فقط بغض النظر عن scan_type.
+        الآن يفحص النوع الصحيح + الحد اليومي الكلي (25%) معاً.
         """
         import time as _t
+
         # 1. فحص position مفتوح (K1)
         if vw_positions and symbol in vw_positions:
             return False, 0, f"مركز {symbol} مفتوح بالفعل"
 
-        # 2. فحص القيود اليومية الموحدة
-        log  = self.get_trade_log(user_id)
-        now  = _t.time()
-        lim  = self.TRADE_LIMITS["daily"]
-        window = lim["window_hours"] * 3600
-        daily_log = [t for t in log.get("daily", [])
-                     if now - t.get("ts", 0) < window]
+        log = self.get_trade_log(user_id)
+        now = _t.time()
 
-        # 3. فحص عدد الصفقات
-        if len(daily_log) >= lim["max_trades"]:
-            return False, 0, (f"الحد اليومي: {lim['max_trades']} صفقات")
+        # 2. فحص قيود النوع المحدد (daily/weekly/monthly)
+        lim = self.TRADE_LIMITS.get(scan_type)
+        if not lim:
+            return False, 0, f"نوع مسح غير معروف: {scan_type}"
 
-        # 4. فحص إجمالي التعرض (K3)
-        total_invested = sum(t.get("amount", 0) for t in daily_log)
-        max_daily_usd  = portfolio_value * 0.25  # 25% يومي
-        if total_invested >= max_daily_usd:
-            return False, 0, f"الحد اليومي: 25% = ${max_daily_usd:,.0f}"
+        window   = lim["window_hours"] * 3600
+        type_log = [t for t in log.get(scan_type, [])
+                    if now - t.get("ts", 0) < window]
 
-        # 5. فحص تكرار العملة
-        if symbol in [t.get("symbol") for t in daily_log]:
-            return False, 0, f"{symbol} مُنفَّذة اليوم"
+        # 3. فحص عدد صفقات هذا النوع
+        if len(type_log) >= lim["max_trades"]:
+            return False, 0, (
+                f"الحد الأقصى {lim['max_trades']} صفقات {scan_type} "
+                f"في آخر {lim['window_hours']} ساعة"
+            )
 
-        # حساب المبلغ المتاح
-        remaining  = max_daily_usd - total_invested
-        amount     = min(portfolio_value * lim["pct_per_trade"], remaining)
-        amount     = max(amount, 50)
+        # 4. فحص تكرار نفس العملة في هذا النوع (Q4)
+        if symbol in [t.get("symbol") for t in type_log]:
+            return False, 0, f"{symbol} مُنفَّذة بالفعل في مسح {scan_type}"
+
+        # 5. فحص الحد اليومي الكلي للتعرض (K3) — يُطبَّق دائماً بغض النظر عن النوع
+        daily_lim    = self.TRADE_LIMITS["daily"]
+        daily_window = daily_lim["window_hours"] * 3600
+        daily_log    = [t for t in log.get("daily", [])
+                        if now - t.get("ts", 0) < daily_window]
+        # نجمع أيضاً صفقات weekly/monthly المنفَّذة اليوم لحساب التعرض الكلي
+        today_start  = now - daily_window
+        all_today    = [
+            t for sl in [log.get(k, []) for k in ("daily", "weekly", "monthly")]
+            for t in sl
+            if now - t.get("ts", 0) < daily_window
+        ]
+        total_today  = sum(t.get("amount", 0) for t in all_today)
+        max_daily_usd = portfolio_value * 0.25   # 25% يومي كحد أقصى كلي
+        if total_today >= max_daily_usd:
+            return False, 0, (
+                f"الحد اليومي الكلي: 25% من المحفظة = ${max_daily_usd:,.0f} "
+                f"(مُنفَّذ: ${total_today:,.0f})"
+            )
+
+        # 6. حساب المبلغ المتاح
+        remaining = max_daily_usd - total_today
+        amount    = min(portfolio_value * lim["pct_per_trade"], remaining)
+        amount    = max(amount, 50)
         return True, amount, "✅ مسموح"
 
     def get_trade_log(self, user_id: int) -> dict:
