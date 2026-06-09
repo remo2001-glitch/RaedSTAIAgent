@@ -259,6 +259,24 @@ def _cg_id(symbol: str) -> str:
     # 3. fallback: lowercase
     return sym.lower()
 
+
+def _clean_symbol(symbol: str) -> str:
+    """
+    يُطبِّع رمز العملة على مستوى النظام:
+    BTCUSDT → BTC | ETHBUSD → ETH | BTC/USDT → BTC | btcusdt → BTC
+    يضمن أن جميع استدعاءات API تستقبل الرمز النظيف دائماً.
+    """
+    sym = symbol.upper().strip().replace("/", "").replace("-", "")
+    # إزالة اللواحق الشائعة بالترتيب (الأطول أولاً لتجنب قطع BNB من BNBUSDT)
+    for suffix in ("USDT", "BUSD", "USDC", "BTC", "ETH", "BNB"):
+        if sym.endswith(suffix) and len(sym) > len(suffix):
+            candidate = sym[: -len(suffix)]
+            # تأكد أن ما تبقى ليس فارغاً أو حرفاً واحداً فقط لعملة غير منطقية
+            if len(candidate) >= 2:
+                sym = candidate
+                break
+    return sym
+
 # ─── تحويل interval لـ CoinGecko ─────────────────────────────
 def _cg_interval(interval: str) -> str:
     """CoinGecko يدعم: daily فقط للفترات الطويلة."""
@@ -357,6 +375,7 @@ class DataLayer:
     # 1. السعر الحي — يُعيد Dict أو None (مع حماية في المستدعي)
     # ═══════════════════════════════════════════════════════════
     async def get_price(self, symbol: str) -> Optional[Dict]:
+        symbol = _clean_symbol(symbol)   # BTCUSDT → BTC (نظام-واسع)
         key = f"price:{symbol.upper()}"
         if cached := _cached(key, "price"):
             return cached
@@ -499,6 +518,7 @@ class DataLayer:
     # ═══════════════════════════════════════════════════════════
     async def get_ohlcv(self, symbol: str, interval: str = "1d",
                          limit: int = 365) -> List[Dict]:
+        symbol = _clean_symbol(symbol)   # BTCUSDT → BTC (نظام-واسع)
         key = f"ohlcv:{symbol}:{interval}:{limit}"
         if cached := _cached(key, "ohlcv"):
             return cached  # دائماً List
@@ -1058,6 +1078,7 @@ class DataLayer:
         المرحلة 2: جلب بيانات 4H من OKX لـ SMC حقيقي.
         يُستخدم لـ RSI Divergence وOrder Blocks وBOS/ChoCH.
         """
+        symbol = _clean_symbol(symbol)   # BTCUSDT → BTC
         key = f"ohlcv4h:{symbol}:{limit}"
         if cached := _cached(key, "ohlcv"):
             return cached
