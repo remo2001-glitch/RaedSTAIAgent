@@ -478,6 +478,16 @@ async def hourly_alert_job(context: ContextTypes.DEFAULT_TYPE):
         return
     try:
         from core.state_manager import state_manager as _sm_h
+        import datetime as _dt_h
+        # إصلاح BUG-F: تحديد scan_type من توقيت KSA الفعلي (نفس منطق _run_4h_scan)
+        _utc_h   = _dt_h.datetime.now(_dt_h.timezone.utc).hour
+        _ksa_h   = (_utc_h + 3) % 24
+        if 9 <= _ksa_h < 13:
+            _h_scan_type = "weekly"
+        elif _ksa_h >= 22 or _ksa_h < 1:
+            _h_scan_type = "monthly"
+        else:
+            _h_scan_type = "daily"
         # جلب البيانات الأساسية
         btc_c = await engine.data_layer.get_ohlcv("BTC", "1d", 100)
         fear  = await engine.data_layer.get_fear_greed()
@@ -557,10 +567,11 @@ async def hourly_alert_job(context: ContextTypes.DEFAULT_TYPE):
                     for sig_info in strong_signals_data:
                         if sig_info["confidence"] < 0.80:
                             continue
-                        # K2+K3: الفحص الموحد
+                        # K2+K3+BUG-B: الفحص الموحد بالنوع الصحيح
                         _sym_q = sig_info["symbol"]
                         _can, _buy_amt, _reason = _sm_h.can_auto_execute(
-                            uid, _sym_q, _vw_h.total_value, _vw_h.positions)
+                            uid, _sym_q, _vw_h.total_value, _vw_h.positions,
+                            scan_type=_h_scan_type)
                         if not _can:
                             logger.info(f"Auto skip {_sym_q}: {_reason}")
                             continue
@@ -572,8 +583,8 @@ async def hourly_alert_job(context: ContextTypes.DEFAULT_TYPE):
                             amount_usd = _buy_amt,
                         )
                         if _result.get("ok"):
-                            # Q1-Q5: تسجيل الصفقة لتفعيل القيود
-                            _sm_h.record_auto_trade(uid, _sym_q, "daily", _buy_amt)
+                            # Q1-Q5: تسجيل الصفقة بالنوع الصحيح (BUG-F مُصلَح)
+                            _sm_h.record_auto_trade(uid, _sym_q, _h_scan_type, _buy_amt)
                             _executed_syms.append(
                                 f"• {sig_info['symbol']} ${_buy_amt:,.0f}")
 
