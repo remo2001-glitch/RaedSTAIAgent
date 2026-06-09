@@ -314,7 +314,7 @@ def _build_professional_block(
         if ns > 0:
             entry_conds.append(f"4. وصول Demand Zone {_fmt_price(ns)}")
         if adx > 40:
-            entry_conds.append("5. RSI يتجاوز 30 صعوداً (تأكيد انتهاء الهبوط)")
+            entry_conds.append("5. MACD إيجابي أو تقاطع صاعد")
 
     # إصلاح #325: R/R ديناميكي — ذروة البيع تُعطي هدفاً أوسع
     # منطق مالي: RSI=13 تاريخياً يسبق ارتداداً 10-20%
@@ -576,9 +576,8 @@ def _build_professional_block(
     _risk   = max(price - _sl_price, 0.0001)
     _reward = max(tp1_v - price, 0.0001)
     rr_real = round(min(_reward / _risk, 5.0), 1)
-    # لا نُجبر R/R على 1.0 — نُظهر القيمة الحقيقية
-    if rr_real < 1.0:
-        rr_real = 1.0  # فقط إذا كان حقاً أقل من 1:1
+    # إصلاح #949: نُظهر R/R الحقيقي — لا نُجبره على 1.0
+    # إذا R/R < 1.0 نُضيف تحذير في النص
 
     # Worst-Case
     wc_loss = abs(price - pro_sl) / max(price, 0.001) * 100
@@ -791,7 +790,7 @@ def _get_vol_profile_ar(vol_profile: str, vol_ratio: float) -> str:
         return f"⚡ Climax Buying ({vol_ratio:.1f}x) — ضغط شرائي قوي"
     elif vol_profile == "above_average":
         return f"📈 حجم فوق المتوسط ({vol_ratio:.1f}x)"
-    elif vol_profile == "no_demand":
+    elif vol_profile == "no_demand" or vol_ratio < 0.8:
         return f"📉 حجم ضعيف ({vol_ratio:.1f}x) — غياب طلب"
     return f"⚪ حجم عادي ({vol_ratio:.1f}x)"
 

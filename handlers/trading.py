@@ -484,28 +484,16 @@ async def callback_execmode(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     _mode_ar = "💰 تنفيذ حقيقي" if mode == "real" else "🎮 محفظة افتراضية"
     await query.edit_message_text(f"{_mode_ar} — جاري التقييم...")
-    # إصلاح #1053: update.message immutable في PTB — نستخدم context.user_data
-    context.user_data["_exec_msg_override"] = query.message
-    # استدعاء cmd_execute مع message override
+    # إصلاح #1053/#1055: تخزين query.message في user_data ثم استدعاء cmd_execute
+    context.user_data["_exec_reply_fn"] = query.message.reply_text
+    context.user_data["_exec_edit_fn"]  = query.edit_message_text
     try:
-        _orig_msg = update.message
-    except Exception:
-        _orig_msg = None
-    # بناء fake update يحمل query.message
-    class _FakeUpdate:
-        def __init__(self, orig, msg):
-            self.__dict__.update(orig.__dict__)
-            self.message = msg
-            self.effective_user = orig.effective_user
-            self.effective_chat = orig.effective_chat
-    try:
-        _fu = _FakeUpdate(update, query.message)
-        await cmd_execute(_fu, context)
+        await cmd_execute(update, context)
     except Exception as _ce:
         import logging
-        logging.getLogger("trading").error(f"callback_execmode→cmd_execute: {_ce}", exc_info=True)
+        logging.getLogger("trading").error(f"execmode→cmd_execute: {_ce}", exc_info=True)
         try:
-            await query.edit_message_text(f"❌ خطأ: {str(_ce)[:100]}")
+            await query.edit_message_text(f"❌ خطأ في التنفيذ: {str(_ce)[:100]}")
         except Exception:
             pass
 
@@ -723,9 +711,17 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if force_mode == "virtual" or not has_live:
         has_live = False
 
-    msg = await update.message.reply_text(
-        f"🔍 جاري تقييم {symbol} ({direction}) بـ ${size_usd:,.0f}...\n"
-        f"الوضع: {'💰 حقيقي' if has_live else '🎮 افتراضي'}")
+    # إصلاح #1053/#1055: دعم reply من callback أو command
+    _reply_fn = context.user_data.pop("_exec_reply_fn", None)
+    _edit_fn  = context.user_data.pop("_exec_edit_fn", None)
+    if _reply_fn:
+        msg = await _reply_fn(
+            f"🔍 جاري تقييم {symbol} ({direction}) بـ ${size_usd:,.0f}...\n"
+            f"الوضع: {'💰 حقيقي' if has_live else '🎮 افتراضي'}")
+    else:
+        msg = await update.message.reply_text(
+            f"🔍 جاري تقييم {symbol} ({direction}) بـ ${size_usd:,.0f}...\n"
+            f"الوضع: {'💰 حقيقي' if has_live else '🎮 افتراضي'}")
 
     try:
         candles  = (await engine.data_layer.get_ohlcv(symbol, "1d", 200)) or []

@@ -264,13 +264,19 @@ def _format_forecast_ar(symbol: str, price: float, fc: dict, days: int = 30) -> 
                 f"📐 *أهداف فيبوناتشي (Elliott):*",
                 f"  🎯 هدف 1 (1.272): {p_fmt(fc.get('fib_t1',0))}",
                 f"  🎯 هدف 2 (1.618): {p_fmt(fc.get('fib_t2',0))}",
-                f"  🛡️ دعم 1 (0.382): {p_fmt(fc.get('fib_s1',0))}",
-                f"  🛡️ دعم 2 (0.618): {p_fmt(fc.get('fib_s2',0))}",
+                # إصلاح #1076: لا نُظهر الدعم إذا كان أعلى من السعر الحالي
+                *(([f"  🛡️ دعم 1 (0.382): {p_fmt(fc.get('fib_s1',0))}"]
+                   if fc.get('fib_s1',0) < _fca_p else []) +
+                  ([f"  🛡️ دعم 2 (0.618): {p_fmt(fc.get('fib_s2',0))}"]
+                   if fc.get('fib_s2',0) < _fca_p else [])),
             ] if fc.get('trend_dir') not in ('down', 'bearish')
             else [
                 f"📐 *مستويات الدعم الرئيسية:*",
-                f"  🛡️ دعم 1 (0.382): {p_fmt(fc.get('fib_s1',0))}",
-                f"  🛡️ دعم 2 (0.618): {p_fmt(fc.get('fib_s2',0))}",
+                # إصلاح #1076: لا نُظهر الدعم إذا كان أعلى من السعر الحالي
+                *(([f"  🛡️ دعم 1 (0.382): {p_fmt(fc.get('fib_s1',0))}"]
+                   if fc.get('fib_s1',0) < _fca_p else []) +
+                  ([f"  🛡️ دعم 2 (0.618): {p_fmt(fc.get('fib_s2',0))}"]
+                   if fc.get('fib_s2',0) < _fca_p else [])),
             ]
         ),
         "",
@@ -570,9 +576,10 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # إصلاح #373: week_plan يعكس قرار capital_engine الفعلي
         _fg_now    = fear_val
-        _fg_label  = "محقق ✅" if _fg_now < 25 else f"حالياً {_fg_now} — انتظر < 25"
+        # إصلاح #1072: لا "محقق ✅" — نص وصفي فقط
+        _fg_label  = f"Fear = {_fg_now} < 25 ✓" if _fg_now < 25 else f"حالياً {_fg_now} — انتظر < 25"
         _rsi_btc   = float((regime.metrics or {}).get("rsi", 50) or 50)
-        _rsi_label = "محقق ✅" if _rsi_btc > 30 else f"حالياً {_rsi_btc:.0f} — انتظر > 30"
+        _rsi_label = f"RSI = {_rsi_btc:.0f} > 30 ✓" if _rsi_btc > 30 else f"حالياً {_rsi_btc:.0f} — انتظر > 30"
 
         # قراءة قرار allocation الفعلي
         _deployed    = getattr(allocation, "deployed_usd", 0) or 0
@@ -626,9 +633,9 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if len(_fca_c) >= 30 and _fca_p > 0:
                 _fca = _calc_price_forecast(
                     _fca_c, days=30, fear_greed=fear_val,
-                    btc_dominance=float(
-                        (regime.metrics or {}).get("btc_dominance") or
-                        _btc_dom_real),  # إصلاح #983
+                    # إصلاح #1070: _btc_dom_real من onchain يُقدَّم على regime
+                    btc_dominance=float(_btc_dom_real if _btc_dom_real != 56 else
+                        ((regime.metrics or {}).get("btc_dominance") or 56)),
                     market_regime=regime.description_ar,
                 )
                 if _fca:
@@ -934,9 +941,9 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _fc = _calc_price_forecast(
                     _fc_candles, days=30,
                     fear_greed=fear_val,
-                    btc_dominance=float(
-                        (getattr(regime, "metrics", {}) or {}).get("btc_dominance") or
-                        _btc_dom_real),  # إصلاح #983
+                    # إصلاح #1075: _btc_dom_real من onchain
+                    btc_dominance=float(_btc_dom_real if _btc_dom_real != 56 else
+                        ((getattr(regime, "metrics", {}) or {}).get("btc_dominance") or 56)),
                     market_regime=regime.description_ar,
                 )
                 if _fc:
@@ -955,8 +962,8 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _rsi_pw  = float((getattr(regime,"metrics",{}) or {}).get("rsi", 50) or 50)
         _fg_pw   = fear_val
         if regime.regime.value in ("bear_trend", "distribution"):
-            _rsi_lbl  = f"حالياً {_rsi_pw:.0f} — انتظر > 30" if _rsi_pw < 30 else "محقق ✅"
-            _fg_lbl   = "محقق ✅" if _fg_pw < 25 else f"حالياً {_fg_pw} — انتظر < 25"
+            _rsi_lbl  = f"حالياً {_rsi_pw:.0f} — انتظر > 30" if _rsi_pw < 30 else f"RSI = {_rsi_pw:.0f} > 30 ✓"
+            _fg_lbl   = f"Fear = {_fg_pw} < 25 ✓" if _fg_pw < 25 else f"حالياً {_fg_pw} — انتظر < 25"
             _buy_names = " و".join(_buy_signals[:3]) if _buy_signals else ""
 
             # إصلاح #382: week_lines تعكس إشارات الشراء الفعلية
@@ -965,21 +972,21 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 week_lines = [
                     f"• أسبوع 1: دخول تكتيكي محدود (25%) في {_buy_names} — RSI={_rsi_pw:.0f} ذروة بيع تاريخية",
                     f"• أسبوع 2: مراقبة — وقف صارم إذا كسر الدعم | زيادة عند RSI > 25",
-                    f"• أسبوع 3: Fear & Greed < 25 → 'زيادة تدريجية عند تأكيد القاع' ({_fg_lbl})",
+                    f"• أسبوع 3: Fear & Greed < 25 → زيادة تدريجية عند تأكيد القاع ({_fg_lbl})",
                     "• أسبوع 4: مراجعة المراكز وقرار الاستمرار",
                 ]
             elif _buy_signals and _rsi_pw < 30:
                 week_lines = [
                     f"• أسبوع 1: انتظار تأكيد — RSI يرتد فوق 30 ({_rsi_lbl})",
                     f"• أسبوع 2: دخول تدريجي في {_buy_names} عند ارتداد RSI فوق 35",
-                    f"• أسبوع 3: Fear & Greed < 25 → 'ابدأ التجميع التدريجي إن تأكد الارتداد' ({_fg_lbl})",
+                    f"• أسبوع 3: Fear & Greed < 25 → ابدأ التجميع التدريجي عند تأكيد الارتداد ({_fg_lbl})",
                     "• أسبوع 4: تقييم القاع — قرار الدخول الكامل",
                 ]
             else:
                 week_lines = [
                     f"• أسبوع 1: لا دخول — RSI يرتد فوق 30 ({_rsi_lbl})",
                     "• أسبوع 2: دخول تدريجي عند ارتداد RSI فوق 35",
-                    f"• أسبوع 3: Fear & Greed < 25 → 'ابدأ التجميع التدريجي إن تأكد الارتداد' ({_fg_lbl})",
+                    f"• أسبوع 3: Fear & Greed < 25 → ابدأ التجميع التدريجي عند تأكيد الارتداد ({_fg_lbl})",
                     "• أسبوع 4: تقييم القاع — قرار الدخول الكامل",
                 ]
         elif regime.regime.value in ("bull_trend", "accumulation"):
