@@ -54,6 +54,49 @@ class OrderManager:
         self.exchange   = exchange
         self._trades:   Dict[str, LiveTrade] = {}
         self._monitor_task: Optional[asyncio.Task] = None
+        # إصلاح #1048: تحميل الصفقات المفتوحة من Redis عند الإنشاء
+        self._load_all_open_trades()
+
+    def _load_all_open_trades(self):
+        """تحميل جميع الصفقات المفتوحة من Redis عند الـ restart."""
+        try:
+            r = self._get_redis()
+            if not r:
+                return
+            import json as _j
+            # ابحث عن جميع مفاتيح الصفقات
+            keys = r.keys("raed:trade:*")
+            loaded = 0
+            for key in (keys or []):
+                try:
+                    raw = r.get(key)
+                    if not raw:
+                        continue
+                    data = _j.loads(raw)
+                    if data.get("status") != "OPEN":
+                        continue
+                    trade = LiveTrade(
+                        trade_id    = data["trade_id"],
+                        symbol      = data["symbol"],
+                        side        = data["side"],
+                        entry_price = float(data["entry_price"]),
+                        qty         = float(data["qty"]),
+                        size_usd    = float(data["size_usd"]),
+                        stop_loss   = float(data.get("stop_loss", 0)),
+                        take_profit = float(data.get("take_profit", 0)),
+                        order_id    = data.get("order_id", ""),
+                        trailing_pct= float(data.get("trailing_pct", 0)),
+                        status      = "OPEN",
+                        user_id     = int(data.get("user_id", 0)),
+                    )
+                    self._trades[trade.trade_id] = trade
+                    loaded += 1
+                except Exception:
+                    continue
+            if loaded > 0:
+                logger.info(f"✅ تحميل {loaded} صفقة مفتوحة من Redis")
+        except Exception as e:
+            logger.warning(f"_load_all_open_trades: {e}")
 
     # ═══════════════════════════════════════════════════════════
     # فتح صفقة
@@ -380,7 +423,8 @@ class OrderManager:
             data = {k: getattr(trade,k,None) for k in [
                 "trade_id","symbol","side","entry_price","qty","size_usd",
                 "stop_loss","take_profit","status","user_id","opened_at",
-                "pnl_usd","pnl_pct","close_reason","order_type","limit_price","auto_protect"
+                "pnl_usd","pnl_pct","close_reason","order_type","limit_price",
+                "auto_protect","trailing_pct"  # إصلاح #1048: حفظ trailing_pct
             ]}
             r.setex(f"raed:trade:{trade.user_id}:{trade.trade_id}", 86400*30,
                     json.dumps(data, ensure_ascii=False, default=str))
