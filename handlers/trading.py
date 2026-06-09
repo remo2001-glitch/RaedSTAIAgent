@@ -450,24 +450,40 @@ async def cmd_live(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @require_tier("execute")
 
 async def callback_execmode(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """M#112: معالجة اختيار المستخدم real/virtual في execute."""
-    query   = update.callback_query
+    """إصلاح #1046: معالجة اختيار المستخدم real/virtual مع sl/tp."""
+    query = update.callback_query
     await query.answer()
-    data    = query.data  # execmode_real_BTC_buy_100.00_0.0000
-    parts   = data.split("_")
-    if len(parts) < 5: return
-    mode     = parts[1]        # real | virtual
-    symbol   = parts[2].upper()
-    direction= parts[3]
-    size_usd = float(parts[4])
-    lp       = float(parts[5]) if len(parts) > 5 else 0.0
+    # صيغة: execmode_real_BTC_long_500.00_0.0000_5.00_6.00
+    data  = query.data
+    parts = data.split("_")
+    if len(parts) < 5:
+        await query.edit_message_text("❌ بيانات غير صالحة")
+        return
+    mode      = parts[1]          # real | virtual
+    symbol    = parts[2].upper()
+    direction = parts[3]          # buy/sell/long/short
+    try:
+        size_usd = float(parts[4])
+        lp       = float(parts[5]) if len(parts) > 5 else 0.0
+        sl_cb    = float(parts[6]) if len(parts) > 6 else 5.0
+        tp_cb    = float(parts[7]) if len(parts) > 7 else 6.0
+    except (ValueError, IndexError):
+        size_usd = float(parts[4])
+        lp, sl_cb, tp_cb = 0.0, 5.0, 6.0
 
-    # إعادة توجيه الأمر مع الوضع المحدد
-    context.args = [symbol, direction, str(size_usd), mode]
-    if lp > 0:
+    # تطبيع direction
+    dir_norm = "buy" if direction in ("buy","long") else "sell"
+
+    # بناء context.args
+    context.args = [symbol, dir_norm, str(size_usd), mode]
+    if lp > 0.0001:
         context.args += ["limit", str(lp)]
-    await query.edit_message_text(
-        f"{'💰 تنفيذ حقيقي' if mode=='real' else '🎮 محفظة افتراضية'} — جاري التقييم...")
+    # حفظ sl/tp في user_data للاسترجاع في cmd_execute
+    context.user_data["_exec_sl"] = sl_cb
+    context.user_data["_exec_tp"] = tp_cb
+
+    _mode_ar = "💰 تنفيذ حقيقي" if mode == "real" else "🎮 محفظة افتراضية"
+    await query.edit_message_text(f"{_mode_ar} — جاري التقييم...")
     update.message = query.message
     await cmd_execute(update, context)
 
@@ -606,15 +622,36 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if has_live and force_mode is None:
         info_q    = engine.get_user_exchange(user_id)
         ex_name_q = info_q.get("name","").upper() if info_q else "منصتك"
-        kb_mode   = InlineKeyboardMarkup([[
-            InlineKeyboardButton(f"✅ تداول حقيقي ({ex_name_q})",
-                                 callback_data=f"execmode_real_{symbol}_{direction}_{size_usd:.2f}_{limit_price:.4f}"),
-            InlineKeyboardButton("🎮 افتراضي",
-                                 callback_data=f"execmode_virtual_{symbol}_{direction}_{size_usd:.2f}_{limit_price:.4f}"),
+        # إصلاح: تمرير sl/tp في callback_data
+        _sl_r = float(risk.stop_loss_pct or 5.0)
+        _tp_r = float(risk.take_profit_pct or 6.0)
+        kb_mode = InlineKeyboardMarkup([[
+            InlineKeyboardButton(
+                f"✅ تداول حقيقي ({ex_name_q})",
+                callback_data=(f"execmode_real_{symbol}_{direction}"
+                               f"_{size_usd:.2f}_{limit_price:.4f}"
+                               f"_{_sl_r:.2f}_{_tp_r:.2f}")),
+            InlineKeyboardButton(
+                "🎮 افتراضي",
+                callback_data=(f"execmode_virtual_{symbol}_{direction}"
+                               f"_{size_usd:.2f}_{limit_price:.4f}"
+                               f"_{_sl_r:.2f}_{_tp_r:.2f}")),
         ]])
+        # إصلاح #1045: تفاصيل كاملة قبل الاختيار
+        _dir_ar   = "🟢 شراء" if direction in ("buy","long") else "🔴 بيع"
+        _ord_ar   = (f"⏳ Limit @ ${limit_price:,.4f}" if limit_price > 0
+                     else "⚡ Market (تنفيذ فوري)")
         await update.message.reply_text(
-            f"⚡ *كيف تريد تنفيذ الصفقة؟*\n\n"
-            f"• {symbol} | {'شراء' if direction=='buy' else 'بيع'} | ${size_usd:,.2f}\n\n"
+            f"⚡ *تأكيد الصفقة*\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"🪙 {symbol} | {_dir_ar}\n"
+            f"💰 الحجم: ${size_usd:,.2f}\n"
+            f"📈 نوع الأمر: {_ord_ar}\n"
+            f"💵 السعر الحالي: ${price:,.4f}\n"
+            f"🛑 وقف الخسارة: ${sl_price:,.4f} ({risk.stop_loss_pct:.1f}%-)\n"
+            f"🎯 هدف الربح: ${tp_price:,.4f} ({risk.take_profit_pct:.1f}%+)\n"
+            f"📊 R/R: 1:{rr_ratio:.1f}\n"
+            f"🏦 المنصة: {ex_name_q}\n\n"
             f"اختر نوع التنفيذ:",
             parse_mode="Markdown",
             reply_markup=kb_mode)
@@ -696,6 +733,10 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
         tp_price   = ep * (1+float(risk.take_profit_pct or 10)/100) if is_buy \
                      else ep * (1-float(risk.take_profit_pct or 10)/100)
 
+        # استرجاع sl/tp المحفوظة من execmode callback
+        _exec_sl_override = context.user_data.pop("_exec_sl", None)
+        _exec_tp_override = context.user_data.pop("_exec_tp", None)
+
         # اختيار أفضل منصة إذا live
         best_ex = None
         if has_live:
@@ -741,12 +782,15 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
             vol_m    = best_ex.get("volume_24h", 0) / 1e6
 
             # إصلاح كارثي: تمرير sl/tp من risk_engine + limit_price
+            # إذا جاء من execmode → استخدم قيم محفوظة
+            _sl_use = _exec_sl_override or float(risk.stop_loss_pct or 5.0)
+            _tp_use = _exec_tp_override or float(risk.take_profit_pct or 6.0)
             kb = build_confirm_keyboard(
                 symbol, trade_dir, final_size,
                 best_ex.get("name",""),
                 limit_price=limit_price,
-                sl_pct=float(risk.stop_loss_pct or 5.0),
-                tp_pct=float(risk.take_profit_pct or 6.0))
+                sl_pct=_sl_use,
+                tp_pct=_tp_use)
             # M#90: عرض نوع الأمر (Market أو Limit)
             if limit_price > 0:
                 is_b = direction == "long"
@@ -778,15 +822,27 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=kb)
             return
 
-        # افتراضي
+        # افتراضي — إصلاح: حفظ في VirtualWallet لتظهر في /vtrades
+        from core.state_manager import state_manager as _sm_vex
+        from core.virtual_wallet import VirtualWallet as _VW_ex
+        _vw_ex = _VW_ex(_sm_vex.get_virtual_wallet(user_id) or {})
+        _buy_result = _vw_ex.buy(symbol, ep, final_size)
+        if _buy_result.get("ok"):
+            # تحديث SL/TP في الـ position
+            if symbol.upper() in (_vw_ex.positions or {}):
+                _vw_ex.positions[symbol.upper()]["stop_loss"]   = sl_price
+                _vw_ex.positions[symbol.upper()]["take_profit"] = tp_price
+                _vw_ex.positions[symbol.upper()]["size_usd"]    = final_size
+            _sm_vex.save_virtual_wallet(user_id, _vw_ex.to_dict())
         engine.risk_engine.register_trade(symbol, final_size, trade_dir)
         engine.audit_logger.log_trade(
             symbol=symbol, direction=direction, size=final_size,
             confidence=0.70, regime=regime.regime.value,
             reason="user_manual_virtual")
 
+        _virt_status = "✅" if _buy_result.get("ok") else f"⚠️ {_buy_result.get('msg','')}"
         lines = [
-            "✅ *تم التنفيذ — محفظة افتراضية 🎮*",
+            f"{_virt_status} *تم التنفيذ — محفظة افتراضية 🎮*",
             "━━━━━━━━━━━━━━━━━━",
             f"🪙 {symbol} | {'🟢 شراء' if is_buy else '🔴 بيع'}",
             f"💰 الحجم: ${final_size:,.2f}",
@@ -2521,6 +2577,9 @@ def register(app):
     app.add_handler(CommandHandler("premium",       cmd_premium))
     app.add_handler(CallbackQueryHandler(
         handle_trade_callback, pattern=r"^(confirm|cancel)_"))
+    # execmode: اختيار حقيقي/افتراضي
+    app.add_handler(CallbackQueryHandler(
+        callback_execmode, pattern=r"^execmode_"))
     app.add_handler(CallbackQueryHandler(
         cb_autotrade_decision, pattern=r"^autotrade_(confirm|ignore)"))
     # T1/T2/T4: أوامر جديدة
