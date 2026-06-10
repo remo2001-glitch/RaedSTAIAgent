@@ -18,6 +18,21 @@ from core.exchange     import SUPPORTED_EXCHANGES
 from core.state_manager import state_manager as _sm, TIERS, CMD_TIER
 from core.middleware    import require_tier
 from core.config        import E, MSG
+
+
+async def _reply(update: Update, text: str, **kwargs):
+    """
+    Helper آمن للرد — يعمل مع Message commands والـ Callbacks.
+    update.message قد يكون None إذا جاء الطلب من callback_query.
+    """
+    if update.message:
+        return await update.message.reply_text(text, **kwargs)
+    elif update.callback_query and update.callback_query.message:
+        return await update.callback_query.message.reply_text(text, **kwargs)
+    # fallback: لا يمكن الرد — نُعيد كائناً وهمياً لتجنب NoneType crash
+    class _FakeMsg:
+        async def edit_text(self, *a, **kw): pass
+    return _FakeMsg()
 from core.database      import db
 
 def _sig() -> str:
@@ -569,11 +584,11 @@ async def _handle_trailing_stop(update, context, engine,
 async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine = _eng(context)
     if not engine:
-        await update.message.reply_text("⚠️ النظام لم يُهيَّأ بعد"); return
+        await _reply(update, "⚠️ النظام لم يُهيَّأ بعد"); return
 
     args = context.args or []
     if len(args) < 2:
-        await update.message.reply_text(
+        await _reply(update, 
             "⚡ *الاستخدام*\n\n"
             "• Market:  `/execute BTC buy 500`\n"
             "• Limit:   `/execute BTC buy 500 limit 60000`\n"
@@ -615,16 +630,16 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if limit_price <= 0:
                 raise ValueError("سعر Limit يجب أن يكون > 0")
         except (ValueError, TypeError):
-            await update.message.reply_text(
+            await _reply(update, 
                 "⚠️ سعر Limit غير صحيح\n"
                 "مثال: `/execute BTC buy 500 limit 60000`",
                 parse_mode="Markdown"); return
 
     if direction not in ("buy","sell","شراء","بيع"):
-        await update.message.reply_text("⚠️ الاتجاه: buy أو sell"); return
+        await _reply(update, "⚠️ الاتجاه: buy أو sell"); return
 
     if engine.kill_switch.is_active:
-        await update.message.reply_text("🔴 التنفيذ متوقف — Kill Switch مفعّل"); return
+        await _reply(update, "🔴 التنفيذ متوقف — Kill Switch مفعّل"); return
 
     user_id  = update.effective_user.id
     has_live   = engine.user_has_live_trading(user_id)
@@ -658,7 +673,7 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _price_q = limit_price
         # إذا فشل السعر تماماً → أرسل رسالة واضحة بدلاً من crash
         if _price_q <= 0:
-            await update.message.reply_text(
+            await _reply(update, 
                 f"⚠️ *تعذَّر جلب سعر {symbol}*\n\n"
                 f"• جرّب بدون USDT: `/execute {symbol.replace('USDT','')} {direction} {size_usd:.0f}`\n"
                 f"• أو حدد السعر يدوياً: `/execute {symbol.replace('USDT','')} {direction} {size_usd:.0f} limit [السعر]`",
@@ -710,7 +725,7 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
                       if _sl_price_q > 0 else f"~{_sl_r:.1f}%")
         _tp_str    = (f"${_tp_price_q:,.4f} ({_tp_r:.1f}%+)"
                       if _tp_price_q > 0 else f"~{_tp_r:.1f}%")
-        await update.message.reply_text(
+        await _reply(update, 
             f"⚡ *تأكيد الصفقة*\n"
             f"━━━━━━━━━━━━━━━━━━\n"
             f"🪙 {symbol} | {_dir_ar}\n"
@@ -738,7 +753,7 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔍 جاري تقييم {symbol} ({direction}) بـ ${size_usd:,.0f}...\n"
             f"الوضع: {'💰 حقيقي' if has_live else '🎮 افتراضي'}")
     else:
-        msg = await update.message.reply_text(
+        msg = await _reply(update, 
             f"🔍 جاري تقييم {symbol} ({direction}) بـ ${size_usd:,.0f}...\n"
             f"الوضع: {'💰 حقيقي' if has_live else '🎮 افتراضي'}")
 

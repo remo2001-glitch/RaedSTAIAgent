@@ -593,12 +593,10 @@ def _build_professional_block(
 
     # ── بناء الأقسام ─────────────────────────────────────────
 
-    # 1. Confidence Score
+    # 1. Confidence Score — إصلاح #8: لا نُكرر التفصيل (موجود في "مصادر الإشارة" أعلاه)
     parts.extend([
         "",
         f"*🎯 Confidence Score: {_conf_score}%*",
-        f"• Technical: {_tech_score}% | On-chain: {_oc_score}%",
-        f"• Sentiment: {_sent_score}% | Macro: {_macro_score}%",
         f"• القرار: *{_decision_label}*",
     ])
 
@@ -645,10 +643,12 @@ def _build_professional_block(
     tp1_pct = abs(tp1_v - price) / max(price, 0.001) * 100
         # إصلاح #849: tp2_pct من السعر الحالي
     tp2_pct = abs(tp2_v - price) / max(price, 0.001) * 100 if tp2_v else 0
+    # إصلاح #8: تسمية دقيقة — "عند الدعم" فقط إذا entry_agg ≈ مستوى الدعم المعروض
+    _agg_label = "عند الدعم" if (ns > 0 and abs(entry_agg - ns) / max(ns, 0.0001) < 0.005) else "سحب فني (Pullback)"
     entry_lines = [
         "",
         "*📍 مناطق الدخول والخروج*",
-        f"• Entry 1 (Aggressive): {_fmt_price(entry_agg)} — عند الدعم",
+        f"• Entry 1 (Aggressive): {_fmt_price(entry_agg)} — {_agg_label}",
         f"• Entry 2 (Conservative): {_fmt_price(entry_cons)} — بعد تأكيد الارتداد",
     ]
     if _conf_score >= 40:  # لا أهداف عند WAIT
@@ -974,6 +974,23 @@ async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = _clean_md(text) if text else ""
         if not text:
             text = "📰 لا توجد أخبار متاحة حالياً. حاول لاحقاً."
+
+        # إصلاح #16: تحذير عند تناقض مشاعر الأخبار مع حالة السوق الفعلية
+        try:
+            _fear_n  = await _aio_n.wait_for(engine.data_layer.get_fear_greed(), timeout=8.0)
+            _fear_v  = int((_fear_n or {}).get("value") or 50)
+            _btc_c   = await _aio_n.wait_for(engine.data_layer.get_ohlcv("BTC", "1d", 60), timeout=10.0)
+            _btc_c   = _btc_c if isinstance(_btc_c, list) else []
+            if len(_btc_c) >= 30:
+                _regime_n = engine.regime_detector.detect(_btc_c, fear_greed=_fear_v)
+                _sent_n   = float(analysis.get("sentiment_score", 0) or 0)
+                if _sent_n > 0.3 and "هابط" in _regime_n.description_ar:
+                    text += (f"\n\n⚠️ *تنبيه:* مشاعر الأخبار إيجابية لكن السوق "
+                             f"{_regime_n.description_ar} (Fear & Greed: {_fear_v}) "
+                             f"— لا تعتمد على الأخبار وحدها لاتخاذ القرار")
+        except Exception as _ce:
+            logger.debug(f"news contradiction check: {_ce}")
+
         await msg.edit_text(text, parse_mode=ParseMode.MARKDOWN,
                             disable_web_page_preview=True)
     except Exception as e:
@@ -1053,7 +1070,49 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             lines += ["", "⚠️ بيانات البروتوكولات غير متاحة حالياً — يُرجى المحاولة لاحقاً"]
 
-        lines += ["", "📡 المصدر: DeFiLlama | 🤖 رائد"]
+        # إصلاح #13: قسم المشتقات BTC (Funding/OI/Whale) — بيانات كانت تُجلَب ولا تُعرض
+        _fund_pct  = float((funding or {}).get("rate_pct", 0) or 0)
+        _oi_chg    = float((oi or {}).get("oi_change_pct", 0) or 0)
+        _oi_sig    = (oi or {}).get("signal", "")
+        _whale_sig = (whale or {}).get("signal", "")
+        _whale_r   = float((whale or {}).get("ratio", 0) or 0)
+
+        if _fund_pct or _oi_chg or _whale_sig:
+            lines += ["", "📐 *مشتقات BTC*"]
+            if _fund_pct:
+                if _fund_pct < -0.02:
+                    _fsig = "🟢 سالب جداً — ضغط Shorts (فرصة Long)"
+                elif _fund_pct < -0.005:
+                    _fsig = "🟢 سالب — فرصة Long"
+                elif _fund_pct > 0.02:
+                    _fsig = "🔴 مرتفع جداً — ضغط Longs"
+                elif _fund_pct > 0.005:
+                    _fsig = "🟡 إيجابي — محايد"
+                else:
+                    _fsig = "⚪ محايد"
+                lines.append(f"• Funding Rate: {_fund_pct:+.4f}% {_fsig}")
+            if _oi_chg:
+                lines.append(f"• Open Interest: {_oi_chg:+.1f}% {_oi_sig}")
+            if _whale_sig:
+                _wr_txt = f" ({_whale_r:.2f})" if _whale_r > 0 else ""
+                lines.append(f"• Whale Ratio{_wr_txt}: {_whale_sig}")
+
+        # تفسير وتوصية إجمالية مختصرة بناءً على البيانات المجمَّعة
+        _reco_parts = []
+        if fear_val <= 25:
+            _reco_parts.append("Fear شديد → فرصة تجميع تدريجي عند التأكيد")
+        elif fear_val >= 75:
+            _reco_parts.append("Greed مرتفع → حذر من الانعكاس")
+        if _fund_pct < -0.01:
+            _reco_parts.append("Funding سالب يدعم سيناريو الارتداد")
+        if _whale_r and _whale_r < 0.6:
+            _reco_parts.append("الحيتان تتراكم")
+        if tvl_change < -3:
+            _reco_parts.append("خروج سيولة من DeFi")
+        if _reco_parts:
+            lines += ["", f"💡 *التفسير*: {' · '.join(_reco_parts)}"]
+
+        lines += ["", "📡 المصدر: DeFiLlama + OKX | 🤖 رائد"]
         await msg.edit_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         logger.error(f"cmd_onchain: {e}")
@@ -1278,18 +1337,46 @@ async def cmd_backtest(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     args     = context.args or []
     symbol   = args[0].upper() if args else "BTC"
-    strategy = args[1].lower() if len(args) > 1 else "trend_following"
     valid    = ["trend_following", "mean_reversion", "breakout", "hybrid"]
 
-    if strategy not in valid:
-        await update.message.reply_text(
-            "⚠️ الاستراتيجيات المتاحة:\n"
-            "• trend_following (الاتجاه — افتراضي)\n"
-            "• mean_reversion (الارتداد)\n"
-            "• breakout (الاختراق)\n"
-            "• hybrid (مدمج EMA+RSI)\n\n"
-            "مثال: /backtest BTC trend_following")
-        return
+    _auto_strategy_note = ""
+    if len(args) > 1:
+        strategy = args[1].lower()
+        if strategy not in valid:
+            await update.message.reply_text(
+                "⚠️ الاستراتيجيات المتاحة:\n"
+                "• trend_following (الاتجاه — افتراضي)\n"
+                "• mean_reversion (الارتداد)\n"
+                "• breakout (الاختراق)\n"
+                "• hybrid (مدمج EMA+RSI)\n\n"
+                "مثال: /backtest BTC trend_following")
+            return
+    else:
+        # إصلاح #17: اختيار الاستراتيجية تلقائياً حسب حالة السوق الحالية
+        strategy = "trend_following"  # افتراضي احتياطي
+        try:
+            from core.regime_detector import Regime
+            _rc, _rf = await asyncio.gather(
+                engine.data_layer.get_ohlcv(symbol, "1d", 200),
+                engine.data_layer.get_fear_greed(),
+                return_exceptions=True
+            )
+            _rc = _rc if isinstance(_rc, list) else []
+            _rf_val = int((_rf or {}).get("value") or 50) if isinstance(_rf, dict) else 50
+            if len(_rc) >= 30:
+                _regime_b = engine.regime_detector.detect(_rc, fear_greed=_rf_val)
+                _reg_map = {
+                    Regime.BULL_TREND:    "trend_following",
+                    Regime.BEAR_TREND:    "mean_reversion",
+                    Regime.SIDEWAYS:      "mean_reversion",
+                    Regime.ACCUMULATION:  "hybrid",
+                    Regime.DISTRIBUTION:  "mean_reversion",
+                }
+                strategy = _reg_map.get(_regime_b.regime, "trend_following")
+                _auto_strategy_note = (f"\n💡 استراتيجية تلقائية بناءً على حالة السوق "
+                                        f"({_regime_b.description_ar})")
+        except Exception as _re:
+            logger.debug(f"backtest auto-strategy: {_re}")
 
     strategy_ar = {
         "trend_following": "اتباع الاتجاه",
@@ -1299,7 +1386,8 @@ async def cmd_backtest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     msg = await update.message.reply_text(
         f"⏳ جاري Backtest لـ {symbol} — {strategy_ar[strategy]}\n"
-        "🔬 3 سنوات بيانات حقيقية — قد يستغرق 30-60 ثانية"
+        f"🔬 3 سنوات بيانات حقيقية — قد يستغرق 30-60 ثانية"
+        f"{_auto_strategy_note}"
     )
 
     try:
@@ -1343,13 +1431,22 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     args   = context.args or ["BTC"]
-    symbol = args[0].upper()
+    # تطبيع symbol على مستوى النظام: BTCUSDT → BTC
+    raw_sym = args[0].upper().strip().replace("/", "").replace("-", "")
+    for _sfx in ("USDT","BUSD","USDC"):
+        if raw_sym.endswith(_sfx) and len(raw_sym) > len(_sfx):
+            raw_sym = raw_sym[:-len(_sfx)]
+            break
+    symbol = raw_sym
     msg = await update.message.reply_text(f"🔬 جاري تحليل السيولة لـ {symbol}...")
 
     try:
-        profile, walls = await asyncio.gather(
+        profile, walls, funding, oi, whale = await asyncio.gather(
             engine.microstructure.analyze(symbol, order_size_usd=1000),
             engine.microstructure.detect_walls(symbol),
+            engine.data_layer.get_funding_rate(symbol),
+            engine.data_layer.get_open_interest(symbol),
+            engine.data_layer.get_whale_ratio(symbol),
             return_exceptions=True
         )
 
@@ -1360,6 +1457,53 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # تمرير walls لـ format_ar مباشرة
         walls_safe = walls if not isinstance(walls, Exception) else None
         text = _clean_md(engine.microstructure.format_ar(profile, walls=walls_safe))
+
+        # إصلاح #14: قسم المشتقات (Funding/OI/Whale) — كان مفقوداً تماماً
+        funding = funding if isinstance(funding, dict) else {}
+        oi      = oi      if isinstance(oi,      dict) else {}
+        whale   = whale   if isinstance(whale,   dict) else {}
+        _fund_pct  = float(funding.get("rate_pct", 0) or 0)
+        _oi_chg    = float(oi.get("oi_change_pct", 0) or 0)
+        _oi_sig    = oi.get("signal", "")
+        _whale_sig = whale.get("signal", "")
+        _whale_r   = float(whale.get("ratio", 0) or 0)
+
+        deriv_lines = []
+        if _fund_pct:
+            if _fund_pct < -0.02:
+                _fsig = "🟢 سالب جداً — ضغط Shorts (فرصة Long)"
+            elif _fund_pct < -0.005:
+                _fsig = "🟢 سالب — فرصة Long"
+            elif _fund_pct > 0.02:
+                _fsig = "🔴 مرتفع جداً — ضغط Longs"
+            elif _fund_pct > 0.005:
+                _fsig = "🟡 إيجابي — محايد"
+            else:
+                _fsig = "⚪ محايد"
+            deriv_lines.append(f"• Funding Rate: {_fund_pct:+.4f}% {_fsig}")
+        if _oi_chg:
+            deriv_lines.append(f"• Open Interest: {_oi_chg:+.1f}% {_oi_sig}")
+        if _whale_sig:
+            _wr_txt = f" ({_whale_r:.2f})" if _whale_r > 0 else ""
+            deriv_lines.append(f"• Whale Ratio (Long/Short){_wr_txt}: {_whale_sig}")
+
+        if deriv_lines:
+            text += "\n\n📐 *مشتقات*\n" + "\n".join(deriv_lines)
+
+        # تفسير الاختلال + توصية مختصرة
+        _imb = getattr(profile, "imbalance", 0.5)
+        _reco = []
+        if _imb < 0.40:
+            _reco.append("ضغط بيع قوي في الـ Order Book — توخَّ الحذر من شراء فوري")
+        elif _imb > 0.60:
+            _reco.append("ضغط شراء قوي — دعم محتمل قريب")
+        if _fund_pct < -0.01:
+            _reco.append("Funding سالب يدعم سيناريو ارتداد Long")
+        elif _fund_pct > 0.02:
+            _reco.append("Funding مرتفع — خطر تصفية Longs مفرطة")
+        if _reco:
+            text += f"\n\n💡 *التفسير*: {' · '.join(_reco)}"
+
         await msg.edit_text(text, parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         logger.error(f"cmd_liquidity: {e}")

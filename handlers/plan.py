@@ -518,7 +518,13 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     logger.debug(f"plan_month {sym} fallback failed: {_fe}")
 
         ev_mult, ev_reason = engine.event_risk.get_exposure_multiplier()
-        portfolio_val = float(engine.risk_engine.cfg.get("portfolio_size") or 10000)
+        # إصلاح #12: قيمة المحفظة الفعلية للمستخدم بدلاً من القيمة الثابتة
+        from core.state_manager import state_manager as _sm_pm
+        from core.virtual_wallet import VirtualWallet as _VW_pm
+        _uid_pm   = update.effective_user.id
+        _vw_pm_d  = _sm_pm.get_virtual_wallet(_uid_pm) or {}
+        _vw_pm    = _VW_pm(_vw_pm_d) if _vw_pm_d else None
+        portfolio_val = _vw_pm.total_value if _vw_pm else float(engine.risk_engine.cfg.get("portfolio_size") or 10000)
         allocation    = engine.capital_engine.allocate(
             candidates, portfolio_val, regime, event_multiplier=ev_mult)
 
@@ -555,12 +561,14 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
             conf_warn = " ⚠️ دون حد الدخول" if (cand and conf < 0.65) else ""
             # تنسيق السعر الصحيح حسب حجمه
             price_str = _fmt_price(price_v) if price_v > 0 else "🔄 جاري الجلب"
-            # M#99: نوع الصفقة planmonth
+            # M#99: نوع الصفقة planmonth — لا نُكرر "⚪ انتظار" مع dir_ar
             _d4 = (cand or {}).get("direction","neutral")
-            _t4 = "📈 Spot/Long" if _d4=="long" else "📉 Short" if _d4=="short" else "⚪ انتظار"
+            _t4 = "📈 Spot/Long" if _d4=="long" else "📉 Short" if _d4=="short" else ""
             line = f"💎 *{sym_p}* — {price_str}"
             if cand:
-                line += f" | {dir_ar} | ثقة: {conf:.0%}{conf_warn} | {_t4}"
+                line += f" | {dir_ar} | ثقة: {conf:.0%}{conf_warn}"
+                if _t4:
+                    line += f" | {_t4}"
             price_lines.append(line)
 
         lines += ["", "💰 *العملات المُحلَّلة*"] + price_lines
@@ -870,7 +878,19 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         _tp_m, _sl_m = 1.5, 1.5
                     else:
                         _tp_m, _sl_m = 2.0, 1.2
-                    if signal.confidence >= 0.40:
+
+                    # إصلاح #11: فصل short عن long بشكل صحيح (كان elif غير قابل للوصول)
+                    if signal.direction == "short" and signal.confidence >= 0.40:
+                        entry = min(fib_618, price * (1 + atr_v * 0.3))
+                        tp1   = price * (1 - atr_v * 1.5)
+                        sl    = entry * (1 + atr_v * 1.2)
+                        rr    = (entry - tp1) / max(sl - entry, 0.0001)
+                        if rr >= 1.0:
+                            entry_lines = [
+                                f"  📍 Short Limit: {_fmt_price(entry)} | وقف: {_fmt_price(sl)} (+{atr_v*120:.1f}%)",
+                                f"  🎯 هدف: {_fmt_price(tp1)} (-{atr_v*150:.1f}%) | R/R: 1:{rr:.1f}",
+                            ]
+                    elif signal.confidence >= 0.40:
                         entry = min(max(fib_382, price * (1 - atr_v * 0.5)), price * 0.999)
                         # إصلاح #827/#870: TP وR/R صحيح
                         _tp1_pct = min(0.06, atr_v * _tp_m)   # max 6%
@@ -881,26 +901,18 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         _risk = max(price - sl, 0.0001)
                         _rew  = max(tp1 - price, 0.0001)
                         rr    = min(_rew / _risk, 4.0)
-                        # إصلاح #871: إخفاء الإدخال إذا R/R < 1.2
-                        if rr < 1.2:
-                            entry_lines = []
-                        else:
+                        # إصلاح #871/#11: إذا R/R < 1.2 → لا نُخفي السطر بالكامل
+                        # بل نقع للأسفل إلى كتلة "شروط الدخول" (entry_lines يبقى فارغاً)
+                        if rr >= 1.2:
                             entry_lines = [
                                 f"  📍 دخول: {_fmt_price(entry)} | وقف: {_fmt_price(sl)} ({abs(price-sl)/max(price,0.001)*100:.1f}%-)",
                                 f"  🎯 هدف1: {_fmt_price(tp1)} (+{_tp1_pct*100:.1f}%) | هدف2: {_fmt_price(tp2)} (+{_tp2_pct*100:.1f}%)",
                                 f"  📊 R/R: 1:{rr:.1f} | ATR: {atr_v*100:.1f}%",
                             ]
-                    elif signal.confidence >= 0.40 and signal.direction == "short":
-                        entry = min(fib_618, price * (1 + atr_v * 0.3))
-                        tp1   = price * (1 - atr_v * 1.5)
-                        sl    = entry * (1 + atr_v * 1.2)
-                        rr    = (entry - tp1) / max(sl - entry, 0.0001)
-                        entry_lines = [
-                            f"  📍 Short Limit: {_fmt_price(entry)} | وقف: {_fmt_price(sl)} (+{atr_v*120:.1f}%)",
-                            f"  🎯 هدف: {_fmt_price(tp1)} (-{atr_v*150:.1f}%) | R/R: 1:{rr:.1f}",
-                        ]
-                    else:
-                        # انتظار — شروط محددة
+
+                    # إصلاح #11: fallback موحَّد لأي حالة بدون entry_lines
+                    # (ثقة < 40% أو R/R < 1.2) — يضمن أن كل عملة تُعرض ببيانات كاملة
+                    if not entry_lines:
                         rsi_t = 35 if "هابط" in regime.description_ar else 45
                         pro_entry_w = max(fib_382, price * (1 - atr_v * 0.5)) if fib_382 < price else price * (1 - atr_v * 0.4)
                         pro_tp_w    = price * (1 + atr_v * 1.8)
