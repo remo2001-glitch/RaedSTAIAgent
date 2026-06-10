@@ -576,8 +576,19 @@ def _build_professional_block(
     _risk   = max(price - _sl_price, 0.0001)
     _reward = max(tp1_v - price, 0.0001)
     rr_real = round(min(_reward / _risk, 5.0), 1)
-    # إصلاح #949: نُظهر R/R الحقيقي — لا نُجبره على 1.0
-    # إذا R/R < 1.0 نُضيف تحذير في النص
+    # إصلاح #19: فرض R/R ≥ 1:1 على مستوى النظام (يطابق منطق risk_engine)
+    # بدلاً من عرض R/R<1 وترك القرار للمستخدم — نرفع TP1/TP2 تناسبياً
+    _rr_adjusted_note = ""
+    if rr_real < 1.0:
+        _old_tp1 = tp1_v
+        _new_tp1 = price + _risk  # يضمن reward == risk → R/R = 1.0
+        if tp2_v and _old_tp1 > price:
+            _tp2_ratio = (tp2_v - price) / max(_old_tp1 - price, 0.0001)
+            tp2_v = price + (_new_tp1 - price) * _tp2_ratio
+        tp1_v   = _new_tp1
+        _reward = max(tp1_v - price, 0.0001)
+        rr_real = round(min(_reward / _risk, 5.0), 1)
+        _rr_adjusted_note = " (مُعدَّل تلقائياً لضمان 1:1)"
 
     # Worst-Case
     wc_loss = abs(price - pro_sl) / max(price, 0.001) * 100
@@ -663,7 +674,7 @@ def _build_professional_block(
         entry_lines.append("• الأهداف: متاحة بعد تأكيد 2/4 مؤشرات")
     entry_lines.extend([
         f"• وقف الخسارة: {_fmt_price(pro_sl)} ({sl_pct:.1f}%-)",
-        f"• R/R الواقعي: 1:{rr_real}",
+        f"• R/R الواقعي: 1:{rr_real}{_rr_adjusted_note}",
         f"• الحجم: {_pos_size_rule}",
     ])
     parts.extend(entry_lines)
@@ -680,7 +691,7 @@ def _build_professional_block(
     ])
 
     # 6. Confirmation Flags + Checklist
-    parts.extend(["", "*✅ مؤشرات التأكيد (2 من 4 للدخول)*"])
+    parts.extend(["", "*✅ مؤشرات التأكيد (الحد الأدنى للدخول: 2 من 4)*"])
     if _confirmed:
         parts.append(f"✅ {_flags_found}/4 مؤكدة — الإشارة *نشطة*")
     else:

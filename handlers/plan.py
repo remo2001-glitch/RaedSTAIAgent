@@ -576,7 +576,9 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append(_clean(engine.capital_engine.format_ar(allocation, regime)))
         # بناء جدول الشهر بناءً على حالة السوق الفعلية
         from core.regime_detector import Regime
-        user_portfolio = engine.get_user_portfolio(update.effective_user.id)
+        # إصلاح #20: استخدام نفس portfolio_val الديناميكي من #12 لتجنب تناقض
+        # $10,022 (أعلاه) مقابل $10,000 (هنا) — كلاهما يجب أن يطابق المحفظة الفعلية
+        user_portfolio = portfolio_val
         cash_pct       = 1.0 if regime.regime == Regime.BEAR_TREND else 0.3
         invest_pct     = 1.0 - cash_pct
         cash_amount    = user_portfolio * cash_pct

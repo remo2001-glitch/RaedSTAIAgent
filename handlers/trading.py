@@ -190,13 +190,27 @@ async def cmd_live(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     ]
 
                 if balance.total == 0 and (not futures_balance or futures_balance.total == 0):
-                    zero_hints = [
-                        "",
-                        "⚠️ *الرصيد صفر — أسباب محتملة:*",
-                        "• API Key لا يملك صلاحية Read",
-                        "• Passphrase خاطئ (Bitget/OKX)",
-                        "• الرصيد بعملة غير USDT",
-                    ]
+                    zero_hints = ["", "⚠️ *الرصيد صفر:*"]
+                    # إصلاح #18: تشخيص دقيق عبر verify_credentials بدل التخمين الثابت
+                    _verify_fn = getattr(info["exchange"], "verify_credentials", None)
+                    _diag_done = False
+                    if _verify_fn:
+                        try:
+                            _ok_v, _reason_v = await _aio_live.wait_for(_verify_fn(), timeout=10.0)
+                            if not _ok_v:
+                                zero_hints.append(f"🔴 السبب المؤكد: {_reason_v}")
+                                zero_hints.append("➡️ أعد ربط المنصة عبر /live connect")
+                                _diag_done = True
+                            else:
+                                zero_hints.append("✅ المصادقة صحيحة — لكن الرصيد $0 فعلياً في حساب Spot")
+                                _diag_done = True
+                        except Exception as _ve:
+                            logger.debug(f"verify_credentials: {_ve}")
+                    if not _diag_done:
+                        zero_hints += [
+                            "• API Key لا يملك صلاحية Read",
+                            "• الرصيد بعملة غير USDT",
+                        ]
                     if ex_name == "okx":
                         zero_hints += [
                             "• الرصيد في Funding Account — حوّله لـ Trading",
