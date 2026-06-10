@@ -222,10 +222,28 @@ class BinanceExchange(BaseExchange):
             exchange="binance",
         )
 
-    async def get_balance(self, asset: str = "USDT") -> Balance:
+    async def get_balance(self, asset: str = "USDT",
+                           account_type: str = "spot") -> Balance:
+        if account_type == "futures":
+            try:
+                fbase = "https://testnet.binancefuture.com" if self.testnet \
+                        else "https://fapi.binance.com"
+                data  = await self._async_request(
+                    f"{fbase}/fapi/v2/balance", "GET", {}, signed=True)
+                if isinstance(data, list):
+                    for b in data:
+                        if b.get("asset") == asset.upper():
+                            free  = float(b.get("availableBalance", 0) or 0)
+                            total = float(b.get("balance", 0) or 0)
+                            return Balance(asset, free, max(0, total-free), total)
+            except Exception as e:
+                logger.warning(f"Binance futures balance: {e}")
+            return Balance(asset, 0, 0, 0)
+
         url  = f"{self._base}/api/v3/account"
         data = await self._async_request(url, "GET", {}, signed=True)
         if "error" in data:
+            logger.warning(f"Binance balance error: {data.get('error','')[:200]}")
             return Balance(asset, 0, 0, 0)
         for b in data.get("balances", []):
             if b["asset"] == asset.upper():
@@ -233,6 +251,24 @@ class BinanceExchange(BaseExchange):
                 locked = float(b["locked"])
                 return Balance(asset, free, locked, free + locked)
         return Balance(asset, 0, 0, 0)
+
+    async def verify_credentials(self) -> tuple:
+        """يتحقق من صحة Binance credentials."""
+        try:
+            data = await self._async_request(
+                f"{self._base}/api/v3/account", "GET", {}, signed=True)
+            if "error" not in data:
+                return True, ""
+            body = str(data.get("error", ""))
+            if "-2014" in body or "API-key format invalid" in body:
+                return False, "API Key غير صحيح"
+            if "-2015" in body or "Invalid API-key" in body:
+                return False, "API Key غير صالح أو IP غير مصرح به أو صلاحيات ناقصة"
+            if "-1021" in body:
+                return False, "Timestamp خارج النطاق — تحقق من توقيت الخادم"
+            return False, f"خطأ: {body[:100]}"
+        except Exception as e:
+            return False, str(e)
 
     async def get_price(self, symbol: str) -> float:
         url  = f"{self._base}/api/v3/ticker/price"
@@ -393,19 +429,63 @@ class BybitExchange(BaseExchange):
             exchange="bybit",
         )
 
-    async def get_balance(self, asset: str = "USDT") -> Balance:
-        url    = f"{self._base}/v5/account/wallet-balance"
-        params = {"accountType": "UNIFIED"}
-        data   = await self._async_request(url, "GET", params, signed=True)
-        if data.get("retCode", -1) != 0:
-            return Balance(asset, 0, 0, 0)
-        for acc in data.get("result", {}).get("list", []):
-            for coin in acc.get("coin", []):
-                if coin["coin"] == asset.upper():
-                    free = float(coin.get("availableToWithdraw", 0) or 0)
-                    total= float(coin.get("walletBalance", 0) or 0)
-                    return Balance(asset, free, total - free, total)
+    async def get_balance(self, asset: str = "USDT",
+                           account_type: str = "spot") -> Balance:
+        """
+        إصلاح #18: حسابات Bybit القديمة (Classic) ليست UNIFIED —
+        نُجرِّب عدة أنواع حسابات بالترتيب بدل الاكتفاء بـ UNIFIED فقط.
+        """
+        url = f"{self._base}/v5/account/wallet-balance"
+        if account_type == "futures":
+            types_to_try = ["CONTRACT", "UNIFIED"]
+        else:
+            types_to_try = ["UNIFIED", "FUND", "SPOT", "CONTRACT"]
+
+        last_err = ""
+        for atype in types_to_try:
+            try:
+                params = {"accountType": atype}
+                data   = await self._async_request(url, "GET", params, signed=True)
+                if data.get("retCode", -1) != 0:
+                    last_err = data.get("retMsg", "")
+                    continue
+                for acc in data.get("result", {}).get("list", []):
+                    for coin in acc.get("coin", []):
+                        if coin["coin"] == asset.upper():
+                            free  = float(coin.get("availableToWithdraw", 0)
+                                          or coin.get("walletBalance", 0) or 0)
+                            total = float(coin.get("walletBalance", 0) or 0)
+                            if total > 0 or free > 0:
+                                logger.info(f"Bybit {atype} {asset}: {total:.4f}")
+                                return Balance(asset, free, max(0, total-free), total)
+            except Exception as e:
+                last_err = str(e)
+                continue
+        if last_err:
+            logger.warning(f"Bybit balance: لم يُعثر على رصيد ({last_err})")
         return Balance(asset, 0, 0, 0)
+
+    async def verify_credentials(self) -> tuple:
+        """يتحقق من صحة Bybit credentials."""
+        try:
+            data = await self._async_request(
+                f"{self._base}/v5/account/wallet-balance",
+                "GET", {"accountType": "UNIFIED"}, signed=True)
+            code = data.get("retCode", -1)
+            if code == 0:
+                return True, ""
+            msg_txt = data.get("retMsg", "خطأ غير معروف")
+            err_map = {
+                10003: "API Key غير صحيح",
+                10004: "توقيع غير صحيح — تحقق من API Secret",
+                10005: "صلاحيات API غير كافية",
+                10010: "IP غير مصرح به",
+                10018: "IP غير مصرح به في إعدادات API",
+            }
+            reason = err_map.get(code, f"خطأ {code}: {msg_txt}")
+            return False, reason
+        except Exception as e:
+            return False, str(e)
 
     async def get_price(self, symbol: str) -> float:
         url    = f"{self._base}/v5/market/tickers"
@@ -453,6 +533,12 @@ class OKXExchange(BaseExchange):
         path     = url.replace(self._base, "")
         body_str = ""
 
+        # إصلاح #18: بناء query string لـ GET دائماً (وليس فقط عند signed=True)
+        # — كان هذا يُسبب فشل get_price/get_volume_24h غير الموقَّعة مع params
+        if method == "GET" and params:
+            qs   = urllib.parse.urlencode(params)
+            path = path + "?" + qs
+
         headers = {
             "Content-Type": "application/json",
             "User-Agent":   "RaedTradingAgent/2.0",
@@ -461,11 +547,7 @@ class OKXExchange(BaseExchange):
         if signed:
             ts = __import__("datetime").datetime.utcnow().strftime(
                 "%Y-%m-%dT%H:%M:%S.") + "000Z"
-            if method == "GET" and params:
-                qs   = urllib.parse.urlencode(params)
-                path = path + "?" + qs
-                body_str = ""
-            else:
+            if method != "GET":
                 body_str = json.dumps(params) if params else ""
 
             headers.update({
@@ -985,10 +1067,21 @@ class MEXCExchange(BaseExchange):
             status=data.get("status",""), filled_qty=float(data.get("executedQty",0)),
             avg_price=float(data.get("price",0) or 0), exchange="mexc")
 
-    async def get_balance(self, asset: str = "USDT") -> Balance:
+    async def get_balance(self, asset: str = "USDT",
+                           account_type: str = "spot") -> Balance:
+        if account_type == "futures":
+            return await self._get_futures_balance(asset)
+
         data = await self._async_request(
             f"{self.BASE}/api/v3/account", "GET", {}, signed=True)
+        # إصلاح #18 الحرج: استجابات الخطأ مثل {"code":700002,"msg":"Signature invalid"}
+        # لا تحتوي مفتاح "error" — كانت تُعامَل كـ "لا أرصدة" فتُعيد $0 صامتة
         if "error" in data:
+            logger.warning(f"MEXC balance HTTP error: {str(data.get('error'))[:200]}")
+            return Balance(asset, 0, 0, 0)
+        if "code" in data and "balances" not in data:
+            logger.warning(f"MEXC balance API error: code={data.get('code')} "
+                           f"msg={data.get('msg','')}")
             return Balance(asset, 0, 0, 0)
         for b in data.get("balances", []):
             if b["asset"] == asset.upper():
@@ -996,6 +1089,60 @@ class MEXCExchange(BaseExchange):
                 locked = float(b["locked"])
                 return Balance(asset, free, locked, free+locked)
         return Balance(asset, 0, 0, 0)
+
+    async def _get_futures_balance(self, asset: str = "USDT") -> Balance:
+        """رصيد MEXC Futures (Contract) — base + signing مختلف عن Spot."""
+        try:
+            import asyncio as _aio
+            ts = str(int(time.time() * 1000))
+            sign_str = f"{self.api_key}{ts}"
+            sign = hmac.new(self.api_secret.encode(), sign_str.encode(),
+                            hashlib.sha256).hexdigest()
+            headers = {
+                "ApiKey":      self.api_key,
+                "Request-Time": ts,
+                "Signature":   sign,
+                "Content-Type": "application/json",
+                "User-Agent":  "RaedTradingAgent/2.0",
+            }
+            url = "https://contract.mexc.com/api/v1/private/account/assets"
+            req = urllib.request.Request(url, headers=headers, method="GET")
+            loop = _aio.get_event_loop()
+            def _do():
+                with urllib.request.urlopen(req, context=_SSL_CTX, timeout=15) as r:
+                    return json.loads(r.read().decode())
+            data = await loop.run_in_executor(None, _do)
+            if data.get("success") and isinstance(data.get("data"), list):
+                for item in data["data"]:
+                    if item.get("currency","").upper() == asset.upper():
+                        free  = float(item.get("availableBalance", 0) or 0)
+                        total = float(item.get("equity", 0) or 0)
+                        return Balance(asset, free, max(0,total-free), total)
+        except Exception as e:
+            logger.warning(f"MEXC futures balance: {e}")
+        return Balance(asset, 0, 0, 0)
+
+    async def verify_credentials(self) -> tuple:
+        """يتحقق من صحة MEXC credentials."""
+        try:
+            data = await self._async_request(
+                f"{self.BASE}/api/v3/account", "GET", {}, signed=True)
+            if "balances" in data:
+                return True, ""
+            if "error" in data:
+                return False, f"خطأ اتصال: {str(data.get('error'))[:80]}"
+            code = data.get("code")
+            msg_txt = data.get("msg", "خطأ غير معروف")
+            err_map = {
+                700002: "توقيع غير صحيح — تحقق من API Secret",
+                10072:  "API Key غير صحيح",
+                10073:  "صلاحيات API غير كافية — فعّل Spot Trading + Read",
+                700003: "Timestamp خارج النطاق — تحقق من توقيت الخادم",
+            }
+            reason = err_map.get(code, f"خطأ {code}: {msg_txt}")
+            return False, reason
+        except Exception as e:
+            return False, str(e)
 
     async def get_price(self, symbol: str) -> float:
         data = await self._async_request(
