@@ -577,7 +577,8 @@ class DataLayer:
                     "high":      float(c[2]),
                     "low":       float(c[3]),
                     "close":     float(c[4]),
-                    "volume":    float(c[5]),
+                    # إصلاح حجم 0.0x: نستخدم quoteVolume (USDT) c[7] لاتساق vol_ratio
+                    "volume":    float(c[7]) if len(c) > 7 else float(c[5]),
                 }
                 res = validator.validate_ohlcv(candle)
                 if res.is_usable:
@@ -743,7 +744,8 @@ class DataLayer:
                         high  = float(c[2])
                         low   = float(c[3])
                         close = float(c[4])
-                        vol   = float(c[5])
+                        # quoteVolume (USDT) لاتساق vol_ratio
+                        vol   = float(c[7]) if len(c) > 7 else float(c[5])
                         if close > 0 and high >= low > 0:
                             results.append({
                                 "timestamp": ts,
@@ -1101,7 +1103,8 @@ class DataLayer:
                         "high":      float(c[2]),
                         "low":       float(c[3]),
                         "close":     float(c[4]),
-                        "volume":    float(c[5]),
+                        # volCcy (USDT) c[6] لاتساق vol_ratio؛ fallback لـ c[5]
+                        "volume":    float(c[6]) if len(c) > 6 else float(c[5]),
                         "interval":  "4h",
                     })
                 except (IndexError, ValueError):
@@ -1240,7 +1243,8 @@ class DataLayer:
                     high  = float(c[2])
                     low   = float(c[3])
                     close = float(c[4])
-                    vol   = float(c[5])
+                    # volCcy (USDT) c[6] لاتساق vol_ratio؛ fallback لـ c[5]
+                    vol   = float(c[6]) if len(c) > 6 else float(c[5])
                     if close > 0 and high >= low > 0:
                         results.append({
                             "timestamp": ts, "open": open_, "high": high,

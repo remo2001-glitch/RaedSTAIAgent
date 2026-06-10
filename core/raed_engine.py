@@ -844,7 +844,7 @@ class RaedEngine:
                         f"Fear & Greed: {fear_val}\n\n"
                         f"لا فرص قوية حالياً\n"
                         f"أفضل إشارة: {b['symbol']} {b['confidence']:.0%}\n"
-                        f"⏰ المسح القادم: {self.scheduler.next_scan_ar()}"
+                        f"{self.scheduler.next_scan_ar()}"
                     )
                 return ""
 
@@ -886,19 +886,18 @@ class RaedEngine:
                         f"ثقة: {s['confidence']:.0%} | "
                         f"${s['price']:,.2f}"
                     )
-                # إصلاح #720/#727
-                _open_warn_lines = []
+                # إصلاح #6: جمع الرموز المفتوحة لجميع المستخدمين ثم عرض تحذير واحد
+                _all_open_syms: set = set()
                 for _uid_w in (_at_users if _at_active else []):
                     try:
                         _wdata_w = _sm_stat.get_virtual_wallet(_uid_w) or {}
-                        _open_syms_w = list((_wdata_w.get("positions") or {}).keys())
-                        _same = [s["symbol"] for s in strong_signals if s["symbol"] in _open_syms_w]
-                        if _same:
-                            _open_warn_lines.append(f"⚠️ صفقات مفتوحة على: {', '.join(_same)}")
+                        _all_open_syms.update((_wdata_w.get("positions") or {}).keys())
                     except Exception:
                         pass
-                if _open_warn_lines:
-                    lines += [""] + _open_warn_lines + ["💡 /vtrades للمراجعة"]
+                _same_global = [s["symbol"] for s in strong_signals if s["symbol"] in _all_open_syms]
+                if _same_global:
+                    lines += ["", f"⚠️ صفقات مفتوحة على: {', '.join(set(_same_global))}",
+                               "💡 /vtrades للمراجعة"]
                 elif _at_active:
                     lines.append("💡 /vtrades لمتابعة الصفقات")
                 else:

@@ -136,6 +136,18 @@ def _translate_news_title(title: str) -> str:
     import re as _re2
     result = _re2.sub(r'(\d+)-[Yy]ear-[Oo]ld', lambda m: f"{m.group(1)} سنة", result)
     result = _re2.sub(r'(\d+)-[Yy]ear', lambda m: f"{m.group(1)} سنة", result)
+
+    # إصلاح #16: إذا بقي الناتج خليطاً عربي-إنجليزي غير مقروء
+    # (ترجمة جزئية بالقاموس) → نُعيد العنوان الإنجليزي الأصلي بالكامل
+    # (أوضح للقارئ من خليط "بيتكوين يرتفع despite US inflation")
+    words = result.split()
+    if words:
+        latin_words  = sum(1 for w in words if _re.search(r"[A-Za-z]{3,}", w))
+        arabic_words = sum(1 for w in words if _re.search(r"[\u0600-\u06FF]", w))
+        if latin_words > 0 and arabic_words > 0:
+            latin_ratio = latin_words / len(words)
+            if latin_ratio >= 0.15:   # خليط ملحوظ → غير مقروء
+                return title           # العنوان الإنجليزي الأصلي كاملاً
     return result
 
 

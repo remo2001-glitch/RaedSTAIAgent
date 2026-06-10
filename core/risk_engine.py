@@ -178,12 +178,19 @@ class RiskEngine:
                     f" ({scenario_cap:,.0f}$) — counter-trend trade"
                 )
 
-        # تحقق نسبة R/R
+        # تحقق نسبة R/R — الحد الأدنى المطلق 1:1
         stop_pct   = self._dynamic_stop(atr_pct)
-        target_pct = stop_pct * max(self.cfg["min_rr_ratio"], rr)
+        # الـ TP يجب أن يكون على الأقل = SL (R/R ≥ 1:1)
+        min_rr     = max(self.cfg["min_rr_ratio"], 1.0)   # لا نقبل أقل من 1:1 أبداً
+        target_pct = stop_pct * max(min_rr, rr)
         actual_rr  = target_pct / stop_pct if stop_pct > 0 else 0
 
-        if actual_rr < self.cfg["min_rr_ratio"]:
+        if actual_rr < 1.0:
+            # تعديل TP تلقائياً ليضمن R/R ≥ 1:1
+            target_pct = stop_pct
+            actual_rr  = 1.0
+            warnings.append(f"R/R مُعدَّل تلقائياً → 1:1 (SL={stop_pct*100:.1f}%)")
+        elif actual_rr < self.cfg["min_rr_ratio"]:
             warnings.append(f"R/R = {actual_rr:.1f} — أقل من الحد المثالي {self.cfg['min_rr_ratio']}")
 
         # ── درجة المخاطرة الكلية ──────────────────────────────
