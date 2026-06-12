@@ -146,6 +146,7 @@ class RaedEngine:
             session=self._session,
             cryptopanic_key=self.config.get("CRYPTOPANIC_KEY", ""),
             etherscan_key=self.config.get("ETHERSCAN_KEY", ""),
+            bgeometrics_key=self.config.get("BGEOMETRICS_API_KEY", ""),
         )
         self.microstructure.session = self._session
         self.news_engine.session    = self._session

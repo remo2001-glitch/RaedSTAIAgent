@@ -32,6 +32,7 @@ CACHE_TTL = {
     "onchain": 900,   # 15 دقيقة (كان 10)
     "fear":    3600,
     "hist":    7200,  # ساعتان (كان ساعة)
+    "bgeo":    43200, # 12 ساعة — BGeometrics (حد مجاني: 8/ساعة، 15/يوم؛ البيانات تُحدَّث يومياً)
 }
 # كاش مشترك بين المستخدمين — طلب واحد يخدم الجميع
 _shared_price_cache: Dict[str, Dict] = {}
@@ -366,10 +367,12 @@ def _set_cached_ohlcv(key: str, data: list) -> None:
 class DataLayer:
 
     def __init__(self, session: aiohttp.ClientSession,
-                 cryptopanic_key: str = "", etherscan_key: str = ""):
+                 cryptopanic_key: str = "", etherscan_key: str = "",
+                 bgeometrics_key: str = ""):
         self.session         = session
         self.cryptopanic_key = cryptopanic_key
         self.etherscan_key   = etherscan_key
+        self.bgeometrics_key = bgeometrics_key
 
     # ═══════════════════════════════════════════════════════════
     # 1. السعر الحي — يُعيد Dict أو None (مع حماية في المستدعي)
@@ -1111,6 +1114,107 @@ class DataLayer:
         except Exception as e:
             logger.debug(f"signal_enrichment ({symbol}): {e}")
         return enriched
+
+    async def _bgeo_fetch(self, slug: str) -> Optional[float]:
+        """
+        جلب آخر قيمة لمؤشر BGeometrics (مثل mvrv-zscore, sopr, ...).
+        دفاعي بالكامل: يُعيد None عند أي فشل (مفتاح مفقود، rate limit،
+        slug خاطئ، أو شكل استجابة غير متوقع) — لا يرفع أي استثناء أبداً.
+        """
+        if not self.bgeometrics_key:
+            return None
+        key = f"bgeo:{slug}"
+        if (cached := _cached(key, "bgeo")) is not None:
+            return cached
+        try:
+            url = f"https://api.bgeometrics.com/v1/{slug}?token={self.bgeometrics_key}"
+            async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=8)) as r:
+                if r.status != 200:
+                    logger.debug(f"bgeo {slug}: HTTP {r.status}")
+                    return None
+                data = await r.json()
+            # الاستجابة قد تكون: list[{date,value}] أو {"data":[...]} أو dict مباشر
+            item = None
+            if isinstance(data, list) and data:
+                item = data[-1]
+            elif isinstance(data, dict):
+                if isinstance(data.get("data"), list) and data["data"]:
+                    item = data["data"][-1]
+                else:
+                    item = data
+            if not isinstance(item, dict):
+                return None
+            # المفتاح قد يكون "value" أو slug نفسه (snake_case) أو متغيرات
+            for k in ("value", slug, slug.replace("-", "_"),
+                      slug.replace("-", ""), "result"):
+                if k in item and item[k] is not None:
+                    val = float(item[k])
+                    _store(key, val, "bgeo")
+                    return val
+            # fallback: أول قيمة رقمية غير التاريخ
+            for k, v in item.items():
+                if k.lower() not in ("date", "time", "timestamp") and isinstance(v, (int, float)):
+                    val = float(v)
+                    _store(key, val, "bgeo")
+                    return val
+        except Exception as e:
+            logger.debug(f"bgeo {slug}: {e}")
+        return None
+
+    async def get_btc_onchain_advanced(self) -> dict:
+        """
+        إصلاح/تطوير: مؤشرات BTC on-chain متقدمة من BGeometrics
+        (MVRV Z-Score, SOPR, Exchange Netflow, Puell Multiple)
+        لإغناء تقرير /onchain. تُعاد كلها بصيغة موحَّدة مع تفسير عربي،
+        أو {"available": False} إذا المفتاح غير مُهيَّأ أو الجلب فشل.
+        """
+        if not self.bgeometrics_key:
+            return {"available": False}
+        try:
+            mvrv_z, sopr, netflow, puell = await asyncio.gather(
+                self._bgeo_fetch("mvrv-zscore"),
+                self._bgeo_fetch("sopr"),
+                self._bgeo_fetch("exchange-netflow"),
+                self._bgeo_fetch("puell-multiple"),
+            )
+        except Exception as e:
+            logger.debug(f"btc_onchain_advanced: {e}")
+            return {"available": False}
+
+        result = {"available": True}
+
+        if mvrv_z is not None:
+            if mvrv_z > 7:     mvrv_sig = "🔴 منطقة قمة تاريخية (مبالغ في التقييم)"
+            elif mvrv_z > 3.5: mvrv_sig = "🟠 مرتفع — حذر"
+            elif mvrv_z < 0:   mvrv_sig = "🟢 منطقة قاع تاريخية (تقييم منخفض)"
+            else:              mvrv_sig = "⚪ نطاق طبيعي"
+            result["mvrv_zscore"] = round(mvrv_z, 2)
+            result["mvrv_signal"] = mvrv_sig
+
+        if sopr is not None:
+            if sopr > 1.02:   sopr_sig = "🟢 المتداولون يبيعون بربح (زخم صاعد)"
+            elif sopr < 0.98: sopr_sig = "🔴 المتداولون يبيعون بخسارة (ضغط هابط/قاع محتمل)"
+            else:             sopr_sig = "⚪ التعادل (~1.0)"
+            result["sopr"] = round(sopr, 3)
+            result["sopr_signal"] = sopr_sig
+
+        if netflow is not None:
+            if netflow > 0:   nf_sig = "🔴 تدفق صافٍ للبورصات (ضغط بيع محتمل)"
+            elif netflow < 0: nf_sig = "🟢 تدفق صافٍ خارج البورصات (تراكم/Hodling)"
+            else:             nf_sig = "⚪ متوازن"
+            result["exchange_netflow_btc"] = round(netflow, 1)
+            result["netflow_signal"] = nf_sig
+
+        if puell is not None:
+            if puell > 4:     puell_sig = "🔴 مرتفع جداً (تاريخياً قرب القمم)"
+            elif puell < 0.5: puell_sig = "🟢 منخفض جداً (تاريخياً قرب القيعان)"
+            else:             puell_sig = "⚪ نطاق طبيعي"
+            result["puell_multiple"] = round(puell, 2)
+            result["puell_signal"] = puell_sig
+
+        if len(result) == 1:  # فقط "available":True بدون أي مؤشر نجح
+            return {"available": False}
+        return result
 
     async def get_whale_ratio(self, symbol: str) -> dict:
         """
