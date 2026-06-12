@@ -233,7 +233,9 @@ class SignalLayer:
 
         elif scenario == TradeScenario.COUNTER_TREND_BOUNCE:
             # ارتداد مؤقت — long scalp محدود
-            if confidence >= 0.60:
+            # إصلاح #61: نفس شرط الحجم المستخدم لاحقاً لتحديد [WAIT]
+            # (vol_ratio<0.8) — يمنع تناقض "🟢 شراء XX%" مع "[WAIT]/انتظر"
+            if confidence >= 0.60 and tech.get("vol_ratio", 1.0) >= 0.8:
                 direction  = "long"
                 trade_type = "spot"   # spot فقط في counter-trend
 
@@ -263,7 +265,15 @@ class SignalLayer:
             technicals={
                 **tech,
                 "scenario":        scenario,
-                "scenario_ar":     SCENARIO_AR.get(scenario, ""),
+                # إصلاح #51/#52: TREND_CONTINUATION كان دائماً "📉" حتى في
+                # سوق صاعد (4/4 حالات صعود أعطت أيقونة هابطة خاطئة)
+                "scenario_ar":     (
+                    ("📈 استمرار الاتجاه الصاعد" if is_bull_regime else
+                     "📉 استمرار الاتجاه الهابط" if is_bear_regime else
+                     "➡️ استمرار الاتجاه")
+                    if scenario == TradeScenario.TREND_CONTINUATION
+                    else SCENARIO_AR.get(scenario, "")
+                ),
                 "scenario_warn":   scenario_warn,
                 "max_size_pct":    SCENARIO_MAX_SIZE.get(scenario, 0.15),
                 "target_mult":     SCENARIO_TARGET_MULT.get(scenario, 2.0),
