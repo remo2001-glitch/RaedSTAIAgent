@@ -882,27 +882,9 @@ class DataLayer:
     # ═══════════════════════════════════════════════════════════
     # 4. الأخبار — يُعيد دائماً List
     # ═══════════════════════════════════════════════════════════
-# CoinGecko News — بديل CryptoPanic
-    async def _news_coingecko(self) -> list:
-        """يجلب أخبار CoinGecko العامة."""
-        try:
-            data = await _fetch(self.session,
-                "https://cryptopanic.com/api/v1/posts/?auth_token=&public=true&kind=news",
-                headers=_H_CG, params={"page": "1"})
-            if isinstance(data, dict) and "data" in data:
-                items = []
-                for n in data["data"][:20]:
-                    items.append({
-                        "title":       n.get("title", ""),
-                        "description": n.get("description", ""),
-                        "published":   n.get("updated_at", ""),
-                        "url":         n.get("url", ""),
-                        "source":      "coingecko",
-                    })
-                return items
-        except Exception as e:
-            logger.debug(f"CoinGecko news: {e}")
-        return []
+    # ملاحظة: دالة _news_coingecko (CryptoPanic auth_token= فارغ) أُزيلت — إصلاح #29
+    # كانت تفشل دائماً وتُسجِّل خطأ في كل دورة دون أي قيمة مضافة.
+    # RSS (_rss_news أدناه: CoinTelegraph/Decrypt/CoinDesk) لا يحتاج مفتاح API.
 
     async def _news_coindesk_rss(self) -> list:
         """CoinDesk RSS — fallback."""
@@ -927,15 +909,7 @@ class DataLayer:
 
         items = []
 
-        # ── 1. CoinGecko News (بديل CryptoPanic) ────────────────
-        try:
-            cg_news = await self._news_coingecko()
-            if cg_news:
-                items.extend(cg_news[:15])
-        except Exception as e:
-            logger.debug(f"CoinGecko news: {e}")
-
-        # ── 2. RSS — دائماً يعمل بغض النظر عن CryptoPanic ─────
+        # ── RSS — لا يحتاج مفتاح API (إصلاح #29: حُذف استدعاء CryptoPanic المُهجَّر) ──
         # نُمرر العملات للفلترة الذكية
         symbols_list = [s.strip().upper() for s in currencies.split(",") if s.strip()]
         rss = await self._rss_news(filter_symbols=symbols_list)
@@ -973,6 +947,7 @@ class DataLayer:
             ("CoinTelegraph", "https://cointelegraph.com/rss"),
             ("Decrypt",       "https://decrypt.co/feed"),
             ("CoinDesk",      "https://www.coindesk.com/arc/outboundfeeds/rss/"),
+            ("BitcoinMagazine", "https://bitcoinmagazine.com/feed"),
         ]
         results = []
         for name, url in sources:
