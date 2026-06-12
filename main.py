@@ -48,6 +48,7 @@ BOT_CONFIG = {
     "EXCHANGE_TESTNET":    os.getenv("EXCHANGE_TESTNET", "false").lower() == "true",
     "CRYPTOPANIC_KEY":     os.getenv("CRYPTOPANIC_KEY", ""),
     "ETHERSCAN_KEY":       os.getenv("ETHERSCAN_KEY", ""),
+    "BGEOMETRICS_API_KEY": os.getenv("BGEOMETRICS_API_KEY", ""),
     "OWNER_CHAT_ID":       os.getenv("OWNER_CHAT_ID", ""),
     "PORTFOLIO_SIZE":      float(os.getenv("PORTFOLIO_SIZE", "10000")),
     "MAX_RISK_PER_TRADE":  float(os.getenv("MAX_RISK_PER_TRADE", "0.02")),
