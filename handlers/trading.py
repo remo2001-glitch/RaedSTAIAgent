@@ -2466,11 +2466,13 @@ async def cb_vhistory(update, context):
         lines = ["📋 *تاريخ الصفقات المغلقة*", "━━━━━━━━━━━━━━━━━━", ""]
         for t in sells[-10:]:  # آخر 10 صفقات
             pnl  = t.get("pnl", 0)
-            sign = "+" if pnl >= 0 else ""
             emoji = "✅" if pnl >= 0 else "❌"
             ts = t.get("time","")[:10]
             pnl_pct = t.get("pnl_pct", 0) or (pnl / max(t.get("cost",1),1) * 100)
-            lines.append(f"{emoji} {t.get('symbol','')} | {ts} | {sign}${pnl:,.2f} ({sign}{abs(pnl_pct):.1f}%)")
+            # إصلاح #73: تنسيق صحيح للقيم السالبة — "-$19.03 (-2.5%)" بدل "$-19.03 (2.5%)"
+            pnl_str = f"+${pnl:,.2f}" if pnl >= 0 else f"-${abs(pnl):,.2f}"
+            pct_str = f"+{pnl_pct:.1f}%" if pnl_pct >= 0 else f"-{abs(pnl_pct):.1f}%"
+            lines.append(f"{emoji} {t.get('symbol','')} | {ts} | {pnl_str} ({pct_str})")
         await query.message.reply_text("\n".join(lines), parse_mode="Markdown")
     except Exception as e:
         logger.error(f"cb_vhistory: {e}")

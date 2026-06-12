@@ -711,7 +711,7 @@ def _build_professional_block(
         f"{'☑' if tech.get('macd_hist', 0) > 0 else '□'} MACD إيجابي",
         f"{'☑' if _whale_ratio > 0 and _whale_ratio < 0.6 else '□'} On-chain تراكم (Whale Ratio < 0.6)",
         # #694: Funding Rate يُحسب فقط إذا كانت البيانات حقيقية
-        f"{'☑' if _fund_pct < -0.001 else ('□' if _fund_pct == 0 else '□')} Funding Rate مناسب",
+        f"{'☑' if _fund_pct < -0.01 else '□'} Funding Rate مناسب",
     ])
 
     return "\n".join(parts)
@@ -1836,7 +1836,11 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # تعيين scenario في technicals للـ fallback
             _sig_a.technicals = {
                 "scenario":      _scenario_fb,
-                "scenario_ar":   "⚡ ارتداد مؤقت (Counter-trend)" if _scenario_fb == "counter_trend_bounce" else "📉 استمرار الاتجاه",
+                "scenario_ar":   (
+                    "⚡ ارتداد مؤقت (Counter-trend)" if _scenario_fb == "counter_trend_bounce"
+                    else "📉 استمرار الاتجاه الهابط" if is_bearish
+                    else "📈 استمرار الاتجاه الصاعد"
+                ),
                 "scenario_warn": "⚡ ذروة بيع — scalp فقط، وقف صارم" if _scenario_fb == "counter_trend_bounce" else "📉 الاتجاه هابط",
                 "max_size_pct":  0.12 if _scenario_fb == "counter_trend_bounce" else 0.20,
                 "target_mult":   1.5  if _scenario_fb == "counter_trend_bounce" else 2.0,
