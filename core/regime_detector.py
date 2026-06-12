@@ -5,11 +5,19 @@
 
 import logging
 import math
+import time
 from typing import Dict, List, Optional, Tuple
 from enum import Enum
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
+
+# ─── إصلاح #85: cache نتيجة detect() لكل عملة لفترة قصيرة ──────────
+# يضمن أن /signal و/analyze لنفس العملة في نفس الدقيقتين يحصلان على
+# نفس Regime/Market Phase تماماً، بدل تذبذب بسبب فروق طفيفة في
+# الشمعة الأخيرة (لم تُغلق بعد) بين استدعاءين منفصلين خلال ثوانٍ.
+_REGIME_CACHE: Dict[str, Dict] = {}
+_REGIME_CACHE_TTL = 90  # ثانية
 
 
 class Regime(Enum):
@@ -64,10 +72,21 @@ class RegimeDetector:
 
     def detect(self, candles: List[Dict],
                btc_dominance: float = 50.0,
-               fear_greed: int = 50) -> RegimeResult:
+               fear_greed: int = 50,
+               symbol: str = "") -> RegimeResult:
         """
         candles: قائمة {'close', 'high', 'low', 'volume'} بترتيب تصاعدي
+
+        إصلاح #85: إذا تم تمرير symbol، يُستخدم cache قصير (90 ثانية)
+        لضمان نتيجة Regime/Market Phase متطابقة بين /signal و/analyze
+        لنفس العملة ضمن نفس النافذة الزمنية القصيرة.
         """
+        if symbol:
+            _key = f"{symbol.upper()}"
+            _entry = _REGIME_CACHE.get(_key)
+            if _entry and time.time() - _entry["ts"] < _REGIME_CACHE_TTL:
+                return _entry["result"]
+
         if len(candles) < 30:
             return RegimeResult(
                 Regime.UNKNOWN, 0.3,
@@ -152,7 +171,7 @@ class RegimeDetector:
         else:
             market_phase = "Unknown"
 
-        return RegimeResult(
+        result = RegimeResult(
             regime=regime,
             confidence=confidence,
             description_ar=REGIME_AR[regime],
@@ -161,6 +180,9 @@ class RegimeDetector:
             action=action,
             market_phase=market_phase,
         )
+        if symbol:
+            _REGIME_CACHE[symbol.upper()] = {"result": result, "ts": time.time()}
+        return result
 
     def _classify(self, adx, atr_pct, rsi, price,
                   ema20, ema50, ema200, vol, vol_ma,

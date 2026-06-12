@@ -276,6 +276,24 @@ def _strip_markdown_headers(text: str) -> str:
     return "\n".join(clean).strip()
 
 
+def _strip_mixed_language_artifacts(text: str) -> str:
+    """
+    إصلاح #94: شبكة أمان حتمية فوق تعليمة الـprompt — تُزيل كلمات/أحرف
+    إنجليزية مدمجة وسط النص العربي (مثل "وraises احتمال" -> "و احتمال").
+    لا تؤثر على الأرقام أو رموز العملات (BTC, RSI, EMA...) المُحاطة بمسافات.
+    """
+    if not text:
+        return text
+    import re
+    # كلمة إنجليزية مباشرة بعد حرف عربي بدون مسافة (و/ف/ب/ك + ASCII letters)
+    text = re.sub(r'(?<=[\u0600-\u06FF])([a-zA-Z]{2,})(?=[\u0600-\u06FF\s])', ' ', text)
+    # كلمة إنجليزية مباشرة قبل حرف عربي بدون مسافة
+    text = re.sub(r'([a-zA-Z]{2,})(?=[\u0600-\u06FF])', r'\1 ', text)
+    # تنظيف المسافات المزدوجة الناتجة
+    text = re.sub(r' {2,}', ' ', text)
+    return text.strip()
+
+
 def _strip_header_duplicates(text: str) -> str:
     """يحذف السطور المكررة من بداية نص التحليل."""
     if not text: return text
@@ -784,6 +802,7 @@ class NewsEngine:
                             if sub_text:
                                 text = text + ("\n" if text else "") + sub_text
                 if text and len(text) > 20:
+                    text = _strip_mixed_language_artifacts(text)
                     text = _strip_header_duplicates(text)
                     return text
         except Exception as _ae:
