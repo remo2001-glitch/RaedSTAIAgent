@@ -403,6 +403,8 @@ def _action_ar(action: str) -> str:
         "avoid":          "🚫 تجنب الدخول الآن",
         "wait_reversal":  "⏳ انتظر — RSI في ذروة بيع (احتمال ارتداد)",
         "reduce_exposure": "📉 قلل التعرض للسوق",
+        # إصلاح #103: للارتداد المؤكَّد (counter_trend_bounce + 🟢شراء)
+        "bounce_entry_confirmed": "⚡ ارتداد مؤكَّد — Scalp بحجم محدود ووقف صارم",
     }.get(action, action)
 
 

@@ -570,7 +570,7 @@ class SignalLayer:
             f"• زخم 30 يوم: {s.signal_sources['momentum']:.0%}\n"
             f"• ماكرو:   {s.signal_sources['macro']:.0%}\n\n"
             f"RSI: {rsi_val:.0f} | "
-            f"EMA: {'✅' if s.technicals.get('ema_align') else '❌'} | "
+            f"EMA: {'✅' if s.technicals.get('ema_align') else '❌'} (محاذاة EMA20/50) | "
             f"حجم: {vol_r:.1f}x"
         )
         if warnings:
