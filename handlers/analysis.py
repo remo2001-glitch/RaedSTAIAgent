@@ -1629,7 +1629,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             price_d, candles, fear, btc_dom = await asyncio.wait_for(
                 asyncio.gather(
                     engine.data_layer.get_price(symbol),
-                    engine.data_layer.get_ohlcv(symbol, "1d", 250),
+                    engine.data_layer.get_ohlcv(symbol, "1d", 365),
                     engine.data_layer.get_fear_greed(),
                     engine.data_layer.get_btc_dominance(),
                     return_exceptions=True
@@ -1660,6 +1660,21 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                            price_d.get("price_change_percentage_24h") or 0)
         volume_24h = float(price_d.get("volume_24h") or 0)
         market_cap = float(price_d.get("market_cap") or 0)
+
+        if price <= 0:
+            # إصلاح #87/88: fallback لآخر إغلاق من candles قبل البحث في CoinGecko
+            # (BGB وعملات مشابهة: get_price فشل لكن get_ohlcv نجح — /signal كان يعمل)
+            if len(candles) >= 1:
+                try:
+                    _last_close = float(candles[-1].get("close") or 0)
+                    if _last_close > 0:
+                        price = _last_close
+                        if change_24h == 0 and len(candles) >= 2:
+                            _prev_close = float(candles[-2].get("close") or 0)
+                            if _prev_close > 0:
+                                change_24h = (price - _prev_close) / _prev_close * 100
+                except Exception:
+                    pass
 
         if price <= 0:
             # M#113: بحث تلقائي في CoinGecko
