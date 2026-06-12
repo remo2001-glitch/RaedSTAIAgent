@@ -350,7 +350,9 @@ def _build_professional_block(
     # إضافة تحذير السيناريو
     _scenario_warn = signal.technicals.get("scenario_warn", "") if hasattr(signal, "technicals") else ""
     _scenario_ar   = signal.technicals.get("scenario_ar",   "") if hasattr(signal, "technicals") else ""
-    sl_pct  = abs(pro_sl - pro_entry) / max(pro_entry, 0.0001) * 100
+    # إصلاح #95 (توحيد القاعدة): SL% من السعر الحالي (نفس قاعدة Worst-Case
+    # وR/R) بدل pro_entry — يمنع ظهور "Worst-Case% < SL%" بسبب اختلاف القاعدة
+    sl_pct  = abs(price - pro_sl) / max(price, 0.0001) * 100
     tp_pct  = abs(pro_tp - pro_entry) / max(pro_entry, 0.0001) * 100
     hold    = 3 if adx > 40 else 5
 
@@ -1263,7 +1265,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         fear_val = int(fear.get("value") or 50)
-        regime   = engine.regime_detector.detect(candles, btc_dominance=btc_dom, fear_greed=fear_val)
+        regime   = engine.regime_detector.detect(candles, btc_dominance=btc_dom, fear_greed=fear_val, symbol=symbol)
 
         sentiment = 0.0
         if news_an:
@@ -1725,7 +1727,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(candles) >= 10:  # خُفِّض: 30 → 10
             try:
                 regime_obj  = engine.regime_detector.detect(
-                    candles, btc_dominance=btc_dom, fear_greed=fear_val)
+                    candles, btc_dominance=btc_dom, fear_greed=fear_val, symbol=symbol)
                 regime_desc = regime_obj.description_ar
                 is_bearish  = "هابط" in regime_desc
             except Exception as e:
@@ -1835,7 +1837,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 backtest_win_rate=0.55,
                 macro_data={"fear_greed": fear_val},
                 regime=engine.regime_detector.detect(
-                    candles, btc_dominance=float(btc_dom or 50), fear_greed=fear_val),
+                    candles, btc_dominance=float(btc_dom or 50), fear_greed=fear_val, symbol=symbol),
             )
             # إضافة بيانات Derivatives + 4H لـ technicals
             if hasattr(_sig_a, "technicals") and isinstance(_sig_a.technicals, dict):
@@ -2133,7 +2135,7 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(candles) >= 10:  # خُفِّض: 30 → 10
             try:
                 regime_obj  = engine.regime_detector.detect(
-                    candles, btc_dominance=btc_dom, fear_greed=fear_val)
+                    candles, btc_dominance=btc_dom, fear_greed=fear_val, symbol=symbol)
                 regime_desc = regime_obj.description_ar
                 is_bearish  = "هابط" in regime_desc
             except Exception as e:
