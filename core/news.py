@@ -304,6 +304,25 @@ def _strip_mixed_language_artifacts(text: str) -> str:
     return text.strip()
 
 
+def _clean_news_result(result: dict) -> dict:
+    """
+    إصلاح #131: تطبيق _strip_mixed_language_artifacts على كل الحقول
+    النصية في نتيجة /news (كانت تُعاد مباشرة من Groq بدون أي تنظيف،
+    خلافاً لمسار /analyze الذي يُطبِّق هذه الدالة على السرد).
+    """
+    if not isinstance(result, dict):
+        return result
+    for k in ("summary_ar", "market_impact_ar"):
+        if isinstance(result.get(k), str):
+            result[k] = _strip_mixed_language_artifacts(result[k])
+    for k in ("key_events", "risk_flags"):
+        v = result.get(k)
+        if isinstance(v, list):
+            result[k] = [_strip_mixed_language_artifacts(x) if isinstance(x, str) else x
+                          for x in v]
+    return result
+
+
 def _strip_header_duplicates(text: str) -> str:
     """يحذف السطور المكررة من بداية نص التحليل."""
     if not text: return text
@@ -479,12 +498,14 @@ class NewsEngine:
             # محاولة Groq
             result = await self._call_groq(prompt, GROQ_MODEL)
             if result:
+                result = _clean_news_result(result)
                 result["source"] = f"groq/{GROQ_MODEL}"
                 return result
 
             # Fallback: نموذج أصغر وأسرع
             result = await self._call_groq(prompt, GROQ_FALLBACK)
             if result:
+                result = _clean_news_result(result)
                 result["source"] = f"groq/{GROQ_FALLBACK}"
                 return result
         finally:
