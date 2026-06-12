@@ -257,6 +257,12 @@ def _build_professional_block(
     reasons = []
     if conf < 0.65:
         reasons.append(f"• الثقة {conf:.0%} أقل من الحد 65%")
+    elif _scenario == "counter_trend_bounce" and _vol_ratio < 0.8:
+        # إصلاح #61(ثانوي): الثقة تجاوزت 65% لكن الحجم غير مؤكَّد —
+        # وضّح السبب الفعلي بدل حذف سطر العتبة بصمت
+        reasons.append(
+            f"• الثقة {conf:.0%} تجاوزت 65% — لكن الحجم {_vol_ratio:.1f}x "
+            f"أقل من 0.8x المطلوب لتأكيد الارتداد")
     # إصلاح #86/#130: ADX فقط عند الخطورة القصوى
     if adx > 45:
         reasons.append(f"• ADX = {adx:.0f} → اتجاه قوي جداً — خطر الدخول مرتفع")
@@ -512,6 +518,15 @@ def _build_professional_block(
         _decision_label = "[WAIT] — حجم ضعيف للـ scalp"
         _pos_size_rule  = "0% — انتظر تأكيد الحجم ≥ 0.8x"
 
+    # إصلاح #103: عند "🟢 شراء [HIGH/NORMAL]" في ارتداد مؤقت (الحجم مؤكَّد)،
+    # "الإجراء: ⏳ انتظر — RSI ذروة بيع" يتعارض ظاهرياً مع التوصية أعلاه —
+    # الارتداد الموصى به *هو* الانعكاس المُنتظر، فنُعدِّل النص ليعكس ذلك
+    if (_scenario == "counter_trend_bounce" and direction == "long"
+            and not _decision_label.startswith("[WAIT]")
+            and hasattr(regime, 'action') and regime.action == "wait_reversal"):
+        try: object.__setattr__(regime, 'action', 'bounce_entry_confirmed')
+        except: pass
+
     # تحديث vol_pct من _decision_label
     if _conf_score < 40:
         vol_pct = 0
@@ -568,11 +583,10 @@ def _build_professional_block(
 
     # إصلاح #620/#852/#949: R/R حقيقي
     # SL يُحسب من السعر الحالي للحصول على R/R دقيق
-    _sl_pct_from_price = atr_dec * 1.0   # SL = ATR% من السعر
-    _sl_price = price * (1 - _sl_pct_from_price)
-    # نستخدم pro_sl إذا كان أقل من السعر وأكبر من صفر
-    if pro_sl > 0 and _sl_price < pro_sl < price:
-        _sl_price = pro_sl
+    # إصلاح #95/#102/#103: R/R حقيقي — يجب أن يُحسب من pro_sl المعروض
+    # فعلياً (لا من _sl_price داخلي منفصل قد يختلف عن SL المعروض)
+    # هذا يضمن أن "R/R الواقعي" يتطابق رياضياً مع TP1/SL المعروضين دائماً
+    _sl_price = pro_sl if (pro_sl > 0 and pro_sl < price) else price * (1 - atr_dec * 1.0)
     _risk   = max(price - _sl_price, 0.0001)
     _reward = max(tp1_v - price, 0.0001)
     rr_real = round(min(_reward / _risk, 5.0), 1)
@@ -591,9 +605,15 @@ def _build_professional_block(
         _rr_adjusted_note = " (مُعدَّل تلقائياً لضمان 1:1)"
 
     # Worst-Case
-    wc_loss = abs(price - pro_sl) / max(price, 0.001) * 100
-    wc_bd1  = price * 0.95  # كسر الدعم
-    wc_bd2  = price * 0.90  # اختراق أعمق
+    # إصلاح #95: ضمان أن مستويات Worst-Case أعمق من (أو تساوي) SL المعروض،
+    # ووصف wc_loss يعكس المستوى الأعمق (wc_bd2) لا pro_sl
+    if pro_sl > 0 and pro_sl < price:
+        wc_bd1 = min(price * 0.95, pro_sl)
+        wc_bd2 = min(price * 0.90, pro_sl * 0.95)
+    else:
+        wc_bd1 = price * 0.95
+        wc_bd2 = price * 0.90
+    wc_loss = abs(price - wc_bd2) / max(price, 0.001) * 100
 
     sl_type_ar    = _get_sl_type(_scenario, rsi)
     exit_strategy = (
@@ -845,12 +865,14 @@ def _build_scenarios_context(
     f786 = fib.get("0.786", price * 1.14)
 
     # دعوم ومقاومات واقعية
-    sup1 = round(ns, 2)
-    sup2 = round(ns - atr * 1.5, 2)
-    sup3 = round(ns - atr * 3.0, 2)
-    res1 = round(nr, 2)
-    res2 = round(f382 if f382 > price else nr * 1.04, 2)
-    res3 = round(f618 if f618 > price else nr * 1.08, 2)
+    # إصلاح #94: لا نُقرِّب لمنزلتين — يُصفِّر عملات السعر <$0.01 (مثل SUPRA)
+    # _fmt_price يتعامل مع الدقة المناسبة لكل نطاق سعري تلقائياً
+    sup1 = ns
+    sup2 = ns - atr * 1.5
+    sup3 = ns - atr * 3.0
+    res1 = nr
+    res2 = f382 if f382 > price else nr * 1.04
+    res3 = f618 if f618 > price else nr * 1.08
 
     rsi_note = ""
     if rsi < 20:
