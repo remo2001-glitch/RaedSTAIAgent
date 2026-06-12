@@ -140,7 +140,15 @@ class RegimeDetector:
             long_chg = (closes[-1] - closes[-min(60, len(closes))]) / max(closes[-min(60, len(closes))], 1) * 100
             market_phase = "Accumulation" if long_chg < -5 else "Distribution" if long_chg > 5 else "Consolidation"
         elif regime == Regime.HIGH_VOLATILITY:
-            market_phase = "Markdown" if price_chg < 0 else "Markup"
+            # إصلاح #85: نطاق محايد ±1% يمنع تذبذب Markup/Markdown
+            # بين /signal و/analyze لنفس اللحظة بسبب فروق طفيفة في
+            # الشمعة الأخيرة (لم تُغلق بعد) بين استدعاءين منفصلين
+            if price_chg > 1:
+                market_phase = "Markup"
+            elif price_chg < -1:
+                market_phase = "Markdown"
+            else:
+                market_phase = "Consolidation"
         else:
             market_phase = "Unknown"
 
