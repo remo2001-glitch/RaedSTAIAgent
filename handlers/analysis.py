@@ -1252,6 +1252,10 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except (ValueError, TypeError):
                     sentiment = 0.0
 
+        # إصلاح #34: إضافة whale_ratio/funding الخاصين بالعملة لـ onchain_data
+        # (يستخدمها _onchain_signal بدل TVL العالمي الثابت)
+        onchain = await engine.data_layer.get_signal_enrichment(symbol, onchain)
+
         signal = engine.signal_layer.generate(
             symbol=symbol, candles=candles, onchain_data=onchain,
             news_sentiment=sentiment,
@@ -1784,10 +1788,12 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # إصلاح #375/#390: استخدام signal_layer.generate الحقيقي
         fib_a  = _calc_fibonacci(candles)
         _atr_a = _calc_atr(candles)
+        # إصلاح #34: onchain_data خاص بالعملة بدل {} الفارغة
+        _onchain_a = await engine.data_layer.get_signal_enrichment(symbol, {})
         try:
             _sig_a = engine.signal_layer.generate(
                 symbol=symbol, candles=candles,
-                onchain_data={},
+                onchain_data=_onchain_a,
                 news_sentiment=float(getattr(engine, "_last_news_sentiment", 0) or 0),
                 backtest_win_rate=0.55,
                 macro_data={"fear_greed": fear_val},

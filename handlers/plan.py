@@ -463,8 +463,10 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ]
                 if len(candles_clean) < 30:
                     candles_clean = candles  # نستخدم الأصلية إذا بعد التنظيف قليلة
+                # إصلاح #34: whale_ratio/funding خاص بكل عملة بدل TVL عالمي ثابت
+                _onchain_e = await engine.data_layer.get_signal_enrichment(sym, onchain)
                 signal = engine.signal_layer.generate(
-                    symbol=sym, candles=candles_clean, onchain_data=onchain,
+                    symbol=sym, candles=candles_clean, onchain_data=_onchain_e,
                     news_sentiment=news_sentiment,
                     backtest_win_rate=0.55,
                     macro_data={"fear_greed": fear_val},
@@ -830,8 +832,10 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 lines.append("")
                 continue
             try:
+                # إصلاح #34: whale_ratio/funding خاص بكل عملة بدل TVL عالمي ثابت
+                _onchain_e = await engine.data_layer.get_signal_enrichment(sym, onchain)
                 signal   = engine.signal_layer.generate(
-                    symbol=sym, candles=candles, onchain_data=onchain,
+                    symbol=sym, candles=candles, onchain_data=_onchain_e,
                     news_sentiment=news_sentiment,
                     backtest_win_rate=0.55,
                     macro_data={"fear_greed": fear_val},
@@ -1135,8 +1139,10 @@ async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if len(candles) < 30:
                 continue
             try:
+                # إصلاح #34: whale_ratio/funding خاص بكل عملة بدل TVL عالمي ثابت
+                _onchain_e = await engine.data_layer.get_signal_enrichment(sym, onchain)
                 signal = engine.signal_layer.generate(
-                    symbol=sym, candles=candles, onchain_data=onchain,
+                    symbol=sym, candles=candles, onchain_data=_onchain_e,
                     news_sentiment=news_sentiment,
                     backtest_win_rate=0.55,
                     macro_data={"fear_greed": fear_val},
