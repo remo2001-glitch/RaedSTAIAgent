@@ -421,6 +421,8 @@ class RaedEngine:
                     if len(candles) < 30:
                         continue
                     onchain = await self.data_layer.get_onchain()
+                    # إصلاح #34: whale_ratio/funding خاص بكل عملة
+                    onchain = await self.data_layer.get_signal_enrichment(sym, onchain or {})
                     signal  = self.signal_layer.generate(
                         symbol=sym, candles=candles,
                         onchain_data=onchain or {},
@@ -671,9 +673,11 @@ class RaedEngine:
                     if len(candles) < 30:
                         continue
 
+                    # إصلاح #34: whale_ratio/funding خاص بكل عملة
+                    onchain_e = await self.data_layer.get_signal_enrichment(sym, onchain)
                     signal = self.signal_layer.generate(
                         symbol=sym, candles=candles,
-                        onchain_data=onchain,
+                        onchain_data=onchain_e,
                         news_sentiment=0,
                         backtest_win_rate=0.55,
                         macro_data={"fear_greed": fear_val},

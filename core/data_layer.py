@@ -1116,28 +1116,56 @@ class DataLayer:
             logger.debug(f"get_ohlcv_4h ({symbol}): {e}")
         return []
 
+    async def get_signal_enrichment(self, symbol: str, base_onchain: dict = None) -> dict:
+        """
+        إصلاح #34: يُضيف بيانات خاصة بالعملة (whale_ratio + funding_rate)
+        لاستخدامها في _onchain_signal بدل الاعتماد على TVL العالمي الثابت.
+        يُدمَج مع onchain_data الأساسي (TVL العالمي) كـ fallback.
+        """
+        enriched = dict(base_onchain or {})
+        try:
+            wr, fr = await asyncio.gather(
+                self.get_whale_ratio(symbol),
+                self.get_funding_rate(symbol),
+                return_exceptions=True
+            )
+            if isinstance(wr, dict):
+                enriched["whale_ratio"] = wr.get("ratio", 0.0)
+            if isinstance(fr, dict):
+                enriched["funding_rate_pct"] = fr.get("rate_pct", 0.0)
+        except Exception as e:
+            logger.debug(f"signal_enrichment ({symbol}): {e}")
+        return enriched
+
     async def get_whale_ratio(self, symbol: str) -> dict:
-        """يجلب Exchange Whale Ratio من CoinGlass."""
+        """
+        يجلب Long/Short Account Ratio من OKX (مجاني، بدون مفتاح).
+        إصلاح #21/#22/#39/#40: استبدال CoinGlass v2 المُهجَّر الذي كان
+        يفشل صامتاً ويُعيد دائماً {"ratio":0,"signal":"محايد"} لكل عملة.
+        ratio > 1 = أغلبية المتداولين Long | ratio < 1 = أغلبية Short.
+        """
+        symbol = _clean_symbol(symbol)
         key = f"whale:{symbol}"
         if cached := _cached(key, "onchain"):
             return cached
         result = {"ratio": 0.0, "signal": "محايد", "inflow": 0.0, "outflow": 0.0}
         try:
-            url  = f"https://open-api.coinglass.com/public/v2/indicator/exchange_whale_ratio?symbol={symbol.upper()}&timeType=h4"
+            url = (f"https://www.okx.com/api/v5/rubik/stat/contracts/"
+                   f"long-short-account-ratio?ccy={symbol.upper()}&period=1H")
             if self.session:
                 async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=8)) as r:
                     if r.status == 200:
                         data  = await r.json()
-                        items = data.get("data", {})
+                        items = data.get("data", [])
                         if items:
-                            ratio = float(items.get("whaleRatio", 0))
+                            ratio = float(items[0][1])
                             result = {
                                 "ratio":   round(ratio, 3),
-                                "signal":  "🔴 الحيتان تبيع" if ratio > 0.85
-                                           else "🟢 الحيتان تتراكم" if ratio < 0.60
-                                           else "🟡 نشاط متوسط",
-                                "inflow":  float(items.get("exchangeInflow",  0)),
-                                "outflow": float(items.get("exchangeOutflow", 0)),
+                                "signal":  "🔴 أغلبية Short (تحيُّز هابط)" if ratio < 0.8
+                                           else "🟢 أغلبية Long (تحيُّز صاعد)" if ratio > 1.2
+                                           else "⚪ متوازن",
+                                "inflow":  0.0,
+                                "outflow": 0.0,
                             }
                             _store(key, result, "onchain")
                             return result
@@ -1146,30 +1174,12 @@ class DataLayer:
         return result
 
     async def get_miner_flows(self, symbol: str = "BTC") -> dict:
-        """يجلب نشاط تدفقات المعدنين."""
-        key = f"miner:{symbol}"
-        if cached := _cached(key, "onchain"):
-            return cached
-        # CoinGlass miner flows
-        result = {"outflow_30d": 0.0, "signal": "محايد"}
-        try:
-            url = f"https://open-api.coinglass.com/public/v2/indicator/miner_to_exchange?symbol={symbol}"
-            if self.session:
-                async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=8)) as r:
-                    if r.status == 200:
-                        data = await r.json()
-                        items = (data.get("data") or [])
-                        if items:
-                            flow = float(items[-1].get("amount", 0)) if items else 0
-                            result = {
-                                "outflow_30d": round(flow, 2),
-                                "signal": "⚠️ المعدنون يبيعون" if flow > 1000
-                                          else "✅ ضغط بيع منخفض",
-                            }
-                            _store(key, result, "onchain")
-        except Exception as e:
-            logger.debug(f"miner_flows ({symbol}): {e}")
-        return result
+        """
+        بيانات تدفقات المعدنين — غير متاحة حالياً.
+        endpoint CoinGlass v2 القديم مُهجَّر؛ لا يوجد بديل مجاني مكافئ حالياً.
+        تُعيد دائماً 'محايد' بصراحة بدل استدعاء API مُهجَّر يفشل صامتاً.
+        """
+        return {"outflow_30d": 0.0, "signal": "محايد", "available": False}
 
     def build_candles_summary(self, candles: list, symbol: str = "") -> str:
         """يبني ملخص شموع احترافي لـ Groq — يشمل EMA + RSI + MACD + حجم."""

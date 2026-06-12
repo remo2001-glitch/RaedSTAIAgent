@@ -164,7 +164,11 @@ class SignalLayer:
         news_score = (news_sentiment + 1) / 2
 
         # ── 4. Backtest ──
-        bt_score = min(backtest_win_rate, 1.0)
+        # إصلاح #34: bt_score الآن زخم حقيقي خاص بالعملة (ليس 0.55 ثابتاً لكل عملة)
+        # backtest_win_rate يُستخدم كـ fallback فقط إذا كانت candles غير كافية
+        bt_score = self._momentum_signal(candles)
+        if len(candles) < 30:
+            bt_score = min(backtest_win_rate, 1.0)
 
         # ── 5. ماكرو ──
         macro_score = self._macro_signal(macro_data, regime)
@@ -253,7 +257,7 @@ class SignalLayer:
                 "technical": round(tech["score"], 3),
                 "onchain":   round(oc_score, 3),
                 "news":      round(news_score, 3),
-                "backtest":  round(bt_score, 3),
+                "momentum":  round(bt_score, 3),
                 "macro":     round(macro_score, 3),
             },
             technicals={
@@ -421,6 +425,15 @@ class SignalLayer:
                 score = 0.5 - (0.5 - bull_ratio) * 1.2
                 bias  = "bearish"
 
+        # إصلاح #34: مكوّن مستمر لتمييز عملات ذات نظام نقاط خشن متطابق
+        # (مثال: IMX RSI=38 وCFX RSI=32 كانا يُعطيان score مطابق تماماً)
+        rsi_cont  = (50 - rsi) / 100   # RSI أقل = ميل صعودي أقوى (contrarian خفيف)
+        ema_dist  = (price - ema50) / max(ema50, 0.0001)
+        ema_cont  = max(min(ema_dist, 0.2), -0.2)
+        cont_score = min(max(0.5 + rsi_cont * 0.6 + ema_cont * 0.4, 0.05), 0.95)
+        # دمج: 70% النظام الخشن (bias الرسمي) + 30% مستمر (تمايز دقيق بين العملات)
+        score = score * 0.7 + cont_score * 0.3
+
         return {
             "score":       round(min(max(score, 0), 1), 3),
             "bias":        bias,
@@ -434,11 +447,53 @@ class SignalLayer:
             "conf_flags":  conf_flags,
         }
 
+    def _momentum_signal(self, candles: List[Dict]) -> float:
+        """
+        إصلاح #34: بديل حقيقي خاص بالعملة لـ backtest_win_rate المُكوَّد=0.55
+        (كان ثابتاً لكل عملة، 10% من الثقة = زيف كامل).
+        يقيس زخم السعر آخر 30 شمعة منسوباً للتقلب (ATR) — تمايز فعلي بين العملات.
+        """
+        if len(candles) < 30:
+            return 0.5
+        closes = [c["close"] for c in candles[-30:]]
+        ret_30 = (closes[-1] - closes[0]) / max(closes[0], 0.0001)
+        # تطبيع بـ tanh: زخم ±15% خلال 30 يوم → تقريباً ±0.35 حول 0.5
+        norm = math.tanh(ret_30 / 0.15) * 0.35
+        return round(min(max(0.5 + norm, 0.05), 0.95), 3)
+
     def _onchain_signal(self, data: Dict) -> float:
+        """
+        إصلاح #34: كان يعتمد على TVL العالمي ($133B دائماً > $50B)
+        → 0.7 ثابتة لكل عملة بدون استثناء (25% من الثقة = ثابت رياضي).
+        الآن: يعتمد على whale_ratio + funding_rate الخاصين بالعملة
+        (عبر get_signal_enrichment) — بيانات حقيقية تختلف بين العملات.
+        """
         if not data:
             return 0.5
-        tvl    = data.get("tvl", 0)
-        score  = 0.5
+        score = 0.5
+        has_real_data = False
+
+        whale_ratio = data.get("whale_ratio")
+        if whale_ratio is not None and whale_ratio > 0:
+            has_real_data = True
+            if whale_ratio < 0.8:      # أغلبية Short → تحيُّز عكسي صعودي محتمل
+                score += 0.15
+            elif whale_ratio > 1.2:    # أغلبية Long مزدحم → خطر تصحيح
+                score -= 0.10
+
+        funding_pct = data.get("funding_rate_pct")
+        if funding_pct is not None and funding_pct != 0:
+            has_real_data = True
+            if funding_pct < -0.01:    # Funding سالب = فرصة Long
+                score += 0.10
+            elif funding_pct > 0.03:   # Funding مرتفع = ضغط على Longs
+                score -= 0.10
+
+        if has_real_data:
+            return round(min(max(score, 0), 1), 3)
+
+        # fallback للاستدعاءات القديمة التي لا تُمرِّر whale/funding بعد
+        tvl = data.get("tvl", 0)
         if tvl > 50_000_000_000:   score += 0.2
         elif tvl > 10_000_000_000: score += 0.1
         elif tvl < 1_000_000_000:  score -= 0.15
@@ -502,7 +557,7 @@ class SignalLayer:
             f"• تقني:    {s.signal_sources['technical']:.0%}\n"
             f"• On-Chain: {s.signal_sources['onchain']:.0%}\n"
             f"• أخبار:   {s.signal_sources['news']:.0%}\n"
-            f"• Backtest: {s.signal_sources['backtest']:.0%}\n"
+            f"• زخم 30 يوم: {s.signal_sources['momentum']:.0%}\n"
             f"• ماكرو:   {s.signal_sources['macro']:.0%}\n\n"
             f"RSI: {rsi_val:.0f} | "
             f"EMA: {'✅' if s.technicals.get('ema_align') else '❌'} | "
@@ -673,9 +728,7 @@ class PortfolioEngine:
         if sig.signal_sources.get("technical", 0) > 0.7:
             parts.append("إشارة تقنية قوية")
         if sig.signal_sources.get("onchain", 0) > 0.7:
-            parts.append("دعم On-Chain")
-        if sig.onchain_score > 0.7:
-            parts.append("TVL مرتفع")
+            parts.append("دعم On-Chain (Whale/Funding)")
         return " · ".join(parts)
 
     def format_ar(self, allocations: List[AllocationResult],
