@@ -12,7 +12,7 @@ import json
 import time
 import re
 import logging
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 import aiohttp
 
 from core.data_validator import validator
@@ -1115,11 +1115,17 @@ class DataLayer:
             logger.debug(f"signal_enrichment ({symbol}): {e}")
         return enriched
 
-    async def _bgeo_fetch(self, slug: str) -> Optional[float]:
+    async def _bgeo_fetch(self, slug: str, extra_keys: tuple = (),
+                           value_range: Optional[Tuple[float, float]] = None
+                           ) -> Optional[float]:
         """
         جلب آخر قيمة لمؤشر BGeometrics (مثل mvrv-zscore, sopr, ...).
         دفاعي بالكامل: يُعيد None عند أي فشل (مفتاح مفقود، rate limit،
         slug خاطئ، أو شكل استجابة غير متوقع) — لا يرفع أي استثناء أبداً.
+
+        extra_keys: مفاتيح JSON إضافية مرشّحة (مثل camelCase: "mvrvZscore")
+        value_range: (min,max) منطقي للقيمة — يرفض قيماً خارج النطاق
+                      (مثل رفض Unix timestamp ضخم يُؤخَذ خطأً كقيمة المؤشر)
         """
         if not self.bgeometrics_key:
             return None
@@ -1144,21 +1150,55 @@ class DataLayer:
                     item = data
             if not isinstance(item, dict):
                 return None
-            # المفتاح قد يكون "value" أو slug نفسه (snake_case) أو متغيرات
-            for k in ("value", slug, slug.replace("-", "_"),
-                      slug.replace("-", ""), "result"):
+
+            def _in_range(v: float) -> bool:
+                if value_range is None:
+                    return True
+                return value_range[0] <= v <= value_range[1]
+
+            # إصلاح #108/#114: استبعاد أي مفتاح يحتوي تاريخ/وقت (substring)
+            # من المرشحين — كان "d" أو "datetime" يمر سابقاً كقيمة خاطئة
+            _date_like = ("date", "time", "ts", "unix", "day")
+
+            # المفتاح قد يكون "value" أو slug نفسه أو camelCase أو متغيرات
+            candidates = ("value", slug, slug.replace("-", "_"),
+                          slug.replace("-", ""), "result") + extra_keys
+            for k in candidates:
                 if k in item and item[k] is not None:
-                    val = float(item[k])
+                    try:
+                        val = float(item[k])
+                    except (TypeError, ValueError):
+                        continue
+                    if not _in_range(val):
+                        continue
                     _store(key, val, "bgeo")
                     return val
-            # fallback: أول قيمة رقمية غير التاريخ
+            # fallback: أول قيمة رقمية لا يبدو اسمها/قيمتها تاريخاً، ضمن النطاق
             for k, v in item.items():
-                if k.lower() not in ("date", "time", "timestamp") and isinstance(v, (int, float)):
-                    val = float(v)
-                    _store(key, val, "bgeo")
-                    return val
+                if any(d in k.lower() for d in _date_like):
+                    continue
+                if not isinstance(v, (int, float)) or isinstance(v, bool):
+                    continue
+                val = float(v)
+                # استبعاد قيم تشبه Unix timestamps (>1e6) كحماية إضافية
+                if value_range is None and abs(val) > 1e6:
+                    continue
+                if not _in_range(val):
+                    continue
+                _store(key, val, "bgeo")
+                return val
         except Exception as e:
             logger.debug(f"bgeo {slug}: {e}")
+        return None
+
+    async def _bgeo_fetch_any(self, slugs: list, extra_keys: tuple = (),
+                               value_range: Optional[Tuple[float, float]] = None
+                               ) -> Optional[float]:
+        """يجرّب عدة slugs بالترتيب ويُعيد أول قيمة صالحة (أو None إن فشلت كلها)."""
+        for s in slugs:
+            v = await self._bgeo_fetch(s, extra_keys=extra_keys, value_range=value_range)
+            if v is not None:
+                return v
         return None
 
     async def get_btc_onchain_advanced(self) -> dict:
@@ -1172,10 +1212,14 @@ class DataLayer:
             return {"available": False}
         try:
             mvrv_z, sopr, netflow, puell = await asyncio.gather(
-                self._bgeo_fetch("mvrv-zscore"),
-                self._bgeo_fetch("sopr"),
-                self._bgeo_fetch("exchange-netflow"),
-                self._bgeo_fetch("puell-multiple"),
+                self._bgeo_fetch("mvrv-zscore", extra_keys=("mvrvZscore", "mvrv_z_score", "z_score"),
+                                 value_range=(-10, 20)),
+                self._bgeo_fetch("sopr", value_range=(0, 5)),
+                self._bgeo_fetch_any(
+                    ["exchange-netflow", "exchange-net-flow", "netflow", "exchange-netflow-total"],
+                    extra_keys=("exchangeNetflow", "netflow", "net_flow")),
+                self._bgeo_fetch("puell-multiple", extra_keys=("puellMultiple", "puell_multiple_ratio"),
+                                 value_range=(0, 50)),
             )
         except Exception as e:
             logger.debug(f"btc_onchain_advanced: {e}")
