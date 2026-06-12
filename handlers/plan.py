@@ -560,7 +560,9 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                       else "🔴 بيع" if (cand or {}).get("direction") == "short"
                       else "⚪ انتظار")
             conf = float((cand or {}).get("confidence") or 0)
-            conf_warn = " ⚠️ دون حد الدخول" if (cand and conf < 0.65) else ""
+            conf_warn = (" ⚠️ دون حد الدخول"
+                         if (cand and not ((cand or {}).get("direction") == "long" and conf >= 0.65))
+                         else "")
             # تنسيق السعر الصحيح حسب حجمه
             price_str = _fmt_price(price_v) if price_v > 0 else "🔄 جاري الجلب"
             # M#99: نوع الصفقة planmonth — لا نُكرر "⚪ انتظار" مع dir_ar
@@ -871,6 +873,15 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 fib_382 = swing_l + (swing_h - swing_l) * 0.382
                 fib_618 = swing_l + (swing_h - swing_l) * 0.618
 
+                # إصلاح #116: "دعم/مقاومة" المعروضة يجب أن تُحسَب ديناميكياً
+                # حسب موضع السعر الحالي ضمن مستويات السوينغ — لا نفترض دائماً
+                # أن fib_382=دعم وfib_618=مقاومة (قد يكون السعر هبط تحتهما)
+                _levels = sorted([swing_l, fib_382, fib_618, swing_h])
+                _below  = [lv for lv in _levels if lv < price]
+                _above  = [lv for lv in _levels if lv > price]
+                _disp_support    = max(_below) if _below else swing_l
+                _disp_resistance = min(_above) if _above else swing_h
+
                 entry_lines = []
                 if price > 0:
                     # إصلاح #366: R/R ديناميكي حسب RSI — نفس منطق analysis.py
@@ -930,11 +941,13 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             f"  • إغلاق فوق EMA50 ({_fmt_price(ema50_w)})",
                             f"  • الثقة ≥ 65% (حالياً {signal.confidence:.0%})",
                             f"  🛡️ خيار المحترف: Limit @ {_fmt_price(pro_entry_w)} | وقف: {_fmt_price(pro_sl_w)} | هدف: {_fmt_price(pro_tp_w)} | R/R: 1:{rr_w:.1f}",
-                            f"  📊 Fib دعم: {_fmt_price(fib_382)} | مقاومة: {_fmt_price(fib_618)}",
+                            f"  📊 Fib دعم: {_fmt_price(_disp_support)} | مقاومة: {_fmt_price(_disp_resistance)}",
                         ]
 
                 # تنبيه إذا الثقة تحت الحد
-                conf_warning = " ⚠️ دون حد الدخول" if signal.confidence < 0.65 else ""
+                conf_warning = (" ⚠️ دون حد الدخول"
+                                if not (signal.direction == "long" and signal.confidence >= 0.65)
+                                else "")
                 price_str = f" — {_fmt_price(price)}{change_str}" if price > 0 else " — 🔄 جاري جلب السعر"
                 lines += [
                     f"💎 *{sym}*{price_str}",

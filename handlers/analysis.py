@@ -224,15 +224,19 @@ def _build_professional_block(
     يُعرض في /signal و /analyze فقط
     """
     conf      = signal.confidence
-    # إصلاح #809: تعريف _vol_ratio
-    try:
-        _vol_ratio = float(getattr(signal, "vol_ratio", 1.0) or 1.0)
-    except Exception:
-        _vol_ratio = 1.0
     # إصلاح #948: rsi كـ int مبكراً — مصدر واحد للحقيقة
     rsi = int(round(rsi))  # ضمان int دائماً
     direction = signal.direction
     tech      = getattr(signal, "technicals", {}) or {}
+    # إصلاح #809/#61(ثانوي): _vol_ratio من technicals['vol_ratio'] مباشرة —
+    # getattr(signal,'vol_ratio',...) كان يُعيد دائماً 1.0 الافتراضي لأن
+    # SignalResult لا يملك حقل vol_ratio على المستوى الأعلى، فكان السطر
+    # السابق (#260 لاحقاً) يفشل في رصد vol_ratio<0.8 قبل إعادة التعيين
+    # اللاحقة في الكود — الآن مصدر واحد للحقيقة من البداية
+    try:
+        _vol_ratio = float(tech.get("vol_ratio", 1.0) or 1.0)
+    except Exception:
+        _vol_ratio = 1.0
     adx       = _calc_adx(candles) or float(tech.get("adx", 0) or 0)
     macd_hist = float(tech.get("macd_hist", 0) or 0)
     is_bear   = "هابط" in regime.description_ar
@@ -417,7 +421,6 @@ def _build_professional_block(
     # إصلاح #788: حجم ضعيف < 0.8x يُصنَّف دائماً no_demand
     if _vol_ratio < 0.8 and _vol_prof not in ("climax_selling", "climax_buying"):
         _vol_prof = "no_demand"
-    _vol_ratio= tech.get("vol_ratio",  1.0)
     _bb_pos_raw = tech.get("bb_pos", None)
     # إصلاح #787/#850: RSI يُعدِّل BB عند الإجماع
     if _bb_pos_raw is None:
