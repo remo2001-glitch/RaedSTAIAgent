@@ -548,8 +548,10 @@ def _build_professional_block(
     # إصلاح #652: Entry Aggressive دائماً < Entry Conservative
     # Aggressive = أدنى سعر نستهدف (عند الدعم)
     # Conservative = بعد تأكيد الارتداد (أقرب للسعر الحالي)
-    if ns > 0 and price * 0.94 < ns < price:
-        entry_agg = ns  # عند دعم فيبو
+    # إصلاح #133: نطاق أوسع (price*1.01 بدل price) يمنع قفزة entry_agg
+    # بنسبة ~8% عند تذبذب السعر حول ns بفارق <1% (تقلب طبيعي بين استدعاءين)
+    if ns > 0 and price * 0.94 < ns < price * 1.01:
+        entry_agg = min(ns, price)  # عند دعم فيبو (أو أقرب إليه)
     else:
         entry_agg = price * (1 - atr_dec * 0.8)  # أدنى من السعر الحالي
     # Conservative: بين entry_agg والسعر الحالي
