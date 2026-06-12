@@ -1048,14 +1048,16 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = await update.message.reply_text("🔗 جاري جلب بيانات On-Chain...")
     try:
-        data, fear, funding, oi, whale = await asyncio.gather(
+        data, fear, funding, oi, whale, btc_adv = await asyncio.gather(
             engine.data_layer.get_onchain(),
             engine.data_layer.get_fear_greed(),
             engine.data_layer.get_funding_rate("BTC"),
             engine.data_layer.get_open_interest("BTC"),
             engine.data_layer.get_whale_ratio("BTC"),
+            engine.data_layer.get_btc_onchain_advanced(),
             return_exceptions=True
         )
+        btc_adv = btc_adv if isinstance(btc_adv, dict) else {"available": False}
         funding = funding if isinstance(funding, dict) else {}
         oi      = oi      if isinstance(oi,      dict) else {}
         whale   = whale   if isinstance(whale,   dict) else {}
@@ -1132,6 +1134,19 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _wr_txt = f" ({_whale_r:.2f})" if _whale_r > 0 else ""
                 lines.append(f"• Whale Ratio{_wr_txt}: {_whale_sig}")
 
+        # تطوير جديد: مؤشرات BTC on-chain متقدمة من BGeometrics
+        # (MVRV Z-Score, SOPR, Exchange Netflow, Puell Multiple)
+        if btc_adv.get("available"):
+            lines += ["", "📊 *مؤشرات BTC المتقدمة (BGeometrics)*"]
+            if "mvrv_zscore" in btc_adv:
+                lines.append(f"• MVRV Z-Score: {btc_adv['mvrv_zscore']} — {btc_adv['mvrv_signal']}")
+            if "sopr" in btc_adv:
+                lines.append(f"• SOPR: {btc_adv['sopr']} — {btc_adv['sopr_signal']}")
+            if "exchange_netflow_btc" in btc_adv:
+                lines.append(f"• Exchange Netflow: {btc_adv['exchange_netflow_btc']:+,.1f} BTC — {btc_adv['netflow_signal']}")
+            if "puell_multiple" in btc_adv:
+                lines.append(f"• Puell Multiple: {btc_adv['puell_multiple']} — {btc_adv['puell_signal']}")
+
         # تفسير وتوصية إجمالية مختصرة بناءً على البيانات المجمَّعة
         _reco_parts = []
         if fear_val <= 25:
@@ -1144,10 +1159,20 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _reco_parts.append("الحيتان تتراكم")
         if tvl_change < -3:
             _reco_parts.append("خروج سيولة من DeFi")
+        if btc_adv.get("mvrv_zscore") is not None:
+            if btc_adv["mvrv_zscore"] < 0:
+                _reco_parts.append("MVRV Z-Score في منطقة قاع تاريخية")
+            elif btc_adv["mvrv_zscore"] > 7:
+                _reco_parts.append("MVRV Z-Score في منطقة قمة تاريخية — حذر")
+        if btc_adv.get("exchange_netflow_btc") is not None and btc_adv["exchange_netflow_btc"] < 0:
+            _reco_parts.append("تدفق صافٍ خارج البورصات (Hodling)")
         if _reco_parts:
             lines += ["", f"💡 *التفسير*: {' · '.join(_reco_parts)}"]
 
-        lines += ["", "📡 المصدر: DeFiLlama + OKX | 🤖 رائد"]
+        _src = "📡 المصدر: DeFiLlama + OKX"
+        if btc_adv.get("available"):
+            _src += " + BGeometrics"
+        lines += ["", f"{_src} | 🤖 رائد"]
         await msg.edit_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         logger.error(f"cmd_onchain: {e}")
