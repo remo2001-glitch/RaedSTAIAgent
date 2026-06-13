@@ -142,12 +142,6 @@ class RegimeDetector:
             else:
                 action = "reduce_size"
                 _action_basis = f" (ADX={adx:.0f}>30)"
-        # إصلاح #168: تشخيص وقت التشغيل — يكشف ADX الداخلي الفعلي
-        # الذي يختلف أحياناً عن ADX المعروض في analysis.py
-        logger.info(
-            f"[#168-DIAG] regime={regime} adx_internal={adx:.1f} "
-            f"fear={fear_greed} rsi={rsi_val} action={action}"
-        )
         # إذا RSI في ذروة بيع (< 30) → تحذير انعكاس بغض النظر عن الاتجاه
         if rsi_val < 30:
             action = "wait_reversal"
