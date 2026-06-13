@@ -503,14 +503,24 @@ def _build_professional_block(
         _pos_size_rule  = "0% — انتظر مؤشرات أقوى"
         # إصلاح #908: action يتوافق مع decision
         if hasattr(regime, 'action') and regime.action == "trade_normal":
-            try: object.__setattr__(regime, 'action', 'avoid')
-            except: pass
+            try:
+                object.__setattr__(regime, 'action', 'avoid')
+                # إصلاح #168/#179-181: شفافية — وضّح أن سبب "تجنب الدخول"
+                # هنا هو انخفاض الثقة (<40%)، لا قوة الاتجاه (ADX)
+                if hasattr(regime, 'metrics') and isinstance(regime.metrics, dict):
+                    regime.metrics['action_basis'] = f" (الثقة {_conf_score}%<40%)"
+            except Exception:
+                pass
     elif _conf_score < 60:
         _decision_label = "[LOW] — حجم 3–5% فقط"
         _pos_size_rule  = f"5% — ثقة منخفضة"
         if hasattr(regime, 'action') and regime.action == "trade_normal":
-            try: object.__setattr__(regime, 'action', 'reduce_size')
-            except: pass
+            try:
+                object.__setattr__(regime, 'action', 'reduce_size')
+                if hasattr(regime, 'metrics') and isinstance(regime.metrics, dict):
+                    regime.metrics['action_basis'] = f" (الثقة {_conf_score}%<60%)"
+            except Exception:
+                pass
     elif _conf_score < 80:
         _decision_label = "[NORMAL] — حجم 10–20%"
         _pos_size_rule  = f"12% — ثقة متوسطة"
