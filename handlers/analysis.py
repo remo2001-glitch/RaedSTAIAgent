@@ -349,7 +349,7 @@ def _build_professional_block(
         pro_sl  = pro_entry * (1 - atr_dec * _sl_mult)
         pro_dir = "Long"
 
-    rr = abs(pro_tp - pro_entry) / max(abs(pro_sl - pro_entry), 0.0001)
+    rr = abs(pro_tp - pro_entry) / max(abs(pro_sl - pro_entry), 1e-9)
 
     # إضافة تحذير السيناريو
     _scenario_warn = signal.technicals.get("scenario_warn", "") if hasattr(signal, "technicals") else ""
@@ -357,7 +357,7 @@ def _build_professional_block(
     # إصلاح #95 (توحيد القاعدة): SL% من السعر الحالي (نفس قاعدة Worst-Case
     # وR/R) بدل pro_entry — يمنع ظهور "Worst-Case% < SL%" بسبب اختلاف القاعدة
     sl_pct  = abs(price - pro_sl) / max(price, 1e-9) * 100
-    tp_pct  = abs(pro_tp - pro_entry) / max(pro_entry, 0.0001) * 100
+    tp_pct  = abs(pro_tp - pro_entry) / max(pro_entry, 1e-9) * 100
     hold    = 3 if adx > 40 else 5
 
     # إضافة تحذير السيناريو في decision
@@ -594,8 +594,8 @@ def _build_professional_block(
     # فعلياً (لا من _sl_price داخلي منفصل قد يختلف عن SL المعروض)
     # هذا يضمن أن "R/R الواقعي" يتطابق رياضياً مع TP1/SL المعروضين دائماً
     _sl_price = pro_sl if (pro_sl > 0 and pro_sl < price) else price * (1 - atr_dec * 1.0)
-    _risk   = max(price - _sl_price, 0.0001)
-    _reward = max(tp1_v - price, 0.0001)
+    _risk   = max(price - _sl_price, 1e-9)
+    _reward = max(tp1_v - price, 1e-9)
     rr_real = round(min(_reward / _risk, 5.0), 1)
     # إصلاح #19: فرض R/R ≥ 1:1 على مستوى النظام (يطابق منطق risk_engine)
     # بدلاً من عرض R/R<1 وترك القرار للمستخدم — نرفع TP1/TP2 تناسبياً
@@ -604,10 +604,10 @@ def _build_professional_block(
         _old_tp1 = tp1_v
         _new_tp1 = price + _risk  # يضمن reward == risk → R/R = 1.0
         if tp2_v and _old_tp1 > price:
-            _tp2_ratio = (tp2_v - price) / max(_old_tp1 - price, 0.0001)
+            _tp2_ratio = (tp2_v - price) / max(_old_tp1 - price, 1e-9)
             tp2_v = price + (_new_tp1 - price) * _tp2_ratio
         tp1_v   = _new_tp1
-        _reward = max(tp1_v - price, 0.0001)
+        _reward = max(tp1_v - price, 1e-9)
         rr_real = round(min(_reward / _risk, 5.0), 1)
         _rr_adjusted_note = " (مُعدَّل تلقائياً لضمان 1:1)"
 
@@ -682,7 +682,7 @@ def _build_professional_block(
         # إصلاح #849: tp2_pct من السعر الحالي
     tp2_pct = abs(tp2_v - price) / max(price, 1e-9) * 100 if tp2_v else 0
     # إصلاح #8: تسمية دقيقة — "عند الدعم" فقط إذا entry_agg ≈ مستوى الدعم المعروض
-    _agg_label = "عند الدعم" if (ns > 0 and abs(entry_agg - ns) / max(ns, 0.0001) < 0.005) else "سحب فني (Pullback)"
+    _agg_label = "عند الدعم" if (ns > 0 and abs(entry_agg - ns) / max(ns, 1e-9) < 0.005) else "سحب فني (Pullback)"
     entry_lines = [
         "",
         "*📍 مناطق الدخول والخروج*",

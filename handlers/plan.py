@@ -585,7 +585,7 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         lines += ["", "💰 *العملات المُحلَّلة*"] + price_lines
         lines += ["", btc_ref, ""]
-        lines.append(_clean(engine.capital_engine.format_ar(allocation, regime)))
+        lines.append(_clean(engine.capital_engine.format_ar(allocation, regime, candidates)))
         # بناء جدول الشهر بناءً على حالة السوق الفعلية
         from core.regime_detector import Regime
         # إصلاح #20: استخدام نفس portfolio_val الديناميكي من #12 لتجنب تناقض
@@ -912,7 +912,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         entry = min(fib_618, price * (1 + atr_v * 0.3))
                         tp1   = price * (1 - atr_v * 1.5)
                         sl    = entry * (1 + atr_v * 1.2)
-                        rr    = (entry - tp1) / max(sl - entry, 0.0001)
+                        rr    = (entry - tp1) / max(sl - entry, 1e-9)
                         if rr >= 1.0:
                             entry_lines = [
                                 f"  📍 Short Limit: {_fmt_price(entry)} | وقف: {_fmt_price(sl)} (+{atr_v*120:.1f}%)",
@@ -926,14 +926,14 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         tp1   = price * (1 + _tp1_pct)
                         tp2   = price * (1 + _tp2_pct)
                         sl    = entry * (1 - min(atr_v * _sl_m, 0.07))
-                        _risk = max(price - sl, 0.0001)
-                        _rew  = max(tp1 - price, 0.0001)
+                        _risk = max(price - sl, 1e-9)
+                        _rew  = max(tp1 - price, 1e-9)
                         rr    = min(_rew / _risk, 4.0)
                         # إصلاح #871/#11: إذا R/R < 1.2 → لا نُخفي السطر بالكامل
                         # بل نقع للأسفل إلى كتلة "شروط الدخول" (entry_lines يبقى فارغاً)
                         if rr >= 1.2:
                             entry_lines = [
-                                f"  📍 دخول: {_fmt_price(entry)} | وقف: {_fmt_price(sl)} ({abs(price-sl)/max(price,0.001)*100:.1f}%-)",
+                                f"  📍 دخول: {_fmt_price(entry)} | وقف: {_fmt_price(sl)} ({abs(price-sl)/max(price,1e-9)*100:.1f}%-)",
                                 f"  🎯 هدف1: {_fmt_price(tp1)} (+{_tp1_pct*100:.1f}%) | هدف2: {_fmt_price(tp2)} (+{_tp2_pct*100:.1f}%)",
                                 f"  📊 R/R: 1:{rr:.1f} | ATR: {atr_v*100:.1f}%",
                             ]
@@ -945,11 +945,17 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         pro_entry_w = max(fib_382, price * (1 - atr_v * 0.5)) if fib_382 < price else price * (1 - atr_v * 0.4)
                         pro_tp_w    = price * (1 + atr_v * 1.8)
                         pro_sl_w    = pro_entry_w * (1 - atr_v * 1.2)
-                        rr_w        = abs(pro_tp_w - pro_entry_w) / max(abs(pro_sl_w - pro_entry_w), 0.001)
+                        rr_w        = abs(pro_tp_w - pro_entry_w) / max(abs(pro_sl_w - pro_entry_w), 1e-9)
+                        _rsi_cond = (f"  • ✅ RSI فوق {rsi_t} (حالياً {rsi_w:.0f}) — مُستوفى"
+                                     if rsi_w > rsi_t else
+                                     f"  • RSI يرتفع فوق {rsi_t} (حالياً {rsi_w:.0f})")
+                        _ema_cond = (f"  • ✅ السعر فوق EMA50 ({_fmt_price(ema50_w)}) — مُستوفى"
+                                     if price > ema50_w else
+                                     f"  • إغلاق فوق EMA50 ({_fmt_price(ema50_w)})")
                         entry_lines = [
                             f"  ⏳ شروط الدخول:",
-                            f"  • RSI يرتفع فوق {rsi_t} (حالياً {rsi_w:.0f})",
-                            f"  • إغلاق فوق EMA50 ({_fmt_price(ema50_w)})",
+                            _rsi_cond,
+                            _ema_cond,
                             f"  • الثقة ≥ 65% (حالياً {signal.confidence:.0%})",
                             f"  🛡️ خيار المحترف: Limit @ {_fmt_price(pro_entry_w)} | وقف: {_fmt_price(pro_sl_w)} | هدف: {_fmt_price(pro_tp_w)} | R/R: 1:{rr_w:.1f}",
                             f"  📊 Fib دعم: {_fmt_price(_disp_support)} | مقاومة: {_fmt_price(_disp_resistance)}",
@@ -1212,7 +1218,7 @@ async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # #757: تحديث إجمالي المحفظة ليشمل PnL الحي
         _real_total = _vw_total + _live_pnl_p
         _real_invested = _vw_p.invested if _vw_p else 0
-        text = _clean(engine.capital_engine.format_ar(allocation, regime))
+        text = _clean(engine.capital_engine.format_ar(allocation, regime, candidates))
         # استبدال إجمالي المحفظة في النص بالقيمة الحقيقية
         text = text.replace(
             f"إجمالي المحفظة:  ${portfolio_val:,.0f}",
