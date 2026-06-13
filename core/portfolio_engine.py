@@ -291,7 +291,8 @@ class CapitalAllocationEngine:
     # ═══════════════════════════════════════════════════════════
     # تنسيق التقرير
     # ═══════════════════════════════════════════════════════════
-    def format_ar(self, state: PortfolioState, regime: RegimeResult) -> str:
+    def format_ar(self, state: PortfolioState, regime: RegimeResult,
+                   candidates: List[Dict] = None) -> str:
         if not state.positions:
             from core.regime_detector import Regime
             reason = ""
@@ -303,9 +304,20 @@ class CapitalAllocationEngine:
                     f"• مراقبة {' و '.join(['BTC','ETH'])} لأول إشارة تعافٍ\n"
                     f"• الاستراتيجية الحالية: {' · '.join(regime.strategies).replace('_',' ')}"
                 )
+            # إصلاح #146: تمييز "ثقة منخفضة" (كل العملات<65%) عن
+            # "لا إشارة شراء" (بعض العملات≥65% لكن اتجاهها ليس شراء/long)
+            _high_conf_not_long = bool(candidates) and any(
+                (c.get("confidence", 0) >= 0.65 and c.get("direction") != "long")
+                for c in candidates
+            )
+            if _high_conf_not_long:
+                cause = (f"بعض العملات بثقة عالية (≥65%) لكن اتجاهها محايد/ليس "
+                         f"شراء — لا توجد إشارة دخول حالياً في {regime.description_ar}")
+            else:
+                cause = f"ثقة السوق منخفضة في {regime.description_ar}"
             return (
                 f"⚠️ لا توجد أصول مؤهلة للتوزيع حالياً\n"
-                f"السبب: ثقة السوق منخفضة في {regime.description_ar}"
+                f"السبب: {cause}"
                 + reason
             )
 

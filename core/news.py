@@ -276,7 +276,7 @@ def _strip_markdown_headers(text: str) -> str:
     return "\n".join(clean).strip()
 
 
-def _strip_mixed_language_artifacts(text: str) -> str:
+def _strip_mixed_language_artifacts(text: str, price: float = None) -> str:
     """
     إصلاح #94: شبكة أمان حتمية فوق تعليمة الـprompt — تُزيل كلمات/أحرف
     إنجليزية مدمجة وسط النص العربي (مثل "وraises احتمال" -> "و احتمال").
@@ -308,6 +308,16 @@ def _strip_mixed_language_artifacts(text: str) -> str:
     _digit_map["٫"] = "."   # الفاصلة العشرية العربية
     _digit_map["٬"] = ","   # فاصل الآلاف العربي
     text = "".join(_digit_map.get(ch, ch) for ch in text)
+
+    # إصلاح #150/#153: لعملات السعر <$1، أي جملة تحتوي "ألف" تكاد تكون
+    # هلوسة "أرقام مكتوبة بالحروف" (مثل "كسر سبعين ألف" بدل "0.07") —
+    # لا يوجد سياق مالي مشروع يصف مستوى سعري لعملة sub-cent بـ"آلاف".
+    # نحذف الجملة كاملة (تدهور رشيق: جملة ناقصة أفضل من رقم خاطئ ×1,000,000)
+    if price is not None and 0 < price < 1 and "ألف" in text:
+        _sentences = re.split(r'(?<=[.!؟])\s+', text)
+        _sentences = [s for s in _sentences if "ألف" not in s]
+        text = " ".join(_sentences)
+        text = re.sub(r' {2,}', ' ', text)
 
     return text.strip()
 
@@ -809,6 +819,11 @@ class NewsEngine:
             " مهم: اكتب بالعربية الفصحى فقط بالكامل — لا تُدخل أي كلمات"
             " أو أحرف إنجليزية داخل الجمل العربية (مثل دمج كلمة إنجليزية"
             " مباشرة مع كلمة عربية بدون فراغ أو ترجمة)."
+            " مهم جداً: اكتب كل الأسعار والمستويات الرقمية بالأرقام"
+            " الإنجليزية كما وردت في البيانات أعلاه حرفياً (مثل 0.074930)"
+            " — ممنوع منعاً مطلقاً كتابة أي رقم أو سعر بالحروف العربية"
+            " (مثل 'سبعين ألفاً' أو 'مائة وثلاثين') فهذا يُنتج قيماً"
+            " خاطئة تماماً؛ الأرقام فقط بصيغتها العشرية كما هي."
         )
 
 
@@ -841,7 +856,7 @@ class NewsEngine:
                             if sub_text:
                                 text = text + ("\n" if text else "") + sub_text
                 if text and len(text) > 20:
-                    text = _strip_mixed_language_artifacts(text)
+                    text = _strip_mixed_language_artifacts(text, price=price)
                     text = _strip_header_duplicates(text)
                     return text
         except Exception as _ae:

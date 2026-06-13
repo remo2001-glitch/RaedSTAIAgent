@@ -428,7 +428,7 @@ class BacktestEngine:
             f"🎯 *تفاصيل الصفقات*",
             (f"• متوسط الربح: {r.avg_win:+.2f}%" if r.win_rate > 0
              else "• متوسط الربح: — (لا صفقات رابحة)"),
-            (f"• متوسط الخسارة: {r.avg_loss:.2f}%" if r.win_rate < 1.0
+            (f"• متوسط الخسارة: {r.avg_loss:.2f}%" if r.win_rate < 100.0
              else "• متوسط الخسارة: — (لا صفقات خاسرة)"),
             f"• أفضل صفقة: {r.best_trade:+.2f}%",
             f"• أسوأ صفقة: {r.worst_trade:+.2f}%",

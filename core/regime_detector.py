@@ -132,16 +132,21 @@ class RegimeDetector:
 
         action = "trade_normal"
         rsi_val = metrics.get("rsi", 50)
+        _action_basis = ""  # إصلاح #149: سبب القرار للشفافية/التشخيص
         if regime == Regime.HIGH_VOLATILITY:
             action = "reduce_size"
         elif regime == Regime.BEAR_TREND and adx > 30:
             if fear_greed < 20:
                 action = "avoid"
+                _action_basis = f" (ADX={adx:.0f}>30، Fear={fear_greed}<20)"
             else:
                 action = "reduce_size"
+                _action_basis = f" (ADX={adx:.0f}>30)"
         # إذا RSI في ذروة بيع (< 30) → تحذير انعكاس بغض النظر عن الاتجاه
         if rsi_val < 30:
             action = "wait_reversal"
+            _action_basis = ""
+        metrics["action_basis"] = _action_basis
 
         # تحديد Market Phase (Wyckoff-inspired)
         closes_20  = [c["close"] for c in candles[-20:]]
@@ -401,7 +406,7 @@ class RegimeDetector:
             f"• Fear & Greed: {m.get('fear_greed',50)} | هيمنة BTC: {m.get('btc_dominance',50):.0f}%\n\n"
             f"🎯 *الاستراتيجية الموصى بها*\n"
             f"• {strategies_txt}\n"
-            f"• الإجراء: {_action_ar(result.action)}"
+            f"• الإجراء: {_action_ar(result.action)}{m.get('action_basis','')}"
             + _rsi_warning(m.get("rsi", 50), result.regime)
             + _adx_warning(m.get("adx", 0))
         )
