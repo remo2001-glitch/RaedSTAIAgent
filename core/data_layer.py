@@ -33,6 +33,7 @@ CACHE_TTL = {
     "fear":    3600,
     "hist":    7200,  # ساعتان (كان ساعة)
     "bgeo":    43200, # 12 ساعة — BGeometrics (حد مجاني: 8/ساعة، 15/يوم؛ البيانات تُحدَّث يومياً)
+    "pairchk": 3600,  # ساعة — توفر أزواج BTC/ETH على OKX (إصلاح/تطوير #188)
 }
 # كاش مشترك بين المستخدمين — طلب واحد يخدم الجميع
 _shared_price_cache: Dict[str, Dict] = {}
@@ -377,11 +378,22 @@ class DataLayer:
     # ═══════════════════════════════════════════════════════════
     # 1. السعر الحي — يُعيد Dict أو None (مع حماية في المستدعي)
     # ═══════════════════════════════════════════════════════════
-    async def get_price(self, symbol: str) -> Optional[Dict]:
+    async def get_price(self, symbol: str, quote: str = "USDT") -> Optional[Dict]:
         symbol = _clean_symbol(symbol)   # BTCUSDT → BTC (نظام-واسع)
-        key = f"price:{symbol.upper()}"
+        quote  = quote.upper()
+        key = f"price:{symbol.upper()}:{quote}"
         if cached := _cached(key, "price"):
             return cached
+
+        # إصلاح/تطوير #188: أزواج BTC/ETH المباشرة — OKX فقط (دون
+        # CoinGecko/Binance، الـresolver تحقَّق من التوفر مسبقاً)
+        if quote != "USDT":
+            result = await self._price_okx(symbol, quote)
+            if result and result.get("price", 0) > 0:
+                _store(key, result)
+                return result
+            logger.error(f"get_price({quote}) فشل لـ {symbol}")
+            return None
 
         # OKX أولاً — سريع وغير محجوب على Railway
         result = await self._price_okx(symbol)
@@ -479,10 +491,12 @@ class DataLayer:
             return None
 
 
-    async def _price_okx(self, symbol: str) -> Optional[Dict]:
-        """OKX Public API — fallback للسعر (غير محجوب على Railway)."""
+    async def _price_okx(self, symbol: str, quote: str = "USDT") -> Optional[Dict]:
+        """OKX Public API — fallback للسعر (غير محجوب على Railway).
+        إصلاح/تطوير #188: quote اختياري ("USDT" افتراضياً = السلوك السابق
+        دون أي تغيير) — يدعم أزواج BTC/ETH المباشرة (مثل ETH-BTC)."""
         try:
-            inst_id = f"{symbol.upper()}-USDT"
+            inst_id = f"{symbol.upper()}-{quote.upper()}"
             data = await _fetch(
                 self.session,
                 f"https://www.okx.com/api/v5/market/ticker?instId={inst_id}",
@@ -516,15 +530,49 @@ class DataLayer:
             logger.debug(f"_price_okx ({symbol}): {e}")
         return None
 
+    async def check_okx_pair(self, base: str, quote: str) -> bool:
+        """تطوير #188: يتحقق من توفر زوج تداول مباشر على OKX
+        (مثل ETH-BTC) — مخزَّن مؤقتاً لساعة لتقليل استدعاءات API."""
+        base, quote = base.upper(), quote.upper()
+        key = f"pairchk:{base}-{quote}"
+        cached = _cached(key, "pairchk")
+        if cached is not None:
+            return cached
+        ok = False
+        try:
+            inst_id = f"{base}-{quote}"
+            data = await _fetch(
+                self.session,
+                f"https://www.okx.com/api/v5/market/ticker?instId={inst_id}",
+                headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+                retries=1,
+            )
+            if isinstance(data, dict) and data.get("data"):
+                ok = float(data["data"][0].get("last", 0) or 0) > 0
+        except Exception as e:
+            logger.debug(f"check_okx_pair ({base}-{quote}): {e}")
+        _store(key, ok, "pairchk")
+        return ok
+
     # ═══════════════════════════════════════════════════════════
     # 2. OHLCV — يُعيد دائماً List (قد تكون فارغة لكن ليست None)
     # ═══════════════════════════════════════════════════════════
     async def get_ohlcv(self, symbol: str, interval: str = "1d",
-                         limit: int = 365) -> List[Dict]:
+                         limit: int = 365, quote: str = "USDT") -> List[Dict]:
         symbol = _clean_symbol(symbol)   # BTCUSDT → BTC (نظام-واسع)
-        key = f"ohlcv:{symbol}:{interval}:{limit}"
+        quote  = quote.upper()
+        key = f"ohlcv:{symbol}:{quote}:{interval}:{limit}"
         if cached := _cached(key, "ohlcv"):
             return cached  # دائماً List
+
+        # إصلاح/تطوير #188: أزواج BTC/ETH المباشرة — OKX فقط
+        if quote != "USDT":
+            candles = await self._hist_okx(symbol, min(limit, 300), quote)
+            if len(candles) >= 10:
+                _store(key, candles, "ohlcv")
+                return candles
+            logger.error(f"get_ohlcv({quote}) فشل لـ {symbol} — يُعيد []")
+            return []
 
         # ── OKX أولاً — سريع وغير محجوب على Railway ──────────
         candles = await self._hist_okx(symbol, min(limit, 300))
@@ -1355,10 +1403,11 @@ class DataLayer:
             return ""
 
 
-    async def _hist_okx(self, symbol: str, days: int) -> list:
-        """OKX Klines — OHLCV تاريخي للعملات الصغيرة."""
+    async def _hist_okx(self, symbol: str, days: int, quote: str = "USDT") -> list:
+        """OKX Klines — OHLCV تاريخي للعملات الصغيرة.
+        إصلاح/تطوير #188: quote اختياري (USDT افتراضياً = بدون تغيير)."""
         try:
-            inst_id = f"{symbol.upper()}-USDT"
+            inst_id = f"{symbol.upper()}-{quote.upper()}"
             limit   = min(days, 300)
             data = await _fetch(
                 self.session,
