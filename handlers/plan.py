@@ -19,6 +19,7 @@ except ImportError:
     is_symbol_allowed = lambda s, t: True
     get_tier_message  = lambda s, t: f'⛔ {s} غير متاحة'
 from core.state_manager import state_manager as _sm
+from core.pair_resolver import resolve_symbol
 
 
 def _fmt_price(price: float) -> str:
@@ -35,6 +36,33 @@ DEFAULT_SYMBOLS = ["BTC", "ETH", "BNB", "SOL"]
 
 
 def _eng(context): return context.bot_data.get("raed_engine")
+
+
+async def _resolve_custom_symbols(raw_symbols, tier, data_layer):
+    """تطوير #188: يُطبِّق resolve_symbol على كل رمز مُدخَل من المستخدم
+    في /weekly و/monthly. أزواج BTC/ETH تُستبدَل بـ base/USDT (Phase 1 —
+    التقارير الكاملة المُقوَّمة بأزواج BTC/ETH في /quicksignal حالياً)
+    مع رسالة توضيحية واحدة لكل رمز زوج."""
+    resolved, notices = [], []
+    for raw in raw_symbols:
+        try:
+            res = await resolve_symbol(raw, tier, data_layer)
+        except Exception:
+            resolved.append(raw)
+            continue
+        resolved.append(res.base)
+        if res.denied:
+            notices.append(res.denied_message)
+        elif res.notice:
+            notices.append(res.notice)
+        elif res.is_pair:
+            notices.append(
+                f"✅ زوج *{res.display_symbol}* متوفر — للتحليل المباشر "
+                f"استخدم /quicksignal {raw}.\n"
+                f"الخطة أدناه تستخدم *{res.base}/USDT*."
+            )
+    return resolved, notices
+
 
 def _clean(text: str) -> str:
     """يُنظّف النص من رموز Markdown التي تسبب أخطاء."""
@@ -316,13 +344,18 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
     entry_syms = []
     candidates = []
     allocation = None
+    _pair_notices = []  # تطوير #188
     if scan_mode:
         symbols    = []
         sym_str    = "مسح شامل"
         plan_label = "مسح شامل للسوق"
         _MAX_SCAN_SYMS = 6  # إصلاح #1003
     else:
-        symbols    = [a.upper() for a in args[:7]]  # إصلاح #833: حد 7 عملات
+        _raw_syms  = [a.upper() for a in args[:7]]  # إصلاح #833: حد 7 عملات
+        # تطوير #188: دعم أزواج BTC/ETH المباشرة (ماسي+ فقط)
+        _tier_pm   = _sm.get_tier(update.effective_user.id)
+        symbols, _pair_notices = await _resolve_custom_symbols(
+            _raw_syms, _tier_pm, engine.data_layer)
         sym_str    = ", ".join(symbols)
         plan_label = f"خطة مخصصة لـ {sym_str}"
 
@@ -671,6 +704,8 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "⚠️ خطة استرشادية — القرار النهائي للمستخدم",
             "🤖 رائد التداول الذكي",
         ]
+        if _pair_notices:  # تطوير #188
+            lines = _pair_notices + [""] + lines
         # T3: أزرار تفاعل
         _fb_kb = InlineKeyboardMarkup([[
             InlineKeyboardButton("✅ أتفق مع الخطة", callback_data="plan_agree"),
@@ -754,8 +789,13 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
     entry_syms = []
     candidates = []
     allocation = None
+    _pair_notices = []  # تطوير #188
     if args:
-        symbols  = [a.upper() for a in args[:7]]
+        _raw_syms2 = [a.upper() for a in args[:7]]
+        # تطوير #188: دعم أزواج BTC/ETH المباشرة (ماسي+ فقط)
+        _tier_pw   = _sm.get_tier(update.effective_user.id)
+        symbols, _pair_notices = await _resolve_custom_symbols(
+            _raw_syms2, _tier_pw, engine.data_layer)
         sym_str2 = ", ".join(symbols)
         plan_label = f"خطة مخصصة لـ {sym_str2}"
     else:
@@ -1066,6 +1106,8 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "⚠️ خطة استرشادية — القرار النهائي للمستخدم",
             "🤖 رائد التداول الذكي",
         ]
+        if _pair_notices:  # تطوير #188
+            lines = _pair_notices + [""] + lines
 
         # T3: أزرار تفاعل
         _fb_kb = InlineKeyboardMarkup([[
