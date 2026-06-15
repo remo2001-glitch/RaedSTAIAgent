@@ -19,7 +19,7 @@ except ImportError:
     is_symbol_allowed = lambda s, t: True
     get_tier_message  = lambda s, t: f'⛔ {s} غير متاحة'
 from core.state_manager import state_manager as _sm
-from core.pair_resolver import resolve_symbol
+from core.pair_resolver import resolve_symbol, PairResolution, build_pair_addon_inline
 
 
 def _fmt_price(price: float) -> str:
@@ -39,29 +39,19 @@ def _eng(context): return context.bot_data.get("raed_engine")
 
 
 async def _resolve_custom_symbols(raw_symbols, tier, data_layer):
-    """تطوير #188: يُطبِّق resolve_symbol على كل رمز مُدخَل من المستخدم
-    في /weekly و/monthly. أزواج BTC/ETH تُستبدَل بـ base/USDT (Phase 1 —
-    التقارير الكاملة المُقوَّمة بأزواج BTC/ETH في /quicksignal حالياً)
-    مع رسالة توضيحية واحدة لكل رمز زوج."""
-    resolved, notices = [], []
+    """تطوير #188 (Phase 2): يُطبِّق resolve_symbol على كل رمز مُدخَل من
+    المستخدم في /weekly و/monthly. التحليل دائماً مقابل USDT
+    (res.base) — مع PairResolution لكل رمز لإلحاق فقرة/سطر BTC/ETH
+    الإضافي عبر build_pair_addon_inline داخل سطر العملة."""
+    resolved, resolutions = [], []
     for raw in raw_symbols:
         try:
             res = await resolve_symbol(raw, tier, data_layer)
         except Exception:
-            resolved.append(raw)
-            continue
+            res = PairResolution(base=raw)
         resolved.append(res.base)
-        if res.denied:
-            notices.append(res.denied_message)
-        elif res.notice:
-            notices.append(res.notice)
-        elif res.is_pair:
-            notices.append(
-                f"✅ زوج *{res.display_symbol}* متوفر — للتحليل المباشر "
-                f"استخدم /quicksignal {raw}.\n"
-                f"الخطة أدناه تستخدم *{res.base}/USDT*."
-            )
-    return resolved, notices
+        resolutions.append(res)
+    return resolved, resolutions
 
 
 def _clean(text: str) -> str:
@@ -344,7 +334,7 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
     entry_syms = []
     candidates = []
     allocation = None
-    _pair_notices = []  # تطوير #188
+    _pair_resolutions = {}  # تطوير #188 (Phase 2): symbol -> PairResolution
     if scan_mode:
         symbols    = []
         sym_str    = "مسح شامل"
@@ -352,10 +342,11 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _MAX_SCAN_SYMS = 6  # إصلاح #1003
     else:
         _raw_syms  = [a.upper() for a in args[:7]]  # إصلاح #833: حد 7 عملات
-        # تطوير #188: دعم أزواج BTC/ETH المباشرة (ماسي+ فقط)
+        # تطوير #188 (Phase 2): دعم أزواج BTC/ETH (ماسي+ فقط)
         _tier_pm   = _sm.get_tier(update.effective_user.id)
-        symbols, _pair_notices = await _resolve_custom_symbols(
+        symbols, _resols_pm = await _resolve_custom_symbols(
             _raw_syms, _tier_pm, engine.data_layer)
+        _pair_resolutions = dict(zip(symbols, _resols_pm))
         sym_str    = ", ".join(symbols)
         plan_label = f"خطة مخصصة لـ {sym_str}"
 
@@ -614,6 +605,10 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 line += f" | {dir_ar} | ثقة: {conf:.0%}{conf_warn}"
                 if _t4:
                     line += f" | {_t4}"
+            # تطوير #188 (Phase 2): فقرة الزوج المُكثَّفة إن وُجدت
+            _res_p = _pair_resolutions.get(sym_p)
+            if _res_p:
+                line += await build_pair_addon_inline(_res_p, engine.data_layer)
             price_lines.append(line)
 
         lines += ["", "💰 *العملات المُحلَّلة*"] + price_lines
@@ -704,8 +699,6 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "⚠️ خطة استرشادية — القرار النهائي للمستخدم",
             "🤖 رائد التداول الذكي",
         ]
-        if _pair_notices:  # تطوير #188
-            lines = _pair_notices + [""] + lines
         # T3: أزرار تفاعل
         _fb_kb = InlineKeyboardMarkup([[
             InlineKeyboardButton("✅ أتفق مع الخطة", callback_data="plan_agree"),
@@ -789,13 +782,14 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
     entry_syms = []
     candidates = []
     allocation = None
-    _pair_notices = []  # تطوير #188
+    _pair_resolutions = {}  # تطوير #188 (Phase 2): symbol -> PairResolution
     if args:
         _raw_syms2 = [a.upper() for a in args[:7]]
-        # تطوير #188: دعم أزواج BTC/ETH المباشرة (ماسي+ فقط)
+        # تطوير #188 (Phase 2): دعم أزواج BTC/ETH (ماسي+ فقط)
         _tier_pw   = _sm.get_tier(update.effective_user.id)
-        symbols, _pair_notices = await _resolve_custom_symbols(
+        symbols, _resols_pw = await _resolve_custom_symbols(
             _raw_syms2, _tier_pw, engine.data_layer)
+        _pair_resolutions = dict(zip(symbols, _resols_pw))
         sym_str2 = ", ".join(symbols)
         plan_label = f"خطة مخصصة لـ {sym_str2}"
     else:
@@ -1006,8 +1000,11 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 if not (signal.direction == "long" and signal.confidence >= 0.65)
                                 else "")
                 price_str = f" — {_fmt_price(price)}{change_str}" if price > 0 else " — 🔄 جاري جلب السعر"
+                # تطوير #188 (Phase 2): فقرة الزوج المُكثَّفة إن وُجدت
+                _res_w = _pair_resolutions.get(sym)
+                _pair_inline = await build_pair_addon_inline(_res_w, engine.data_layer) if _res_w else ""
                 lines += [
-                    f"💎 *{sym}*{price_str}",
+                    f"💎 *{sym}*{price_str}{_pair_inline}",
                     f"  الإشارة: {dir_ar} | الثقة: {signal.confidence:.0%}{conf_warning}",
                     f"  الاستراتيجية: {strat_name}",
                 ] + entry_lines + [""]
@@ -1106,8 +1103,6 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "⚠️ خطة استرشادية — القرار النهائي للمستخدم",
             "🤖 رائد التداول الذكي",
         ]
-        if _pair_notices:  # تطوير #188
-            lines = _pair_notices + [""] + lines
 
         # T3: أزرار تفاعل
         _fb_kb = InlineKeyboardMarkup([[
