@@ -76,6 +76,17 @@ def _fmt_pair_price(price: float, quote: str) -> str:
     else:                 return f"{price:.10f} {quote}"
 
 
+def _fmt_usdt_price(price: float) -> str:
+    """تنسيق سعر بالدولار — للفقرة المرجعية عندما يكون التقرير
+    الأساسي بوحدة BTC/ETH (الزوج هو الأساس)."""
+    if price <= 0:        return "$0"
+    elif price >= 1000:   return f"${price:,.2f}"
+    elif price >= 1:      return f"${price:,.4f}"
+    elif price >= 0.001:  return f"${price:.6f}"
+    elif price >= 1e-6:   return f"${price:.8f}"
+    else:                 return f"${price:.10f}"
+
+
 class PairResolution:
     """نتيجة تحليل الرمز — إصلاح/تطوير #188 (Phase 2)."""
 
@@ -194,7 +205,7 @@ async def build_pair_addon_lines(resolution: PairResolution, data_layer) -> Opti
 
         lines = [
             "",
-            f"📎 *أيضاً متوفر: {base}/{quote}*",
+            f"📎 *الزوج المطلوب: {base}/{quote}* (تحليل مبسّط)",
             f"• السعر: {_fmt_pair_price(price, quote)}",
         ]
         if support is not None and resistance is not None:
@@ -202,7 +213,25 @@ async def build_pair_addon_lines(resolution: PairResolution, data_layer) -> Opti
                 f"• دعم: {_fmt_pair_price(support, quote)} | "
                 f"مقاومة: {_fmt_pair_price(resistance, quote)}"
             )
+        lines.append(f"💡 التقرير الكامل لهذا الزوج: /quicksignal {base}{quote}")
         return lines
+    except Exception:
+        return None
+
+
+async def build_usdt_addendum(resolution: PairResolution, data_layer) -> Optional[List[str]]:
+    """
+    تطوير #188 (Phase 2.5): عندما يكون التقرير الأساسي بوحدة BTC/ETH
+    (الزوج المطلوب هو الأساس — في /quicksignal عند التوفر الكامل)،
+    تُضاف فقرة صغيرة مرجعية بسعر العملة الأساسية مقابل USDT.
+    """
+    base = resolution.base
+    try:
+        price_d = await data_layer.get_price(base, "USDT")
+        if not price_d or float(price_d.get("price", 0)) <= 0:
+            return None
+        price = float(price_d["price"])
+        return ["", f"📎 أيضاً: {base}/USDT = {_fmt_usdt_price(price)}"]
     except Exception:
         return None
 
