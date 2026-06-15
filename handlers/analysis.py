@@ -23,7 +23,7 @@ from telegram.ext import ContextTypes, CommandHandler, MessageHandler, filters
 from core.state_manager import state_manager as _sm
 from core.middleware    import require_tier
 from core.user_manager import user_manager as _um
-from core.pair_resolver import resolve_symbol, build_pair_addon_lines
+from core.pair_resolver import resolve_symbol, build_pair_addon_lines, build_usdt_addendum
 from telegram.constants import ParseMode
 
 logger = logging.getLogger(__name__)
@@ -2150,19 +2150,25 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg    = await update.message.reply_text(
         f"🔍 جاري التحليل الأولي لـ {raw_arg}...")
 
-    # تطوير #188 (Phase 2): دعم أزواج BTC/ETH — فقرة إضافية في نهاية
-    # التقرير إن كانت الباقة ماسي+ والزوج متوفر. التحليل الأساسي
-    # دائماً مقابل USDT (resolution.base) — بدون أي تغيير عن السابق.
     resolution = await resolve_symbol(raw_arg, tier_q, engine.data_layer)
     symbol  = resolution.base
+
+    # تطوير #188 (Phase 2.5): إن كان الزوج المطلوب متوفراً بالكامل
+    # (ماسي+ والزوج موجود على OKX) → الزوج هو الأساس (كما طلب رحال:
+    # "الزوج المطلوب يكون في الأساس وبعد ذلك يوفر البديل"). غير ذلك
+    # → USDT أساسي كما في Phase 2 (مع فقرة /upgrade أو "غير متوفر").
+    pair_primary = (resolution.is_pair_request and resolution.eligible_tier
+                    and resolution.pair_available)
+    quote = resolution.quote if pair_primary else "USDT"
+    display_symbol = f"{symbol}/{quote}" if pair_primary else symbol
 
     try:
         # M#119: timeout صارم لمنع التجمد
         try:
             price_d, candles, fear, btc_dom = await asyncio.wait_for(
                 asyncio.gather(
-                    engine.data_layer.get_price(symbol),
-                    engine.data_layer.get_ohlcv(symbol, "1d", 250),
+                    engine.data_layer.get_price(symbol, quote),
+                    engine.data_layer.get_ohlcv(symbol, "1d", 250, quote),
                     engine.data_layer.get_fear_greed(),
                     engine.data_layer.get_btc_dominance(),
                     return_exceptions=True
@@ -2170,8 +2176,8 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         except asyncio.TimeoutError:
             await msg.edit_text(
-                f"⏱️ انتهت مهلة تحليل *{symbol}*\n\n"
-                f"جرّب: /quicksignal {symbol}",
+                f"⏱️ انتهت مهلة تحليل *{display_symbol}*\n\n"
+                f"جرّب: /quicksignal {raw_arg}",
                 parse_mode="Markdown")
             return
 
@@ -2184,7 +2190,7 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(candles) < 10:
             logger.info(f"analyze: retry OHLCV for {symbol}")
             await asyncio.sleep(1)
-            retry_c = await engine.data_layer.get_ohlcv(symbol, "1d", 60)
+            retry_c = await engine.data_layer.get_ohlcv(symbol, "1d", 60, quote)
             if isinstance(retry_c, list) and len(retry_c) >= 10:
                 candles = retry_c
 
@@ -2194,7 +2200,7 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if price <= 0:
             await msg.edit_text(
-                f"❌ لم أجد سعراً لـ {symbol}.\n"
+                f"❌ لم أجد سعراً لـ {display_symbol}.\n"
                 f"تحقق من الرمز وأعد المحاولة")
             return
 
@@ -2208,8 +2214,10 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if len(candles) >= 10:  # خُفِّض: 30 → 10
             try:
+                # تطوير #188 (Phase 2.5): مفتاح كاش regime مستقل عند pair_primary
+                _regime_key = f"{symbol}{quote}" if pair_primary else symbol
                 regime_obj  = engine.regime_detector.detect(
-                    candles, btc_dominance=btc_dom, fear_greed=fear_val, symbol=symbol)
+                    candles, btc_dominance=btc_dom, fear_greed=fear_val, symbol=_regime_key)
                 regime_desc = regime_obj.description_ar
                 is_bearish  = "هابط" in regime_desc
             except Exception as e:
@@ -2281,26 +2289,26 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         change_sign = "+" if change_24h >= 0 else ""
         lines = [
-            f"📊 *التحليل الأولي — {symbol}*",
+            f"📊 *التحليل الأولي — {display_symbol}*",
             "━━━━━━━━━━━━━━━━━━",
-            f"💰 السعر: {_fmt_price(price)} ({change_sign}{change_24h:.2f}%)",
+            f"💰 السعر: {_fmt_price(price, quote)} ({change_sign}{change_24h:.2f}%)",
             f"🌍 السوق: {regime_desc}",
             f"📈 RSI: {int(rsi)} | Fear & Greed: {fear_val}",
             "",
             f"🎯 *التوصية: {direction}*",
             "",
             "📍 *مناطق الدخول والخروج*",
-            f"• نقطة الدخول: {_fmt_price(entry)}",
-            f"• هدف 1:       {_fmt_price(tp1)} ({(tp1/price-1)*100:+.1f}%)",
-            f"• هدف 2:       {_fmt_price(tp2)} ({(tp2/price-1)*100:+.1f}%)",
-            f"• وقف الخسارة: {_fmt_price(sl)} ({(sl/price-1)*100:+.1f}%)",
+            f"• نقطة الدخول: {_fmt_price(entry, quote)}",
+            f"• هدف 1:       {_fmt_price(tp1, quote)} ({(tp1/price-1)*100:+.1f}%)",
+            f"• هدف 2:       {_fmt_price(tp2, quote)} ({(tp2/price-1)*100:+.1f}%)",
+            f"• وقف الخسارة: {_fmt_price(sl, quote)} ({(sl/price-1)*100:+.1f}%)",
         ]
         if support > 0 and resistance > 0:
             lines += [
                 "",
                 "🏗️ *المستويات الرئيسية*",
-                f"• دعم:    {_fmt_price(support)}",
-                f"• مقاومة: {_fmt_price(resistance)}",
+                f"• دعم:    {_fmt_price(support, quote)}",
+                f"• مقاومة: {_fmt_price(resistance, quote)}",
             ]
         if bear_buy_warning:
             lines.append(bear_buy_warning)
@@ -2309,10 +2317,15 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "💡 للتحليل العميق الكامل: /analyze (ذهبي+)",
             "⚠️ هذا تحليل استرشادي — القرار للمستخدم",
         ]
-        # تطوير #188 (Phase 2): إلحاق فقرة الزوج الإضافية إن وُجدت
-        _pair_addon_q = await build_pair_addon_lines(resolution, engine.data_layer)
-        if _pair_addon_q:
-            lines = lines[:-1] + _pair_addon_q + [lines[-1]]
+        # تطوير #188 (Phase 2.5): فقرة إضافية في نهاية التقرير
+        if pair_primary:
+            # الزوج هو الأساس -> فقرة مرجعية صغيرة بسعر USDT
+            _addon_q = await build_usdt_addendum(resolution, engine.data_layer)
+        else:
+            # USDT أساسي -> فقرة الزوج (ترقية/غير متوفر/الزوج كبديل مبسّط)
+            _addon_q = await build_pair_addon_lines(resolution, engine.data_layer)
+        if _addon_q:
+            lines = lines[:-1] + _addon_q + [lines[-1]]
 
         await msg.edit_text(
             _clean_md("\n".join(lines)), parse_mode="Markdown")
