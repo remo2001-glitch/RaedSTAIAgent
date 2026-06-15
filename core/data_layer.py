@@ -515,12 +515,17 @@ class DataLayer:
                     "price":                        price,
                     "change_24h":                   round(change, 4),
                     "price_change_percentage_24h":  round(change, 4),
-                    # vol24h = حجم USDT | volCcy24h = حجم BTC
-                    # OKX: للـ SPOT المقترن بـ USDT، vol24h = حجم بالـ quote (USDT)
-                    # إذا vol24h = 0، نحوّل volCcy24h × price
+                    # إصلاح #153/#185/#207: لأزواج SPOT، volCcy24h من OKX
+                    # هي الحجم بعملة التسعير (USDT) مباشرة، وvol24h هي
+                    # الحجم بالعملة الأساسية (تحتاج ×price لتحويلها لـUSDT).
+                    # (التعليق القديم كان معكوساً، فكانت volCcy24h —وهي
+                    # بالدولار فعلاً— تُضرَب بالسعر مرة إضافية فتُضخَّم
+                    # بمعامل=السعر: ETH أظهر 276.6B$ بدل ~$160M، وSHIB
+                    # أظهر عدد التوكنات الخام كـ"$"). تحقَّق التصحيح من
+                    # مطابقة مثال OKX التوثيقي لـBTC-USDT (فرق 0.34%).
                     "volume_24h": max(
-                        float(ticker.get("vol24h", 0) or 0),
-                        float(ticker.get("volCcy24h", 0) or 0) * price
+                        float(ticker.get("volCcy24h", 0) or 0),
+                        float(ticker.get("vol24h", 0) or 0) * price
                     ),
                     "high_24h":                     float(ticker.get("high24h", 0) or 0),
                     "low_24h":                      float(ticker.get("low24h", 0) or 0),

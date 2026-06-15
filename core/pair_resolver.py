@@ -76,6 +76,24 @@ def _fmt_pair_price(price: float, quote: str) -> str:
     else:                 return f"{price:.10f} {quote}"
 
 
+def _pair_price_decimals(value: float) -> int:
+    """عدد المنازل العشرية حسب فئة _fmt_pair_price لقيمة واحدة (إصلاح #195)."""
+    v = abs(value)
+    if v <= 0:       return 4
+    elif v >= 1:     return 4
+    elif v >= 0.001: return 6
+    elif v >= 1e-6:  return 8
+    else:            return 10
+
+
+def _fmt_pair_price_pair(a: float, b: float, quote: str) -> Tuple[str, str]:
+    """إصلاح #195: تنسيق زوج قيم (دعم/مقاومة) بنفس عدد المنازل
+    العشرية — أصغرهما يحدِّد الدقة لكليهما (يتجاوب مع _fmt_price_pair
+    في handlers/analysis.py)."""
+    dec = max(_pair_price_decimals(a), _pair_price_decimals(b))
+    return f"{a:,.{dec}f} {quote}", f"{b:,.{dec}f} {quote}"
+
+
 def _fmt_usdt_price(price: float) -> str:
     """تنسيق سعر بالدولار — للفقرة المرجعية عندما يكون التقرير
     الأساسي بوحدة BTC/ETH (الزوج هو الأساس)."""
@@ -209,10 +227,8 @@ async def build_pair_addon_lines(resolution: PairResolution, data_layer) -> Opti
             f"• السعر: {_fmt_pair_price(price, quote)}",
         ]
         if support is not None and resistance is not None:
-            lines.append(
-                f"• دعم: {_fmt_pair_price(support, quote)} | "
-                f"مقاومة: {_fmt_pair_price(resistance, quote)}"
-            )
+            _sup_s, _res_s = _fmt_pair_price_pair(support, resistance, quote)
+            lines.append(f"• دعم: {_sup_s} | مقاومة: {_res_s}")
         lines.append(f"💡 التقرير الكامل لهذا الزوج: /quicksignal {base}{quote}")
         return lines
     except Exception:
