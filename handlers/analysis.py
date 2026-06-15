@@ -72,6 +72,28 @@ def _fmt_price(price: float, quote: str = "USDT") -> str:
     else:               return f"{price:.10f} {quote}"
 
 
+def _price_decimals(value: float) -> int:
+    """عدد المنازل العشرية حسب فئة _fmt_price لقيمة واحدة (إصلاح #195)."""
+    v = abs(value)
+    if v <= 0:       return 2
+    elif v >= 1000:  return 2
+    elif v >= 1:     return 4
+    elif v >= 0.001: return 6
+    elif v >= 1e-6:  return 8
+    else:            return 10
+
+
+def _fmt_price_pair(a: float, b: float, quote: str = "USDT") -> tuple:
+    """إصلاح #195: تنسيق زوج قيم مرتبطة (دعم/مقاومة) بنفس عدد
+    المنازل العشرية — يُستخدَم عدد منازل أصغرهما (الأكثر دقة)
+    لكليهما، لتفادي تفاوت بصري عند عبور حد 0.001 (مثل
+    0.00099812 [8 منازل] مقابل 0.001160 [6 منازل] → كلاهما 8)."""
+    dec = max(_price_decimals(a), _price_decimals(b))
+    if quote == "USDT":
+        return f"${a:,.{dec}f}", f"${b:,.{dec}f}"
+    return f"{a:,.{dec}f} {quote}", f"{b:,.{dec}f} {quote}"
+
+
 def _calc_fibonacci(candles: list, lookback: int = 60) -> dict:
     """
     إصلاح #326: Fibonacci dynamic يضمن أن السعر بين swing_low و swing_high.
@@ -2304,11 +2326,12 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"• وقف الخسارة: {_fmt_price(sl, quote)} ({(sl/price-1)*100:+.1f}%)",
         ]
         if support > 0 and resistance > 0:
+            _sup_s, _res_s = _fmt_price_pair(support, resistance, quote)
             lines += [
                 "",
                 "🏗️ *المستويات الرئيسية*",
-                f"• دعم:    {_fmt_price(support, quote)}",
-                f"• مقاومة: {_fmt_price(resistance, quote)}",
+                f"• دعم:    {_sup_s}",
+                f"• مقاومة: {_res_s}",
             ]
         if bear_buy_warning:
             lines.append(bear_buy_warning)
@@ -2325,7 +2348,7 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # USDT أساسي -> فقرة الزوج (ترقية/غير متوفر/الزوج كبديل مبسّط)
             _addon_q = await build_pair_addon_lines(resolution, engine.data_layer)
         if _addon_q:
-            lines = lines[:-1] + _addon_q + [lines[-1]]
+            lines = lines[:-1] + _addon_q + ["", lines[-1]]
 
         await msg.edit_text(
             _clean_md("\n".join(lines)), parse_mode="Markdown")
