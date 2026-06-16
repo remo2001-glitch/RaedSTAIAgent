@@ -18,7 +18,7 @@ import asyncio
 import logging
 from core.middleware import require_tier
 from core.coins_list import is_symbol_allowed, get_tier_message
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, MessageHandler, filters
 from core.state_manager import state_manager as _sm
 from core.middleware    import require_tier
@@ -2266,28 +2266,31 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 symbol = w
                 break
 
-        # تطوير #222: اكتشاف تلقائي لنوع السوق من الصورة/الـcaption
-        # نبحث عن علامات Futures في نص الـcaption أولاً
+        # تطوير #222 (محسَّن): اكتشاف نوع السوق من:
+        # (1) caption النصي أولاً
+        # (2) نص التحليل الذي يُنتجه الـVision model (يتضمن الآن قسم "0-نوع السوق")
         _futures_keywords = (
             "PERP", "SWAP", "FUTURES", "PERPETUAL", "USDT-SWAP",
             "MARK PRICE", "FUNDING RATE", "OVERNIGHT", "-PERP", "USDT-M",
-            "COIN-M", "DELIVERY", "QUARTERLY"
+            "COIN-M", "DELIVERY", "QUARTERLY", "FUTURES/PERP",
         )
         _caption_upper = caption.upper()
         _chart_is_futures = any(kw in _caption_upper for kw in _futures_keywords)
-        # "Perp" tag في اسم الرمز نفسه (مثل MSTRUSDT Perp)
         if not _chart_is_futures and symbol:
-            _chart_is_futures = any(kw in symbol.upper() for kw in ("PERP","SWAP","FUT"))
+            _chart_is_futures = any(kw in symbol.upper()
+                                     for kw in ("PERP","SWAP","FUT"))
 
         analysis = await engine.news_engine.analyze_chart_image(
             image_data=bytes(image_bytes), symbol=symbol)
 
-        # تطوير #222: إذا لم يُكتشَف النوع من الـcaption، نفحص نص التحليل نفسه
-        if not _chart_is_futures:
-            _analysis_upper = (analysis or "").upper()
+        # فحص نص التحليل — القسم "0-نوع السوق" يُصرِّح بالنوع صراحةً
+        if not _chart_is_futures and analysis:
+            _analysis_upper = analysis.upper()
             _chart_is_futures = any(kw in _analysis_upper
-                                     for kw in ("PERP", "SWAP", "FUTURES", "PERPETUAL",
-                                                 "MARK PRICE", "FUNDING RATE", "OVERNIGHT"))
+                                     for kw in ("FUTURES/PERP", "FUTURES", "PERP",
+                                                 "SWAP", "PERPETUAL", "MARK PRICE",
+                                                 "FUNDING RATE", "OVERNIGHT",
+                                                 "فيوتشر", "عقد دائم", "عقد مستمر"))
 
         _mkt_label = "Futures/Perp" if _chart_is_futures else "Spot"
         sym_label = f" — {symbol}" if symbol else ""
