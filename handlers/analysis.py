@@ -95,6 +95,26 @@ def _fmt_price_pair(a: float, b: float, quote: str = "USDT") -> tuple:
 
 
 # ════════════════════════════════════════════════════════════════
+# #226/#227/#231/#232/#233 — helper موحَّد للرسائل
+# يدعم كلا المسارَين: أمر مباشر (update.message) أو callback
+# ════════════════════════════════════════════════════════════════
+def _get_message(update, context=None):
+    """يُعيد كائن Message الصحيح بصرف النظر عن نوع update.
+    - أمر مباشر: update.message
+    - callback (من _ask_market_type): context.user_data["_cb_message"]
+    """
+    if context is not None:
+        cb_msg = context.user_data.get("_cb_message")
+        if cb_msg is not None:
+            return cb_msg
+    if update.message is not None:
+        return update.message
+    if update.callback_query is not None:
+        return update.callback_query.message
+    return None
+
+
+# ════════════════════════════════════════════════════════════════
 # #221 — helper: سؤال نوع السوق (Spot / Futures) عند التحليل
 # ════════════════════════════════════════════════════════════════
 _GOLD_TIERS = ("gold", "diamond", "admin")
@@ -114,9 +134,11 @@ async def _ask_market_type(update, context, cmd: str, symbol: str, tier: str) ->
          InlineKeyboardButton("📈 سوق Futures", callback_data=_cb("futures"))],
     ])
     tier_note = "" if tier in _GOLD_TIERS else "\n_(Futures متاح للذهبي وأعلى — /upgrade)_"
-    await update.message.reply_text(
-        f"📊 تحليل *{symbol}* — اختر نوع السوق:{tier_note}",
-        parse_mode="Markdown", reply_markup=kb)
+    msg = _get_message(update, context)
+    if msg:
+        await msg.reply_text(
+            f"📊 تحليل *{symbol}* — اختر نوع السوق:{tier_note}",
+            parse_mode="Markdown", reply_markup=kb)
     return True
 
 
@@ -152,6 +174,9 @@ async def callback_market_type(update: Update, context: ContextTypes.DEFAULT_TYP
     # تخزين اختيار نوع السوق في user_data ليستخدمه الأمر
     context.user_data["_mkttype"] = mtype
     context.user_data["_mkttype_symbol"] = symbol
+    # إصلاح #226/#227/#231/#232/#233: حفظ query.message حتى تستطيع
+    # الأوامر استخدام _get_message() بدلاً من update.message (=None في callbacks)
+    context.user_data["_cb_message"] = query.message
 
     label = "⚡ Spot" if mtype == "spot" else "📈 Futures"
     await query.edit_message_text(
@@ -1369,7 +1394,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine  = _eng(context)
     user_id = update.effective_user.id if update.effective_user else 0
     if not engine:
-        await update.message.reply_text("⚠️ النظام لم يُهيَّأ بعد")
+        await _get_message(update, context).reply_text("⚠️ النظام لم يُهيَّأ بعد")
         return
 
     args    = context.args or ["BTC"]
@@ -1413,7 +1438,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif _is_perp_sig and tier2 in ("diamond","admin"):
         pass  # تطوير #209: أسهم مُرمَّزة مسموحة لماسي+
     elif not is_symbol_allowed(symbol, tier2):
-        await update.message.reply_text(
+        await _get_message(update, context).reply_text(
             (
                 f"⛔ *{symbol}* غير متاحة لباقتك الحالية\n\n"
                 f"باقتك: {_sm.get_tier_name(user_id)}\n"
@@ -1422,7 +1447,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"📋 لعرض عملاتك المتاحة: /premium"
             ), parse_mode="Markdown"); return
 
-    msg = await update.message.reply_text(
+    msg = await _get_message(update, context).reply_text(
         f"📡 جاري تحليل {symbol} عبر 5 مصادر...\n"
         "⏳ قد يستغرق 20-30 ثانية — يُرجى الانتظار"
     )
@@ -1578,7 +1603,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_backtest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine = _eng(context)
     if not engine:
-        await update.message.reply_text("⚠️ النظام لم يُهيَّأ بعد")
+        await _get_message(update, context).reply_text("⚠️ النظام لم يُهيَّأ بعد")
         return
 
     args     = context.args or []
@@ -1589,7 +1614,7 @@ async def cmd_backtest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(args) > 1:
         strategy = args[1].lower()
         if strategy not in valid:
-            await update.message.reply_text(
+            await _get_message(update, context).reply_text(
                 "⚠️ الاستراتيجيات المتاحة:\n"
                 "• trend_following (الاتجاه — افتراضي)\n"
                 "• mean_reversion (الارتداد)\n"
@@ -1630,7 +1655,7 @@ async def cmd_backtest(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "breakout":        "الاختراق",
         "hybrid":          "مدمج EMA+RSI",
     }
-    msg = await update.message.reply_text(
+    msg = await _get_message(update, context).reply_text(
         f"⏳ جاري Backtest لـ {symbol} — {strategy_ar[strategy]}\n"
         f"🔬 3 سنوات بيانات حقيقية — قد يستغرق 30-60 ثانية"
         f"{_auto_strategy_note}"
@@ -1673,7 +1698,7 @@ async def cmd_backtest(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine = _eng(context)
     if not engine:
-        await update.message.reply_text("⚠️ النظام لم يُهيَّأ بعد")
+        await _get_message(update, context).reply_text("⚠️ النظام لم يُهيَّأ بعد")
         return
 
     args   = context.args or ["BTC"]
@@ -1684,7 +1709,7 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
             raw_sym = raw_sym[:-len(_sfx)]
             break
     symbol = raw_sym
-    msg = await update.message.reply_text(f"🔬 جاري تحليل السيولة لـ {symbol}...")
+    msg = await _get_message(update, context).reply_text(f"🔬 جاري تحليل السيولة لـ {symbol}...")
 
     try:
         profile, walls, funding, oi, whale = await asyncio.gather(
@@ -1763,7 +1788,7 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_events(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine = _eng(context)
     if not engine:
-        await update.message.reply_text("⚠️ النظام لم يُهيَّأ بعد")
+        await _get_message(update, context).reply_text("⚠️ النظام لم يُهيَّأ بعد")
         return
     try:
         state   = engine.event_risk.assess()
@@ -1779,11 +1804,11 @@ async def cmd_events(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "",
             text_ev,
         ]
-        await update.message.reply_text(
+        await _get_message(update, context).reply_text(
             _clean_md("\n".join(lines)), parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         logger.error(f"cmd_events: {e}")
-        await update.message.reply_text("❌ خطأ في جلب الأحداث. حاول لاحقاً")
+        await _get_message(update, context).reply_text("❌ خطأ في جلب الأحداث. حاول لاحقاً")
 
 
 # ════════════════════════════════════════════════════════════════
@@ -1793,15 +1818,15 @@ async def cmd_events(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_drift(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine = _eng(context)
     if not engine:
-        await update.message.reply_text("⚠️ النظام لم يُهيَّأ بعد")
+        await _get_message(update, context).reply_text("⚠️ النظام لم يُهيَّأ بعد")
         return
     try:
         state = engine.drift_monitor.assess()
         text  = _clean_md(engine.drift_monitor.format_ar(state))
-        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+        await _get_message(update, context).reply_text(text, parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         logger.error(f"cmd_drift: {e}")
-        await update.message.reply_text("❌ خطأ في تحليل النموذج. حاول لاحقاً")
+        await _get_message(update, context).reply_text("❌ خطأ في تحليل النموذج. حاول لاحقاً")
 
 
 # ════════════════════════════════════════════════════════════════
@@ -1812,7 +1837,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # التحقق من صلاحية الباقة
     if not _sm.can_use_command(user_id, "analyze"):
-        await update.message.reply_text(
+        await _get_message(update, context).reply_text(
             "🔒 *التحليل العميق — ذهبي وماسي فقط*\n\n"
             "هذا الأمر يتطلب باقة ذهبي أو أعلى.\n"
             "للترقية: /upgrade",
@@ -1822,7 +1847,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     engine = context.bot_data.get("raed_engine")
     if not engine:
-        await update.message.reply_text("⚠️ النظام لم يُهيَّأ بعد")
+        await _get_message(update, context).reply_text("⚠️ النظام لم يُهيَّأ بعد")
         return
 
     args   = context.args or []
@@ -1858,7 +1883,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif _is_perp_an and tier_an in ("diamond","admin"):
         pass  # تطوير #209: أسهم مُرمَّزة مسموحة لماسي+
     elif not is_symbol_allowed(symbol, tier_an):
-        await update.message.reply_text(
+        await _get_message(update, context).reply_text(
             (
                 f"⛔ *{symbol}* غير متاحة لباقتك الحالية\n\n"
                 f"باقتك: {_sm.get_tier_name(user_id)}\n"
@@ -1867,13 +1892,13 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"📋 لعرض عملاتك المتاحة: /premium"
             ), parse_mode="Markdown"); return
     if not symbol:
-        await update.message.reply_text(
+        await _get_message(update, context).reply_text(
             "📊 مثال الاستخدام: /analyze BTC\n"
             "أو: /analyze ETH"
         )
         return
 
-    msg = await update.message.reply_text(f"🧠 جاري التحليل العميق لـ {symbol}...\n⏳ قد يستغرق 1-3 دقائق — يُرجى الانتظار")
+    msg = await _get_message(update, context).reply_text(f"🧠 جاري التحليل العميق لـ {symbol}...\n⏳ قد يستغرق 1-3 دقائق — يُرجى الانتظار")
 
     # إصلاح #178: semaphore يمنع تزامن أكثر من 3 أوامر ثقيلة
     _heavy_sem = await engine.acquire_heavy()
@@ -2177,7 +2202,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if len(full) > 4000:
             await msg.edit_text(full[:4000], parse_mode="Markdown")
-            await update.message.reply_text(full[4000:], parse_mode="Markdown")
+            await _get_message(update, context).reply_text(full[4000:], parse_mode="Markdown")
         else:
             await msg.edit_text(full, parse_mode="Markdown")
 
@@ -2209,7 +2234,7 @@ async def cmd_chart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     user_id = update.effective_user.id
     if not _sm.can_use_command(user_id, "chart"):
-        await update.message.reply_text(
+        await _get_message(update, context).reply_text(
             "💎 *تحليل الشارت البصري — ماسي فقط*\n\n"
             "هذا الأمر متاح لمشتركي الباقة الماسية.\n"
             "للترقية: /upgrade",
@@ -2217,7 +2242,7 @@ async def cmd_chart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    await update.message.reply_text(
+    await _get_message(update, context).reply_text(
         "⚙️ *تحليل الشارت البصري — قيد الصيانة*\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
         "🔄 *بدائل متاحة الآن:*\n"
@@ -2232,7 +2257,7 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """معالجة الصور المُرسَلة لتحليل الشارت."""
     user_id = update.effective_user.id
     if not _sm.can_use_command(user_id, "chart"):
-        await update.message.reply_text(
+        await _get_message(update, context).reply_text(
             "💎 تحليل الشارت البصري متاح لمشتركي الباقة الماسية فقط.\n"
             "للترقية: /upgrade"
         )
@@ -2240,17 +2265,17 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     engine = context.bot_data.get("raed_engine")
     if not engine:
-        await update.message.reply_text("⚠️ النظام لم يُهيَّأ بعد")
+        await _get_message(update, context).reply_text("⚠️ النظام لم يُهيَّأ بعد")
         return
 
-    msg = await update.message.reply_text("🔍 جاري تحليل الشارت...")
+    msg = await _get_message(update, context).reply_text("🔍 جاري تحليل الشارت...")
 
     try:
-        photo = update.message.photo
+        photo = _get_message(update, context).photo
         if photo:
             file = await photo[-1].get_file()
-        elif update.message.document:
-            file = await update.message.document.get_file()
+        elif _get_message(update, context).document:
+            file = await _get_message(update, context).document.get_file()
         else:
             await msg.edit_text(
                 "⚠️ يُرجى إرسال صورة الشارت.\n"
@@ -2258,7 +2283,7 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         image_bytes = await file.download_as_bytearray()
-        caption = update.message.caption or ""
+        caption = _get_message(update, context).caption or ""
         symbol  = ""
         for word in caption.split():
             w = word.strip("/").upper()
@@ -2322,7 +2347,7 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         if len(full) > 4000:
             await msg.edit_text(full[:4000], parse_mode="Markdown")
-            await update.message.reply_text(full[4000:], parse_mode="Markdown")
+            await _get_message(update, context).reply_text(full[4000:], parse_mode="Markdown")
         else:
             await msg.edit_text(full, parse_mode="Markdown")
 
@@ -2348,7 +2373,7 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     engine = _eng(context)
     if not engine:
-        await update.message.reply_text("⚠️ النظام لم يُهيَّأ بعد")
+        await _get_message(update, context).reply_text("⚠️ النظام لم يُهيَّأ بعد")
         return
 
     args      = context.args or []
@@ -2364,7 +2389,7 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
     _use_futures_qs = (_mkttype_qs == "futures")
 
-    msg    = await update.message.reply_text(
+    msg    = await _get_message(update, context).reply_text(
         f"🔍 جاري التحليل الأولي لـ {raw_arg}...")
 
     resolution = await resolve_symbol(raw_arg, tier_q, engine.data_layer)
@@ -2629,7 +2654,7 @@ async def cmd_upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     lines += ["", "📞 *الدعم الفني*", "للاشتراك والاستفسارات: قريباً"]
 
-    await update.message.reply_text(
+    await _get_message(update, context).reply_text(
         "\n".join(lines), parse_mode="Markdown")
 
 

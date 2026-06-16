@@ -38,6 +38,23 @@ DEFAULT_SYMBOLS = ["BTC", "ETH", "BNB", "SOL"]
 def _eng(context): return context.bot_data.get("raed_engine")
 
 
+# ════════════════════════════════════════════════════════════════
+# #226/#227/#231/#232/#233 — helper موحَّد للرسائل في plan.py
+# ════════════════════════════════════════════════════════════════
+def _get_message_p(update, context=None):
+    """يُعيد Message الصحيح سواء كان update مباشراً أو callback."""
+    if context is not None:
+        cb_msg = context.user_data.get("_cb_message")
+        if cb_msg is not None:
+            return cb_msg
+    if getattr(update, "message", None) is not None:
+        return update.message
+    if getattr(update, "callback_query", None) is not None:
+        return update.callback_query.message
+    return None
+
+
+
 async def callback_planmkt(update, context):
     """تطوير #223: معالجة اختيار Spot/Futures للخطة الأسبوعية/الشهرية.
     صيغة: planmkt_{weekly|month}_{spot|futures}_{args}"""
@@ -53,6 +70,8 @@ async def callback_planmkt(update, context):
     args_str  = parts[3].strip() if len(parts) > 3 else ""
 
     context.user_data["_mkttype_plan"] = mkttype
+    # إصلاح #226/#232/#233: حفظ query.message لاستخدامه في cmd_plan_week/month
+    context.user_data["_cb_message"] = query.message
     if args_str:
         context.args = args_str.split()
     else:
@@ -351,10 +370,10 @@ def _est_return(signal, regime) -> float:
 async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine = _eng(context)
     if not engine:
-        await update.message.reply_text("⚠️ النظام لم يُهيَّأ بعد"); return
+        await _get_message_p(update, context).reply_text("⚠️ النظام لم يُهيَّأ بعد"); return
 
     if context.user_data.get("planmonth_running"):
-        await update.message.reply_text(
+        await _get_message_p(update, context).reply_text(
             "⏳ جاري بناء الخطة الشهرية بالفعل — يُرجى الانتظار")
         return
 
@@ -368,7 +387,7 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("⚡ Spot (كل المستخدمين)", callback_data=f"planmkt_month_spot_{_args_str}"),
              InlineKeyboardButton("📈 Futures + أسهم (ماسي+)", callback_data=f"planmkt_month_futures_{_args_str}")],
         ])
-        await update.message.reply_text(
+        await _get_message_p(update, context).reply_text(
             "📅 *الخطة الشهرية — اختر نوع السوق:*\n"
             "_(Spot لجميع الأصول — Futures + الأسهم المُرمَّزة للماسي+)_",
             parse_mode="Markdown", reply_markup=kb_pm)
@@ -408,7 +427,7 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
     else:
-        msg = await update.message.reply_text(
+        msg = await _get_message_p(update, context).reply_text(
             f"📋 جاري بناء {plan_label}...\n"
             + ("⏳ المسح الشامل قد يستغرق 5-15 دقيقة — يُرجى الانتظار" if scan_mode
                else "⏳ قد يستغرق 1-3 دقائق — يُرجى عدم تكرار الأمر")
@@ -763,7 +782,7 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await msg.edit_text(f"❌ خطأ في بناء الخطة: {str(e)[:100]}")
         except Exception:
-            await update.message.reply_text("❌ خطأ في بناء الخطة الشهرية")
+            await _get_message_p(update, context).reply_text("❌ خطأ في بناء الخطة الشهرية")
     finally:
         context.user_data["planmonth_running"] = False
         # إصلاح #178/#123: تحرير semaphore — كان يُحرَّر متغير خاطئ/غير
@@ -799,7 +818,7 @@ async def cmd_planweek_entry(update: Update, context: ContextTypes.DEFAULT_TYPE)
         InlineKeyboardButton("📊 عام (حسب باقتي)", callback_data="plan_w_general"),
         InlineKeyboardButton("🎯 عملات محددة",     callback_data="plan_w_custom"),
     ]])
-    await update.message.reply_text(
+    await _get_message_p(update, context).reply_text(
         "📅 *الخطة الأسبوعية*\n\n"
         "هل تريد خطة عامة لأهم الأصول حسب باقتك،\n"
         "أم تحليل عملات محددة؟\n\n"
@@ -814,7 +833,7 @@ async def cmd_planmonth_entry(update: Update, context: ContextTypes.DEFAULT_TYPE
         InlineKeyboardButton("📊 عام (حسب باقتي)", callback_data="plan_m_general"),
         InlineKeyboardButton("🎯 عملات محددة",     callback_data="plan_m_custom"),
     ]])
-    await update.message.reply_text(
+    await _get_message_p(update, context).reply_text(
         "📅 *الخطة الشهرية*\n\n"
         "هل تريد خطة عامة لأهم الأصول حسب باقتك،\n"
         "أم تحليل عملات محددة؟",
@@ -824,7 +843,7 @@ async def cmd_planmonth_entry(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine = _eng(context)
     if not engine:
-        await update.message.reply_text("⚠️ النظام لم يُهيَّأ بعد"); return
+        await _get_message_p(update, context).reply_text("⚠️ النظام لم يُهيَّأ بعد"); return
 
     # تطوير #223: سؤال Spot/Futures للماسي+ فقط في الخطة الأسبوعية
     _uid_pw_pre  = update.effective_user.id if update.effective_user else 0
@@ -836,7 +855,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("⚡ Spot (كل المستخدمين)", callback_data=f"planmkt_week_spot_{_args_str}"),
              InlineKeyboardButton("📈 Futures + أسهم (ماسي+)", callback_data=f"planmkt_week_futures_{_args_str}")],
         ])
-        await update.message.reply_text(
+        await _get_message_p(update, context).reply_text(
             "📅 *الخطة الأسبوعية — اختر نوع السوق:*\n"
             "_(Spot لجميع الأصول — Futures + الأسهم المُرمَّزة للماسي+)_",
             parse_mode="Markdown", reply_markup=kb_pw)
@@ -871,7 +890,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
     else:
-        msg = await update.message.reply_text(
+        msg = await _get_message_p(update, context).reply_text(
         f"📅 جاري بناء {plan_label}...\n"
         "⏳ قد يستغرق 1-3 دقائق — يُرجى الانتظار"
     )
@@ -1190,16 +1209,16 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine = _eng(context)
     if not engine:
-        await update.message.reply_text("⚠️ النظام لم يُهيَّأ بعد"); return
+        await _get_message_p(update, context).reply_text("⚠️ النظام لم يُهيَّأ بعد"); return
 
     # منع الطلبات المتكررة
     if context.user_data.get("portfolio_running"):
-        await update.message.reply_text(
+        await _get_message_p(update, context).reply_text(
             "⏳ جاري تحليل المحفظة بالفعل — يُرجى الانتظار")
         return
     context.user_data["portfolio_running"] = True
 
-    msg = await update.message.reply_text(
+    msg = await _get_message_p(update, context).reply_text(
         "💼 جاري تحليل المحفظة...\n"
         "⏳ قد يستغرق 1-3 دقائق — يُرجى الانتظار"
     )
@@ -1355,7 +1374,7 @@ async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await msg.edit_text(f"❌ خطأ في تحليل المحفظة: {str(e)[:100]}")
         except Exception:
-            await update.message.reply_text("❌ خطأ في تحليل المحفظة — أعد المحاولة")
+            await _get_message_p(update, context).reply_text("❌ خطأ في تحليل المحفظة — أعد المحاولة")
     finally:
         context.user_data["portfolio_running"] = False
 
@@ -1364,7 +1383,7 @@ async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine = _eng(context)
     if not engine:
-        await update.message.reply_text("⚠️ النظام لم يُهيَّأ بعد"); return
+        await _get_message_p(update, context).reply_text("⚠️ النظام لم يُهيَّأ بعد"); return
 
     try:
         portfolio_val = float(engine.risk_engine.cfg.get("portfolio_size") or 10000)
@@ -1482,12 +1501,12 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             lines.append("• بيانات المقارنة غير متاحة")
 
-        await update.message.reply_text(
+        await _get_message_p(update, context).reply_text(
             "\n".join(lines), parse_mode=ParseMode.MARKDOWN)
 
     except Exception as e:
         logger.error(f"cmd_stats: {e}")
-        await update.message.reply_text(f"❌ خطأ في الإحصائيات: {str(e)[:100]}")
+        await _get_message_p(update, context).reply_text(f"❌ خطأ في الإحصائيات: {str(e)[:100]}")
 
 
 # ════════════════════════════════════════════════════════════════
@@ -1496,35 +1515,35 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_approve(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine = _eng(context)
     if not engine:
-        await update.message.reply_text("⚠️ النظام لم يُهيَّأ بعد"); return
+        await _get_message_p(update, context).reply_text("⚠️ النظام لم يُهيَّأ بعد"); return
     args = context.args or []
     if not args:
-        await update.message.reply_text("⚠️ الاستخدام: /approve [رمز]"); return
+        await _get_message_p(update, context).reply_text("⚠️ الاستخدام: /approve [رمز]"); return
     try:
         ok = await engine.human_override.approve(args[0], "user")
-        await update.message.reply_text(
+        await _get_message_p(update, context).reply_text(
             "✅ تمت الموافقة وجاري التنفيذ" if ok
             else "⚠️ رمز غير موجود أو انتهت صلاحيته")
     except Exception as e:
         logger.error(f"cmd_approve: {e}")
-        await update.message.reply_text("❌ خطأ في معالجة الموافقة")
+        await _get_message_p(update, context).reply_text("❌ خطأ في معالجة الموافقة")
 
 
 async def cmd_reject(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine = _eng(context)
     if not engine:
-        await update.message.reply_text("⚠️ النظام لم يُهيَّأ بعد"); return
+        await _get_message_p(update, context).reply_text("⚠️ النظام لم يُهيَّأ بعد"); return
     args = context.args or []
     if not args:
-        await update.message.reply_text("⚠️ الاستخدام: /reject [رمز]"); return
+        await _get_message_p(update, context).reply_text("⚠️ الاستخدام: /reject [رمز]"); return
     try:
         ok = await engine.human_override.reject(args[0], "user")
-        await update.message.reply_text(
+        await _get_message_p(update, context).reply_text(
             "🚫 تم الرفض" if ok
             else "⚠️ رمز غير موجود أو انتهت صلاحيته")
     except Exception as e:
         logger.error(f"cmd_reject: {e}")
-        await update.message.reply_text("❌ خطأ في معالجة الرفض")
+        await _get_message_p(update, context).reply_text("❌ خطأ في معالجة الرفض")
 
 
 def register(app):
@@ -1629,12 +1648,12 @@ async def handle_plan_symbols_input(update: Update, context: ContextTypes.DEFAUL
     # معالجة ملاحظات المستخدم على الخطة
     if context.user_data.get("awaiting_plan_comment"):
         context.user_data.pop("awaiting_plan_comment", None)
-        comment = (update.message.text or "").strip()
+        comment = (_get_message_p(update, context).text or "").strip()
         if comment:
             from core.state_manager import state_manager as _sm_pc
             _sm_pc.save_user_comment(update.effective_user.id, {
                 "text": comment, "type": "plan_comment"})
-        await update.message.reply_text(
+        await _get_message_p(update, context).reply_text(
             "✅ شكراً! تم حفظ ملاحظتك.\n"
             "رائد سيأخذها بعين الاعتبار في التحليلات القادمة 🎯")
         return
@@ -1644,11 +1663,11 @@ async def handle_plan_symbols_input(update: Update, context: ContextTypes.DEFAUL
         return  # لا ننتظر إدخال عملات
 
     # استخراج الرموز
-    text = (update.message.text or "").strip().upper()
+    text = (_get_message_p(update, context).text or "").strip().upper()
     symbols = [s.strip() for s in text.replace(',', ' ').split() if s.strip()]
 
     if not symbols:
-        await update.message.reply_text("⚠️ لم أتعرف على رموز عملات — جرّب: BTC ETH SOL")
+        await _get_message_p(update, context).reply_text("⚠️ لم أتعرف على رموز عملات — جرّب: BTC ETH SOL")
         return
 
     # مسح انتظار الإدخال
