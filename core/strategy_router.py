@@ -285,7 +285,7 @@ class SignalLayer:
             macro_score=macro_score,
             regime=regime.regime.value,
             suggested_leverage=_calc_suggested_leverage(
-                confidence, regime, tech, fear_greed
+                confidence, regime, tech, int(fg_now)
             ),
         )
 
