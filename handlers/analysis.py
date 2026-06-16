@@ -673,10 +673,19 @@ def _build_professional_block(
     # ── بناء الأقسام ─────────────────────────────────────────
 
     # 1. Confidence Score — إصلاح #8: لا نُكرر التفصيل (موجود في "مصادر الإشارة" أعلاه)
+    # تطوير #209: الرافعة المقترحة من النظام
+    _lev = getattr(signal, "suggested_leverage", 1)
+    _lev_note = {
+        1: "🛡️ 1x — حماية قصوى",
+        2: "⚡ 2x — محافظ",
+        3: "⚡ 3x — معتدل",
+        5: "🔥 5x — ثقة عالية، سوق صاعد",
+    }.get(_lev, f"{_lev}x")
     parts.extend([
         "",
         f"*🎯 Confidence Score: {_conf_score}%*",
         f"• القرار: *{_decision_label}*",
+        f"• الرافعة المقترحة: {_lev_note}",
     ])
 
     # 2. SMC Block
@@ -758,8 +767,9 @@ def _build_professional_block(
         f"• ⚠️ Worst-Case: كسر {_fmt_price(wc_bd1)} → {_fmt_price(wc_bd2)} (خسارة ~{wc_loss:.1f}%)",
     ])
 
-    # 6. Confirmation Flags + Checklist
-    parts.extend(["", "*✅ مؤشرات التأكيد (الحد الأدنى للدخول: 2 من 4)*"])
+    # 6. إصلاح #204/#206: قسمان منفصلان بتسميات واضحة
+    # 6-A. تأكيدات الدخول الحاسمة (تؤثر على حجم الصفقة عبر _confirmed/_flags_found)
+    parts.extend(["", "*🔑 تأكيدات الدخول (تُحدِّد حجم الصفقة — الحد الأدنى: 2 من 4)*"])
     if _confirmed:
         parts.append(f"✅ {_flags_found}/4 مؤكدة — الإشارة *نشطة*")
     else:
@@ -767,18 +777,18 @@ def _build_professional_block(
     for flag in _conf_flags:
         parts.append(f"  ✓ {flag}")
     if not _conf_flags:
-        parts.append("  • لا مؤشرات تأكيد بعد")
+        parts.append("  • لا تأكيدات بعد — يمكن الدخول بحجم مصغَّر فقط")
 
-    # Checklist
+    # 6-B. Checklist الاستعداد (مؤشرات داعمة — لا تؤثر على الحجم، تكميلية)
     parts.extend([
         "",
-        "*📋 Checklist قبل الدخول*",
-        f"{'☑' if _rsi_div != 'none' else '□'} RSI Divergence",
+        "*📋 Checklist الاستعداد (مؤشرات داعمة — لا تؤثر على حجم الصفقة)*",
+        f"{'☑' if _rsi_div != 'none' else '□'} RSI Divergence"
+        + (" 🟢" if _rsi_div == "bullish" else " 🔴" if _rsi_div == "bearish" else ""),
         f"{'☑' if _vol_ratio >= 1.5 else '□'} Volume Spike ≥1.5x (حالياً {_vol_ratio:.1f}x)",
         f"{'☑' if ns > 0 and price >= ns * 0.995 else '□'} Reclaim الدعم {_fmt_price(ns) if ns else 'N/A'}",
         f"{'☑' if tech.get('macd_hist', 0) > 0 else '□'} MACD إيجابي",
         f"{'☑' if _whale_ratio > 0 and _whale_ratio < 0.6 else '□'} On-chain تراكم (Whale Ratio < 0.6)",
-        # #694: Funding Rate يُحسب فقط إذا كانت البيانات حقيقية
         f"{'☑' if _fund_pct < -0.01 else '□'} Funding Rate مناسب",
     ])
 
@@ -1287,6 +1297,15 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tier2      = _sm.get_tier(user_id2)
     resolution = await resolve_symbol(raw_arg, tier2, engine.data_layer)
     symbol     = resolution.base
+
+    # تطوير #209: اكتشاف تلقائي للأسهم المُرمَّزة (ماسي+ فقط)
+    _is_perp_sig = False
+    if tier2 in ("diamond", "admin"):
+        try:
+            _is_perp_sig = await engine.data_layer.is_tokenized_stock(symbol)
+        except Exception:
+            _is_perp_sig = False
+
     # إصلاح #1020: عملات كبيرة مُعتمَدة دائماً للذهبي+
     _ALWAYS_ALLOWED = {
         "XLM","STELLAR","ICP","FIL","VET","EOS","XTZ","ALGO",
@@ -1295,6 +1314,8 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     if tier2 in ("gold","diamond","admin") and symbol.upper() in _ALWAYS_ALLOWED:
         pass  # مسموح
+    elif _is_perp_sig and tier2 in ("diamond","admin"):
+        pass  # تطوير #209: أسهم مُرمَّزة مسموحة لماسي+
     elif not is_symbol_allowed(symbol, tier2):
         await update.message.reply_text(
             (
@@ -1311,8 +1332,9 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     try:
+        _ohlcv_fn = engine.data_layer.get_ohlcv_perp(symbol, 365) if _is_perp_sig else engine.data_layer.get_ohlcv(symbol, "1d", 365)
         candles, onchain, fear, news_raw, btc_dom, _sig_4h = await asyncio.gather(
-            engine.data_layer.get_ohlcv(symbol, "1d", 365),
+            _ohlcv_fn,
             engine.data_layer.get_onchain(),
             engine.data_layer.get_fear_greed(),
             engine.data_layer.get_news(currencies=symbol),
@@ -1435,6 +1457,9 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _pair_addon = await build_pair_addon_lines(resolution, engine.data_layer)
         if _pair_addon:
             full_text += "\n" + "\n".join(_pair_addon)
+        # تطوير #209: ملاحظة Perp للأسهم المُرمَّزة
+        if _is_perp_sig:
+            full_text += f"\n\n📌 *{symbol}* — سهم مُرمَّز (Perpetual) على OKX"
         await msg.edit_text(full_text, parse_mode=ParseMode.MARKDOWN)
 
     except Exception as e:
@@ -1705,10 +1730,20 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
     resolution = await resolve_symbol(raw_arg, tier_an, engine.data_layer)
     symbol     = resolution.base
 
+    # تطوير #209: اكتشاف تلقائي للأسهم المُرمَّزة (ماسي+ فقط)
+    _is_perp_an = False
+    if tier_an in ("diamond", "admin"):
+        try:
+            _is_perp_an = await engine.data_layer.is_tokenized_stock(symbol)
+        except Exception:
+            _is_perp_an = False
+
     # فحص الباقة للعملة المطلوبة
     _LARGE_CAPS = {"XLM","ICP","FIL","VET","EOS","XTZ","ALGO","HBAR","EGLD","WAVES","NEO","QTUM"}
     if tier_an in ("gold","diamond","admin") and symbol.upper() in _LARGE_CAPS:
         pass  # إصلاح #1020: عملات كبيرة مسموحة للذهبي+
+    elif _is_perp_an and tier_an in ("diamond","admin"):
+        pass  # تطوير #209: أسهم مُرمَّزة مسموحة لماسي+
     elif not is_symbol_allowed(symbol, tier_an):
         await update.message.reply_text(
             (
@@ -1733,15 +1768,26 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         # M#119: timeout صارم لمنع التجمد
         try:
-            price_d, candles, fear, btc_dom = await asyncio.wait_for(
-                asyncio.gather(
-                    engine.data_layer.get_price(symbol),
-                    engine.data_layer.get_ohlcv(symbol, "1d", 365),
-                    engine.data_layer.get_fear_greed(),
-                    engine.data_layer.get_btc_dominance(),
-                    return_exceptions=True
-                ), timeout=30.0
-            )
+            if _is_perp_an:
+                price_d, candles, fear, btc_dom = await asyncio.wait_for(
+                    asyncio.gather(
+                        engine.data_layer.get_price_perp(symbol),
+                        engine.data_layer.get_ohlcv_perp(symbol, 365),
+                        engine.data_layer.get_fear_greed(),
+                        engine.data_layer.get_btc_dominance(),
+                        return_exceptions=True
+                    ), timeout=30.0
+                )
+            else:
+                price_d, candles, fear, btc_dom = await asyncio.wait_for(
+                    asyncio.gather(
+                        engine.data_layer.get_price(symbol),
+                        engine.data_layer.get_ohlcv(symbol, "1d", 365),
+                        engine.data_layer.get_fear_greed(),
+                        engine.data_layer.get_btc_dominance(),
+                        return_exceptions=True
+                    ), timeout=30.0
+                )
         except asyncio.TimeoutError:
             await msg.edit_text(
                 f"⏱️ انتهت مهلة تحليل *{symbol}*\n\n"
@@ -2175,27 +2221,45 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     resolution = await resolve_symbol(raw_arg, tier_q, engine.data_layer)
     symbol  = resolution.base
 
-    # تطوير #188 (Phase 2.5): إن كان الزوج المطلوب متوفراً بالكامل
-    # (ماسي+ والزوج موجود على OKX) → الزوج هو الأساس (كما طلب رحال:
-    # "الزوج المطلوب يكون في الأساس وبعد ذلك يوفر البديل"). غير ذلك
-    # → USDT أساسي كما في Phase 2 (مع فقرة /upgrade أو "غير متوفر").
+    # تطوير #188 (Phase 2.5): الزوج المطلوب أساسي عند التوفر الكامل
     pair_primary = (resolution.is_pair_request and resolution.eligible_tier
                     and resolution.pair_available)
     quote = resolution.quote if pair_primary else "USDT"
     display_symbol = f"{symbol}/{quote}" if pair_primary else symbol
 
+    # تطوير #209: اكتشاف تلقائي للأسهم المُرمَّزة (ماسي+ فقط)
+    is_perp_stock = False
+    if not pair_primary and tier_q in ("diamond", "admin"):
+        try:
+            is_perp_stock = await engine.data_layer.is_tokenized_stock(symbol)
+        except Exception:
+            is_perp_stock = False
+    if is_perp_stock:
+        display_symbol = f"{symbol} (Perp)"
+
     try:
         # M#119: timeout صارم لمنع التجمد
         try:
-            price_d, candles, fear, btc_dom = await asyncio.wait_for(
-                asyncio.gather(
-                    engine.data_layer.get_price(symbol, quote),
-                    engine.data_layer.get_ohlcv(symbol, "1d", 250, quote),
-                    engine.data_layer.get_fear_greed(),
-                    engine.data_layer.get_btc_dominance(),
-                    return_exceptions=True
-                ), timeout=30.0
-            )
+            if is_perp_stock:
+                price_d, candles, fear, btc_dom = await asyncio.wait_for(
+                    asyncio.gather(
+                        engine.data_layer.get_price_perp(symbol),
+                        engine.data_layer.get_ohlcv_perp(symbol, 250),
+                        engine.data_layer.get_fear_greed(),
+                        engine.data_layer.get_btc_dominance(),
+                        return_exceptions=True
+                    ), timeout=30.0
+                )
+            else:
+                price_d, candles, fear, btc_dom = await asyncio.wait_for(
+                    asyncio.gather(
+                        engine.data_layer.get_price(symbol, quote),
+                        engine.data_layer.get_ohlcv(symbol, "1d", 250, quote),
+                        engine.data_layer.get_fear_greed(),
+                        engine.data_layer.get_btc_dominance(),
+                        return_exceptions=True
+                    ), timeout=30.0
+                )
         except asyncio.TimeoutError:
             await msg.edit_text(
                 f"⏱️ انتهت مهلة تحليل *{display_symbol}*\n\n"
@@ -2212,7 +2276,10 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(candles) < 10:
             logger.info(f"analyze: retry OHLCV for {symbol}")
             await asyncio.sleep(1)
-            retry_c = await engine.data_layer.get_ohlcv(symbol, "1d", 60, quote)
+            if is_perp_stock:
+                retry_c = await engine.data_layer.get_ohlcv_perp(symbol, 60)
+            else:
+                retry_c = await engine.data_layer.get_ohlcv(symbol, "1d", 60, quote)
             if isinstance(retry_c, list) and len(retry_c) >= 10:
                 candles = retry_c
 

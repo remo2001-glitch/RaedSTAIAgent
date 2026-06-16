@@ -478,6 +478,75 @@ async def cmd_live(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ════════════════════════════════════════════════════════════════
 @require_tier("execute")
 
+async def callback_execlevg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """تطوير #209: معالجة اختيار مضاعف الرافعة المالية (موحَّد لكل الأصول).
+    صيغة: execlevg_{leverage}_{symbol}_{direction}_{size}_{lp}_{sl}_{tp}
+    بعد الاختيار → عرض تأكيد Real/Virtual مع الرافعة المختارة."""
+    query = update.callback_query
+    await query.answer()
+    data  = query.data
+    parts = data.split("_")
+    if len(parts) < 5:
+        await query.edit_message_text("❌ بيانات غير صالحة"); return
+
+    try:
+        leverage  = int(parts[1])          # 1, 2, 3, 5, 10
+    except (ValueError, IndexError):
+        leverage  = 1  # افتراضي آمن
+
+    symbol    = parts[2].upper()
+    direction = parts[3]
+    try:
+        size_usd = float(parts[4])
+        lp       = float(parts[5]) if len(parts) > 5 else 0.0
+        sl_cb    = float(parts[6]) if len(parts) > 6 else 5.0
+        tp_cb    = float(parts[7]) if len(parts) > 7 else 6.0
+    except (ValueError, IndexError):
+        size_usd = 500.0; lp = sl_cb = 0.0; tp_cb = 6.0
+
+    def _mkb(mode):
+        return (f"execmode_{mode}_{symbol}_{direction}"
+                f"_{size_usd:.2f}_{lp:.4f}"
+                f"_{sl_cb:.2f}_{tp_cb:.2f}"
+                f"_lev{leverage}")
+
+    engine = context.bot_data.get("raed_engine")
+    _ex_name = "منصتك"
+    if engine:
+        try:
+            _inf = engine.get_user_exchange(update.effective_user.id)
+            _ex_name = (_inf.get("name","").upper() if _inf else "منصتك") or "منصتك"
+        except Exception:
+            pass
+
+    _lev_warn = {
+        1:  "🛡️ أكثر أماناً",
+        2:  "⚡ محافظ",
+        3:  "⚡ معتدل — راقب المخاطرة",
+        5:  "🔥 مرتفع — استخدم وقف الخسارة",
+        10: "🚨 عالي جداً — خطر تصفية الحساب",
+    }.get(leverage, f"{leverage}x — تحقق من المخاطرة")
+
+    kb_mode = InlineKeyboardMarkup([[
+        InlineKeyboardButton(
+            f"✅ حقيقي ({_ex_name})",
+            callback_data=_mkb("real")),
+        InlineKeyboardButton(
+            "🎮 افتراضي",
+            callback_data=_mkb("virtual")),
+    ]])
+    _dir_ar = "🟢 شراء" if direction in ("buy","long") else "🔴 بيع"
+    await query.edit_message_text(
+        f"⚡ *تأكيد الصفقة النهائي*\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🪙 {symbol} | {_dir_ar}\n"
+        f"💰 الحجم: ${size_usd:,.2f}\n"
+        f"⚙️ الرافعة: {leverage}x — {_lev_warn}\n\n"
+        f"اختر نوع التنفيذ:",
+        parse_mode="Markdown",
+        reply_markup=kb_mode)
+
+
 async def callback_execmode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """إصلاح #1046: معالجة اختيار المستخدم real/virtual مع sl/tp."""
     query = update.callback_query
@@ -500,8 +569,12 @@ async def callback_execmode(update: Update, context: ContextTypes.DEFAULT_TYPE):
         size_usd = float(parts[4])
         lp, sl_cb, tp_cb = 0.0, 5.0, 6.0
 
-    # تطبيع direction
-    dir_norm = "buy" if direction in ("buy","long") else "sell"
+    # تطبيع direction (استخراج الرافعة يأتي بعد هذا السطر)
+    leverage_cb = 1
+    for p in parts:
+        if p.startswith("lev") and len(p)>3 and p[3:].isdigit():
+            leverage_cb = int(p[3:])
+    context.user_data["_exec_leverage"] = leverage_cb
 
     # بناء context.args
     context.args = [symbol, dir_norm, str(size_usd), mode]
@@ -711,49 +784,38 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     _tp_r = float(_rk_q.take_profit_pct or 6.0)
             except Exception:
                 pass
-        kb_mode = InlineKeyboardMarkup([[
-            InlineKeyboardButton(
-                f"✅ تداول حقيقي ({ex_name_q})",
-                callback_data=(f"execmode_real_{symbol}_{direction}"
-                               f"_{size_usd:.2f}_{limit_price:.4f}"
-                               f"_{_sl_r:.2f}_{_tp_r:.2f}")),
-            InlineKeyboardButton(
-                "🎮 افتراضي",
-                callback_data=(f"execmode_virtual_{symbol}_{direction}"
-                               f"_{size_usd:.2f}_{limit_price:.4f}"
-                               f"_{_sl_r:.2f}_{_tp_r:.2f}")),
-        ]])
-        # إصلاح #1045/#1051: تفاصيل كاملة باستخدام _price_q و_sl_r/_tp_r
-        _dir_ar   = "🟢 شراء" if direction in ("buy","long") else "🔴 بيع"
-        _ord_ar   = (f"⏳ Limit @ ${limit_price:,.4f}" if limit_price > 0
-                     else "⚡ Market (تنفيذ فوري)")
-        # حساب SL/TP بالسعر الحقيقي
-        _is_buy_q = direction in ("buy","long")
-        _sl_price_q = (_price_q * (1 - _sl_r/100) if _is_buy_q
-                       else _price_q * (1 + _sl_r/100)) if _price_q > 0 else 0
-        _tp_price_q = (_price_q * (1 + _tp_r/100) if _is_buy_q
-                       else _price_q * (1 - _tp_r/100)) if _price_q > 0 else 0
-        _rr_q = _tp_r / max(_sl_r, 0.1)
+        # تطوير #209: سؤال الرافعة المالية (موحَّد لكل الأصول — عملات + أسهم مُرمَّزة)
+        # الرافعة الافتراضية دائماً 1x حماية لجميع المستخدمين
+        def _lkb(levg):
+            return (f"execlevg_{levg}_{symbol}_{direction}"
+                    f"_{size_usd:.2f}_{limit_price:.4f}"
+                    f"_{_sl_r:.2f}_{_tp_r:.2f}")
+        kb_leverage = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🛡️ 1x (افتراضي آمن)", callback_data=_lkb(1))],
+            [
+                InlineKeyboardButton("2x",  callback_data=_lkb(2)),
+                InlineKeyboardButton("3x",  callback_data=_lkb(3)),
+                InlineKeyboardButton("5x",  callback_data=_lkb(5)),
+                InlineKeyboardButton("10x", callback_data=_lkb(10)),
+            ],
+        ])
+        _dir_ar    = "🟢 شراء" if direction in ("buy","long") else "🔴 بيع"
+        _ord_ar    = (f"⏳ Limit @ ${limit_price:,.4f}" if limit_price > 0
+                      else "⚡ Market (تنفيذ فوري)")
         _price_str = f"${_price_q:,.4f}" if _price_q > 0 else "غير متاح"
-        _sl_str    = (f"${_sl_price_q:,.4f} ({_sl_r:.1f}%-)"
-                      if _sl_price_q > 0 else f"~{_sl_r:.1f}%")
-        _tp_str    = (f"${_tp_price_q:,.4f} ({_tp_r:.1f}%+)"
-                      if _tp_price_q > 0 else f"~{_tp_r:.1f}%")
-        await _reply(update, 
+        await _reply(update,
             f"⚡ *تأكيد الصفقة*\n"
             f"━━━━━━━━━━━━━━━━━━\n"
             f"🪙 {symbol} | {_dir_ar}\n"
             f"💰 الحجم: ${size_usd:,.2f}\n"
             f"📈 نوع الأمر: {_ord_ar}\n"
             f"💵 السعر الحالي: {_price_str}\n"
-            f"🛑 وقف الخسارة: {_sl_str}\n"
-            f"🎯 هدف الربح: {_tp_str}\n"
-            f"📊 R/R: 1:{_rr_q:.1f}\n"
             f"🏦 المنصة: {ex_name_q}\n\n"
-            f"اختر نوع التنفيذ:",
+            f"⚙️ *كم مضاعف الرافعة المتاح لديك على المنصة؟*\n"
+            f"_(الافتراضي 1x حماية لك — اختر بوعي)_",
             parse_mode="Markdown",
-            reply_markup=kb_mode)
-        return  # ننتظر callback
+            reply_markup=kb_leverage)
+        return  # ننتظر callback اختيار الرافعة
 
     # إذا اختار virtual أو لا يوجد ربط → محفظة افتراضية
     if force_mode == "virtual" or not has_live:
@@ -2692,6 +2754,9 @@ def register(app):
     app.add_handler(CommandHandler("premium",       cmd_premium))
     app.add_handler(CallbackQueryHandler(
         handle_trade_callback, pattern=r"^(confirm|cancel)_"))
+    # تطوير #209: اختيار الرافعة المالية (قبل execmode)
+    app.add_handler(CallbackQueryHandler(
+        callback_execlevg, pattern=r"^execlevg_"))
     # execmode: اختيار حقيقي/افتراضي
     app.add_handler(CallbackQueryHandler(
         callback_execmode, pattern=r"^execmode_"))
