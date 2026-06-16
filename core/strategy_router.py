@@ -74,7 +74,7 @@ def classify_trade_scenario(
     # السيناريو 1: استمرار الهبوط (الأكثر احتمالاً)
     if rsi > 40 and not ema_align:
         return (TradeScenario.TREND_CONTINUATION,
-                0.80, "📉 الاتجاه هابط — انتظر أو Short فقط")
+                0.80, "📉 الاتجاه هابط — احتفظ بالسيولة")
 
     # السيناريو 2: ارتداد مؤقت (Counter-trend bounce)
     # شروط: RSI extreme + Fear extreme + Bollinger lower band
