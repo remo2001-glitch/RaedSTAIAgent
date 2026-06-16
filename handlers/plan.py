@@ -38,6 +38,37 @@ DEFAULT_SYMBOLS = ["BTC", "ETH", "BNB", "SOL"]
 def _eng(context): return context.bot_data.get("raed_engine")
 
 
+async def callback_planmkt(update, context):
+    """تطوير #223: معالجة اختيار Spot/Futures للخطة الأسبوعية/الشهرية.
+    صيغة: planmkt_{weekly|month}_{spot|futures}_{args}"""
+    from telegram.ext import ContextTypes as _CT
+    query = update.callback_query
+    await query.answer()
+    parts = query.data.split("_", 3)
+    if len(parts) < 3:
+        await query.edit_message_text("❌ بيانات غير صالحة"); return
+
+    plan_type = parts[1]   # week | month
+    mkttype   = parts[2]   # spot | futures
+    args_str  = parts[3].strip() if len(parts) > 3 else ""
+
+    context.user_data["_mkttype_plan"] = mkttype
+    if args_str:
+        context.args = args_str.split()
+    else:
+        context.args = []
+
+    label = "⚡ Spot" if mkttype == "spot" else "📈 Futures + الأسهم"
+    await query.edit_message_text(
+        f"{label} — جاري بناء الخطة {'الأسبوعية' if plan_type=='week' else 'الشهرية'}...",
+        parse_mode="Markdown")
+
+    if plan_type == "week":
+        await cmd_plan_week(update, context)
+    else:
+        await cmd_plan_month(update, context)
+
+
 async def _resolve_custom_symbols(raw_symbols, tier, data_layer):
     """تطوير #188 (Phase 2): يُطبِّق resolve_symbol على كل رمز مُدخَل من
     المستخدم في /weekly و/monthly. التحليل دائماً مقابل USDT
@@ -326,6 +357,24 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "⏳ جاري بناء الخطة الشهرية بالفعل — يُرجى الانتظار")
         return
+
+    # تطوير #223: سؤال Spot/Futures للماسي+ فقط في الخطة الشهرية
+    _uid_pm_pre = update.effective_user.id if update.effective_user else 0
+    _tier_pm_pre = _sm.get_tier(_uid_pm_pre)
+    _mkttype_pm  = context.user_data.pop("_mkttype_plan", None)
+    if _mkttype_pm is None and _tier_pm_pre in ("diamond", "admin"):
+        _args_str = " ".join(context.args or [])
+        kb_pm = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⚡ Spot (كل المستخدمين)", callback_data=f"planmkt_month_spot_{_args_str}"),
+             InlineKeyboardButton("📈 Futures + أسهم (ماسي+)", callback_data=f"planmkt_month_futures_{_args_str}")],
+        ])
+        await update.message.reply_text(
+            "📅 *الخطة الشهرية — اختر نوع السوق:*\n"
+            "_(Spot لجميع الأصول — Futures + الأسهم المُرمَّزة للماسي+)_",
+            parse_mode="Markdown", reply_markup=kb_pm)
+        return
+    _use_futures_pm = (_mkttype_pm == "futures")
+
     context.user_data["planmonth_running"] = True
 
     args      = context.args or []
@@ -776,6 +825,23 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine = _eng(context)
     if not engine:
         await update.message.reply_text("⚠️ النظام لم يُهيَّأ بعد"); return
+
+    # تطوير #223: سؤال Spot/Futures للماسي+ فقط في الخطة الأسبوعية
+    _uid_pw_pre  = update.effective_user.id if update.effective_user else 0
+    _tier_pw_pre = _sm.get_tier(_uid_pw_pre)
+    _mkttype_pw  = context.user_data.pop("_mkttype_plan", None)
+    if _mkttype_pw is None and _tier_pw_pre in ("diamond", "admin"):
+        _args_str = " ".join(context.args or [])
+        kb_pw = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⚡ Spot (كل المستخدمين)", callback_data=f"planmkt_week_spot_{_args_str}"),
+             InlineKeyboardButton("📈 Futures + أسهم (ماسي+)", callback_data=f"planmkt_week_futures_{_args_str}")],
+        ])
+        await update.message.reply_text(
+            "📅 *الخطة الأسبوعية — اختر نوع السوق:*\n"
+            "_(Spot لجميع الأصول — Futures + الأسهم المُرمَّزة للماسي+)_",
+            parse_mode="Markdown", reply_markup=kb_pw)
+        return
+    _use_futures_pw = (_mkttype_pw == "futures")
 
     args    = context.args or []
     # إصلاح #971: تعريف مسبق لجميع المتغيرات

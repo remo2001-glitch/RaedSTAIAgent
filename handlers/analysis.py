@@ -94,6 +94,90 @@ def _fmt_price_pair(a: float, b: float, quote: str = "USDT") -> tuple:
     return f"{a:,.{dec}f} {quote}", f"{b:,.{dec}f} {quote}"
 
 
+# ════════════════════════════════════════════════════════════════
+# #221 — helper: سؤال نوع السوق (Spot / Futures) عند التحليل
+# ════════════════════════════════════════════════════════════════
+_GOLD_TIERS = ("gold", "diamond", "admin")
+
+async def _ask_market_type(update, context, cmd: str, symbol: str, tier: str) -> bool:
+    """تطوير #221: يعرض سؤال Spot/Futures لكل المستخدمين.
+    - ذهبي+: يختار فعلاً (Spot أو Futures).
+    - أقل من ذهبي: يرى السؤال ← إذا اختار Futures → رسالة ترقية (تحفيز).
+    يُعيد True إذا أُرسِل السؤال (الأمر يجب أن يُعيد return وينتظر callback).
+    يُعيد False إذا اختار المستخدم Spot تلقائياً (لا سؤال، تابع مباشرة)."""
+    # بناء callback_data يحمل الأمر + الرمز
+    def _cb(mtype):
+        return f"mkttype_{cmd}_{mtype}_{symbol}"
+
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("⚡ سوق Spot", callback_data=_cb("spot")),
+         InlineKeyboardButton("📈 سوق Futures", callback_data=_cb("futures"))],
+    ])
+    tier_note = "" if tier in _GOLD_TIERS else "\n_(Futures متاح للذهبي وأعلى — /upgrade)_"
+    await update.message.reply_text(
+        f"📊 تحليل *{symbol}* — اختر نوع السوق:{tier_note}",
+        parse_mode="Markdown", reply_markup=kb)
+    return True
+
+
+async def callback_market_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """تطوير #221: معالجة اختيار Spot/Futures قبل التحليل.
+    صيغة: mkttype_{cmd}_{mtype}_{symbol}
+    cmd: signal | analyze | quicksignal
+    mtype: spot | futures"""
+    query = update.callback_query
+    await query.answer()
+    parts = query.data.split("_")
+    if len(parts) < 4:
+        await query.edit_message_text("❌ بيانات غير صالحة"); return
+
+    cmd    = parts[1]   # signal | analyze | quicksignal
+    mtype  = parts[2]   # spot | futures
+    symbol = parts[3].upper()
+
+    user_id = update.effective_user.id
+    tier    = _sm.get_tier(user_id)
+
+    if mtype == "futures" and tier not in _GOLD_TIERS:
+        await query.edit_message_text(
+            f"⬆️ *تحليل Futures — للذهبي وأعلى*\n\n"
+            f"للترقية والحصول على:\n"
+            f"• تحليل سوق Futures المنفصل\n"
+            f"• بيانات Funding Rate / OI / Liquidations\n"
+            f"• تخطيط أسبوعي/شهري Futures (ماسي+)\n\n"
+            f"⬆️ /upgrade",
+            parse_mode="Markdown")
+        return
+
+    # تخزين اختيار نوع السوق في user_data ليستخدمه الأمر
+    context.user_data["_mkttype"] = mtype
+    context.user_data["_mkttype_symbol"] = symbol
+
+    label = "⚡ Spot" if mtype == "spot" else "📈 Futures"
+    await query.edit_message_text(
+        f"{label} — جاري تحليل *{symbol}*...",
+        parse_mode="Markdown")
+
+    # استدعاء الأمر المناسب مع symbol محدد
+    context.args = [symbol]
+    engine = context.bot_data.get("raed_engine")
+    if not engine:
+        await query.message.reply_text("⚠️ النظام لم يُهيَّأ بعد"); return
+
+    try:
+        if cmd == "signal":
+            await cmd_signal(update, context)
+        elif cmd == "analyze":
+            await cmd_analyze(update, context)
+        elif cmd == "quicksignal":
+            await cmd_quicksignal(update, context)
+    except Exception as e:
+        logger.error(f"callback_market_type→{cmd}: {e}")
+        await query.message.reply_text(f"❌ خطأ في التحليل. حاول لاحقاً")
+
+
+
+
 def _calc_fibonacci(candles: list, lookback: int = 60) -> dict:
     """
     إصلاح #326: Fibonacci dynamic يضمن أن السعر بين swing_low و swing_high.
@@ -1291,6 +1375,18 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args    = context.args or ["BTC"]
     raw_arg = args[0].upper()
 
+    # تطوير #221: سؤال نوع السوق (Spot/Futures) — لجميع المستخدمين
+    # (يُتجاوَز إذا جاء الطلب من callback_market_type الذي يحدد النوع مسبقاً)
+    _mkttype = context.user_data.pop("_mkttype", None)
+    if _mkttype is None:
+        tier_pre = _sm.get_tier(user_id)
+        sent = await _ask_market_type(update, context, "signal", raw_arg, tier_pre)
+        if sent:
+            return  # ننتظر اختيار المستخدم عبر callback_market_type
+
+    # نوع السوق: "futures" أو "spot" (الافتراضي)
+    _use_futures = (_mkttype == "futures")
+
     # تطوير #188 (Phase 2): دعم أزواج BTC/ETH — فقرة إضافية في نهاية
     # التقرير إن كانت الباقة ماسي+ والزوج متوفر (build_pair_addon_lines)
     user_id2   = update.effective_user.id
@@ -1732,6 +1828,15 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args   = context.args or []
     raw_arg = args[0].upper()
 
+    # تطوير #221: سؤال نوع السوق (Spot/Futures) إن لم يُحدَّد مسبقاً
+    _mkttype_an = context.user_data.pop("_mkttype", None)
+    if _mkttype_an is None:
+        tier_pre_an = _sm.get_tier(user_id)
+        sent_an = await _ask_market_type(update, context, "analyze", raw_arg, tier_pre_an)
+        if sent_an:
+            return
+    _use_futures_an = (_mkttype_an == "futures")
+
     # تطوير #188 (Phase 2): دعم أزواج BTC/ETH — فقرة إضافية في نهاية
     # التقرير إن كانت الباقة ماسي+ والزوج متوفر (build_pair_addon_lines)
     tier_an    = _sm.get_tier(user_id)
@@ -2161,12 +2266,37 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 symbol = w
                 break
 
+        # تطوير #222: اكتشاف تلقائي لنوع السوق من الصورة/الـcaption
+        # نبحث عن علامات Futures في نص الـcaption أولاً
+        _futures_keywords = (
+            "PERP", "SWAP", "FUTURES", "PERPETUAL", "USDT-SWAP",
+            "MARK PRICE", "FUNDING RATE", "OVERNIGHT", "-PERP", "USDT-M",
+            "COIN-M", "DELIVERY", "QUARTERLY"
+        )
+        _caption_upper = caption.upper()
+        _chart_is_futures = any(kw in _caption_upper for kw in _futures_keywords)
+        # "Perp" tag في اسم الرمز نفسه (مثل MSTRUSDT Perp)
+        if not _chart_is_futures and symbol:
+            _chart_is_futures = any(kw in symbol.upper() for kw in ("PERP","SWAP","FUT"))
+
         analysis = await engine.news_engine.analyze_chart_image(
             image_data=bytes(image_bytes), symbol=symbol)
 
+        # تطوير #222: إذا لم يُكتشَف النوع من الـcaption، نفحص نص التحليل نفسه
+        if not _chart_is_futures:
+            _analysis_upper = (analysis or "").upper()
+            _chart_is_futures = any(kw in _analysis_upper
+                                     for kw in ("PERP", "SWAP", "FUTURES", "PERPETUAL",
+                                                 "MARK PRICE", "FUNDING RATE", "OVERNIGHT"))
+
+        _mkt_label = "Futures/Perp" if _chart_is_futures else "Spot"
         sym_label = f" — {symbol}" if symbol else ""
         # إضافة header بمعلومات العملة (M#54)
-        header_lines = [f"📊 *تحليل الشارت البصري{sym_label}*", "━━━━━━━━━━━━━━━━━━"]
+        header_lines = [
+            f"📊 *تحليل الشارت البصري{sym_label}*",
+            f"🏪 نوع السوق: {'📈 Futures/Perp' if _chart_is_futures else '⚡ Spot'}",
+            "━━━━━━━━━━━━━━━━━━",
+        ]
         if symbol:
             try:
                 eng3 = context.bot_data.get("raed_engine")
@@ -2222,6 +2352,14 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     raw_arg   = args[0].upper() if args else "BTC"
     user_id_q = update.effective_user.id if update.effective_user else 0
     tier_q    = _sm.get_tier(user_id_q)
+
+    # تطوير #221: سؤال نوع السوق (Spot/Futures) إن لم يُحدَّد مسبقاً
+    _mkttype_qs = context.user_data.pop("_mkttype", None)
+    if _mkttype_qs is None:
+        sent_qs = await _ask_market_type(update, context, "quicksignal", raw_arg, tier_q)
+        if sent_qs:
+            return
+    _use_futures_qs = (_mkttype_qs == "futures")
 
     msg    = await update.message.reply_text(
         f"🔍 جاري التحليل الأولي لـ {raw_arg}...")

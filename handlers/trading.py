@@ -2830,6 +2830,14 @@ def register(app):
     # إصلاح #219: اختيار نوع التنفيذ (Spot/Futures) — يسبق سؤال الرافعة
     app.add_handler(CallbackQueryHandler(
         callback_exectype, pattern=r"^exectype_"))
+    # تطوير #221: اختيار نوع السوق (Spot/Futures) عند التحليل
+    from handlers.analysis import callback_market_type
+    app.add_handler(CallbackQueryHandler(
+        callback_market_type, pattern=r"^mkttype_"))
+    # تطوير #223: اختيار Spot/Futures للخطة الأسبوعية/الشهرية (ماسي+)
+    from handlers.plan import callback_planmkt
+    app.add_handler(CallbackQueryHandler(
+        callback_planmkt, pattern=r"^planmkt_"))
     # تطوير #209: اختيار الرافعة المالية (قبل execmode)
     app.add_handler(CallbackQueryHandler(
         callback_execlevg, pattern=r"^execlevg_"))
