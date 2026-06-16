@@ -34,6 +34,7 @@ CACHE_TTL = {
     "hist":    7200,  # ساعتان (كان ساعة)
     "bgeo":    43200, # 12 ساعة — BGeometrics (حد مجاني: 8/ساعة، 15/يوم؛ البيانات تُحدَّث يومياً)
     "pairchk": 3600,  # ساعة — توفر أزواج BTC/ETH على OKX (إصلاح/تطوير #188)
+    "perp":    60,    # دقيقة — أسعار الأصول المُرمَّزة (Perp) — تطوير #209
 }
 # كاش مشترك بين المستخدمين — طلب واحد يخدم الجميع
 _shared_price_cache: Dict[str, Dict] = {}
@@ -378,6 +379,56 @@ class DataLayer:
     # ═══════════════════════════════════════════════════════════
     # 1. السعر الحي — يُعيد Dict أو None (مع حماية في المستدعي)
     # ═══════════════════════════════════════════════════════════
+
+    async def get_price_perp(self, symbol: str) -> Optional[Dict]:
+        """تطوير #209: جلب سعر الأصول المُرمَّزة (ماسي+ فقط) من Perp.
+        OKX SWAP → Bitget Perp → MEXC Perp.
+        مفاتيح كاش منفصلة ("perp:...") لتجنُّب تعارض مع SPOT."""
+        key = f"perp:{symbol.upper()}"
+        if cached := _cached(key, "perp"):
+            return cached
+        for fn in (self._price_okx_perp, self._price_bitget_perp, self._price_mexc_perp):
+            try:
+                result = await fn(symbol)
+                if result and result.get("price", 0) > 0:
+                    _store(key, result, "perp")
+                    return result
+            except Exception:
+                continue
+        logger.warning(f"get_price_perp: لا بيانات لـ {symbol} من أي منصة Perp")
+        return None
+
+    async def get_ohlcv_perp(self, symbol: str, days: int = 250) -> list:
+        """تطوير #209: شموع OHLCV للأصول المُرمَّزة — OKX SWAP أولاً."""
+        key = f"perp_ohlcv:{symbol.upper()}:{days}"
+        if cached := _cached(key, "ohlcv"):
+            return cached
+        candles = await self._hist_okx_perp(symbol, days)
+        if len(candles) >= 10:
+            _store(key, candles, "ohlcv")
+            return candles
+        logger.warning(f"get_ohlcv_perp: لا شموع لـ {symbol}")
+        return []
+
+    async def is_tokenized_stock(self, symbol: str) -> bool:
+        """تطوير #209: يكتشف تلقائياً إن كان الرمز أصلاً مُرمَّزاً
+        (فشل SPOT على OKX + نجاح Perp) — مخزَّن كاش لساعة."""
+        symbol = symbol.upper()
+        key = f"isstock:{symbol}"
+        cached = _cached(key, "pairchk")
+        if cached is not None:
+            return cached
+        # أولاً: هل موجود كـSPOT؟
+        spot = await self._price_okx(symbol)
+        if spot and spot.get("price", 0) > 0:
+            _store(key, False, "pairchk")
+            return False
+        # ثانياً: هل موجود كـPerp؟
+        perp = await self._price_okx_perp(symbol)
+        is_stock = bool(perp and perp.get("price", 0) > 0)
+        _store(key, is_stock, "pairchk")
+        return is_stock
+
     async def get_price(self, symbol: str, quote: str = "USDT") -> Optional[Dict]:
         symbol = _clean_symbol(symbol)   # BTCUSDT → BTC (نظام-واسع)
         quote  = quote.upper()
@@ -518,11 +569,6 @@ class DataLayer:
                     # إصلاح #153/#185/#207: لأزواج SPOT، volCcy24h من OKX
                     # هي الحجم بعملة التسعير (USDT) مباشرة، وvol24h هي
                     # الحجم بالعملة الأساسية (تحتاج ×price لتحويلها لـUSDT).
-                    # (التعليق القديم كان معكوساً، فكانت volCcy24h —وهي
-                    # بالدولار فعلاً— تُضرَب بالسعر مرة إضافية فتُضخَّم
-                    # بمعامل=السعر: ETH أظهر 276.6B$ بدل ~$160M، وSHIB
-                    # أظهر عدد التوكنات الخام كـ"$"). تحقَّق التصحيح من
-                    # مطابقة مثال OKX التوثيقي لـBTC-USDT (فرق 0.34%).
                     "volume_24h": max(
                         float(ticker.get("volCcy24h", 0) or 0),
                         float(ticker.get("vol24h", 0) or 0) * price
@@ -534,6 +580,122 @@ class DataLayer:
         except Exception as e:
             logger.debug(f"_price_okx ({symbol}): {e}")
         return None
+
+    async def _price_okx_perp(self, symbol: str) -> Optional[Dict]:
+        """تطوير #209: جلب سعر الأصول المُرمَّزة (MSTR,TSLA,NVDA...)
+        من OKX SWAP (Perp) — المصدر الوحيد المتاح لهذه الأصول على OKX."""
+        try:
+            inst_id = f"{symbol.upper()}-USDT-SWAP"
+            data = await _fetch(
+                self.session,
+                f"https://www.okx.com/api/v5/market/ticker?instId={inst_id}",
+                headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+                retries=2,
+            )
+            if isinstance(data, dict) and data.get("data"):
+                ticker = data["data"][0]
+                price  = float(ticker.get("last", 0))
+                if price <= 0:
+                    return None
+                open24 = float(ticker.get("open24h", price) or price)
+                change = ((price - open24) / open24 * 100) if open24 > 0 else 0
+                # لـSWAP: volCcy24h = حجم بالعملة الأساسية (ليس quote)
+                # vol24h = حجم بعدد العقود — نحوِّل vol24h×price للدولار
+                return {
+                    "symbol":                      symbol.upper(),
+                    "price":                       price,
+                    "change_24h":                  round(change, 4),
+                    "price_change_percentage_24h": round(change, 4),
+                    "volume_24h":                  float(ticker.get("volCcy24h", 0) or 0) * price,
+                    "high_24h":                    float(ticker.get("high24h", 0) or 0),
+                    "low_24h":                     float(ticker.get("low24h", 0) or 0),
+                    "source":                      "okx_perp",
+                    "is_perp":                     True,
+                }
+        except Exception as e:
+            logger.debug(f"_price_okx_perp ({symbol}): {e}")
+        return None
+
+    async def _price_bitget_perp(self, symbol: str) -> Optional[Dict]:
+        """تطوير #209: Bitget Perp fallback للأصول المُرمَّزة."""
+        try:
+            url = f"https://api.bitget.com/api/mix/v1/market/ticker?symbol={symbol.upper()}USDT_UMCBL"
+            data = await _fetch(self.session, url,
+                                headers={"User-Agent": "Mozilla/5.0"}, retries=1)
+            if isinstance(data, dict) and data.get("data"):
+                d = data["data"]
+                price = float(d.get("last", 0) or 0)
+                if price <= 0:
+                    return None
+                open24 = float(d.get("open24H", price) or price)
+                change = ((price - open24) / open24 * 100) if open24 > 0 else 0
+                return {
+                    "symbol":                      symbol.upper(),
+                    "price":                       price,
+                    "change_24h":                  round(change, 4),
+                    "price_change_percentage_24h": round(change, 4),
+                    "volume_24h":                  float(d.get("usdtVolume", 0) or 0),
+                    "high_24h":                    float(d.get("high24H", 0) or 0),
+                    "low_24h":                     float(d.get("low24H", 0) or 0),
+                    "source":                      "bitget_perp",
+                    "is_perp":                     True,
+                }
+        except Exception as e:
+            logger.debug(f"_price_bitget_perp ({symbol}): {e}")
+        return None
+
+    async def _price_mexc_perp(self, symbol: str) -> Optional[Dict]:
+        """تطوير #209: MEXC Perp fallback للأصول المُرمَّزة."""
+        try:
+            url = f"https://contract.mexc.com/api/v1/contract/ticker?symbol={symbol.upper()}_USDT"
+            data = await _fetch(self.session, url,
+                                headers={"User-Agent": "Mozilla/5.0"}, retries=1)
+            if isinstance(data, dict) and data.get("data"):
+                d = data["data"]
+                price = float(d.get("lastPrice", 0) or 0)
+                if price <= 0:
+                    return None
+                open24 = float(d.get("riseFallRate", 0) or 0)
+                return {
+                    "symbol":                      symbol.upper(),
+                    "price":                       price,
+                    "change_24h":                  round(open24 * 100, 4),
+                    "price_change_percentage_24h": round(open24 * 100, 4),
+                    "volume_24h":                  float(d.get("amount24", 0) or 0),
+                    "high_24h":                    float(d.get("high24Price", 0) or 0),
+                    "low_24h":                     float(d.get("low24Price", 0) or 0),
+                    "source":                      "mexc_perp",
+                    "is_perp":                     True,
+                }
+        except Exception as e:
+            logger.debug(f"_price_mexc_perp ({symbol}): {e}")
+        return None
+
+    async def _hist_okx_perp(self, symbol: str, days: int) -> list:
+        """تطوير #209: شموع OHLCV من OKX SWAP للأصول المُرمَّزة."""
+        try:
+            inst_id = f"{symbol.upper()}-USDT-SWAP"
+            limit   = min(days, 300)
+            data = await _fetch(
+                self.session,
+                f"https://www.okx.com/api/v5/market/candles?instId={inst_id}&bar=1D&limit={limit}",
+                headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+                retries=2,
+            )
+            if not (isinstance(data, dict) and data.get("data")):
+                return []
+            candles = []
+            for c in reversed(data["data"]):
+                try:
+                    o, h, l, cl = float(c[1]), float(c[2]), float(c[3]), float(c[4])
+                    v = float(c[7]) if len(c) > 7 else float(c[5])  # volCcy
+                    candles.append({"open":o,"high":h,"low":l,"close":cl,"volume":v*cl})
+                except Exception:
+                    continue
+            return candles
+        except Exception as e:
+            logger.debug(f"_hist_okx_perp ({symbol}): {e}")
+        return []
 
     async def check_okx_pair(self, base: str, quote: str) -> bool:
         """تطوير #188: يتحقق من توفر زوج تداول مباشر على OKX

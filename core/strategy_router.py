@@ -118,6 +118,7 @@ class SignalResult:
     macro_score:     float
     regime:          str = "unknown"
     trade_type:      str = "spot"  # "spot" | "futures_long" | "futures_short"
+    suggested_leverage: int = 1   # تطوير #209: الرافعة المقترحة (1=افتراضي آمن)
 
 
 class SignalLayer:
@@ -283,6 +284,9 @@ class SignalLayer:
             backtest_score=bt_score,
             macro_score=macro_score,
             regime=regime.regime.value,
+            suggested_leverage=_calc_suggested_leverage(
+                confidence, regime, tech, fear_greed
+            ),
         )
 
     def _technical_signal(self, candles: List[Dict]) -> Dict:
@@ -815,6 +819,44 @@ def _regime_confidence_adj(regime: Regime) -> float:
         Regime.DISTRIBUTION:    0.75,
         Regime.UNKNOWN:         0.7,
     }.get(regime, 0.9)
+
+
+def _calc_suggested_leverage(
+    confidence: float,
+    regime,
+    tech: dict,
+    fear_greed: int,
+) -> int:
+    """تطوير #209: حساب الرافعة المقترحة بشكل تلقائي وآمن.
+    الرافعة الافتراضية دائماً 1x حمايةً للمستخدم.
+
+    قواعد المنطق المالي (أولوية تنازلية):
+    1. ثقة < 40% → 1x دائماً (لا صفقة مناسبة أصلاً)
+    2. ADX > 30 (اتجاه قوي جداً = خطر دخول مرتفع) → 1x
+    3. Fear & Greed < 20 (خوف شديد) → 1x
+    4. سوق هابط قوي (BEAR_TREND) → 1x
+    5. ثقة 40–60% + سوق محايد/صاعد → 2x
+    6. ثقة 60–70% + سوق محايد/صاعد → 3x
+    7. ثقة ≥ 70% + سوق صاعد + ADX طبيعي → 5x (حد أقصى آمن)
+    """
+    adx = float(tech.get("adx", 0) or 0)
+
+    # قواعد الحماية المطلقة
+    if confidence < 0.40:                         return 1
+    if adx > 30:                                  return 1
+    if fear_greed < 20:                           return 1
+
+    _reg = getattr(regime, "regime", regime)
+    if hasattr(_reg, "value"):
+        _reg = _reg.value
+    is_bear = _reg in ("BEAR_TREND", "DISTRIBUTION")
+    is_bull = _reg in ("BULL_TREND", "ACCUMULATION")
+
+    if is_bear:                                   return 1
+    if confidence < 0.60:                         return 2
+    if confidence < 0.70:                         return 3
+    if is_bull:                                   return 5
+    return 3  # محايد مع ثقة عالية
 
 
 def check_macro_trend(candles: list) -> str:
