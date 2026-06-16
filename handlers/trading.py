@@ -478,6 +478,83 @@ async def cmd_live(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ════════════════════════════════════════════════════════════════
 @require_tier("execute")
 
+async def callback_exectype(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """إصلاح #219: معالجة اختيار نوع التنفيذ (Spot / Futures Long / Futures Short).
+    صيغة: exectype_{type}_{symbol}_{direction}_{size}_{lp}_{sl}_{tp}
+    - spot  → ينتقل مباشرة لاختيار حقيقي/افتراضي (بدون سؤال رافعة)
+    - flong/fshort → يعرض سؤال الرافعة أولاً"""
+    query = update.callback_query
+    await query.answer()
+    data  = query.data
+    parts = data.split("_")
+    if len(parts) < 5:
+        await query.edit_message_text("❌ بيانات غير صالحة"); return
+
+    etype     = parts[1]   # spot | flong | fshort
+    symbol    = parts[2].upper()
+    direction = parts[3]
+    try:
+        size_usd = float(parts[4])
+        lp       = float(parts[5]) if len(parts) > 5 else 0.0
+        sl_cb    = float(parts[6]) if len(parts) > 6 else 5.0
+        tp_cb    = float(parts[7]) if len(parts) > 7 else 6.0
+    except (ValueError, IndexError):
+        size_usd = 500.0; lp = sl_cb = 0.0; tp_cb = 6.0
+
+    if etype == "spot":
+        # Spot → مباشرة لاختيار حقيقي/افتراضي (بدون رافعة)
+        engine = context.bot_data.get("raed_engine")
+        _ex_name = "منصتك"
+        if engine:
+            try:
+                _inf = engine.get_user_exchange(update.effective_user.id)
+                _ex_name = (_inf.get("name","").upper() if _inf else "منصتك") or "منصتك"
+            except Exception:
+                pass
+
+        def _mkb_mode(mode):
+            return (f"execmode_{mode}_{symbol}_{direction}"
+                    f"_{size_usd:.2f}_{lp:.4f}_{sl_cb:.2f}_{tp_cb:.2f}_lev1")
+
+        kb_mode = InlineKeyboardMarkup([[
+            InlineKeyboardButton(f"✅ حقيقي ({_ex_name})", callback_data=_mkb_mode("real")),
+            InlineKeyboardButton("🎮 افتراضي", callback_data=_mkb_mode("virtual")),
+        ]])
+        _dir_ar = "🟢 شراء" if direction in ("buy","long") else "🔴 بيع"
+        await query.edit_message_text(
+            f"⚡ *Spot — {symbol} | {_dir_ar}*\n"
+            f"💰 الحجم: ${size_usd:,.2f}\n\n"
+            f"اختر نوع التنفيذ:",
+            parse_mode="Markdown", reply_markup=kb_mode)
+
+    else:
+        # Futures → سؤال الرافعة أولاً
+        fut_dir_ar = "📈 Futures Long (شراء)" if etype=="flong" else "📉 Futures Short (بيع)"
+        fut_dir_stored = "flong" if etype=="flong" else "fshort"
+
+        def _lkb(levg):
+            return (f"execlevg_{levg}_{symbol}_{direction}"
+                    f"_{size_usd:.2f}_{lp:.4f}"
+                    f"_{sl_cb:.2f}_{tp_cb:.2f}"
+                    f"_ft{fut_dir_stored}")
+
+        kb_leverage = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🛡️ 1x (افتراضي آمن)", callback_data=_lkb(1))],
+            [
+                InlineKeyboardButton("2x",  callback_data=_lkb(2)),
+                InlineKeyboardButton("3x",  callback_data=_lkb(3)),
+                InlineKeyboardButton("5x",  callback_data=_lkb(5)),
+                InlineKeyboardButton("10x", callback_data=_lkb(10)),
+            ],
+        ])
+        await query.edit_message_text(
+            f"⚙️ *{fut_dir_ar}*\n"
+            f"🪙 {symbol} | 💰 ${size_usd:,.2f}\n\n"
+            f"*كم مضاعف الرافعة المتاح لديك على المنصة؟*\n"
+            f"_(الافتراضي 1x حماية لك — اختر بوعي)_",
+            parse_mode="Markdown", reply_markup=kb_leverage)
+
+
 async def callback_execlevg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """تطوير #209: معالجة اختيار مضاعف الرافعة المالية (موحَّد لكل الأصول).
     صيغة: execlevg_{leverage}_{symbol}_{direction}_{size}_{lp}_{sl}_{tp}
@@ -784,19 +861,16 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     _tp_r = float(_rk_q.take_profit_pct or 6.0)
             except Exception:
                 pass
-        # تطوير #209: سؤال الرافعة المالية (موحَّد لكل الأصول — عملات + أسهم مُرمَّزة)
-        # الرافعة الافتراضية دائماً 1x حماية لجميع المستخدمين
-        def _lkb(levg):
-            return (f"execlevg_{levg}_{symbol}_{direction}"
+        # إصلاح #219: سؤال نوع التنفيذ أولاً (Spot أم Futures) — #220: توضيح Long/Short
+        def _mkb_type(etype):
+            return (f"exectype_{etype}_{symbol}_{direction}"
                     f"_{size_usd:.2f}_{limit_price:.4f}"
                     f"_{_sl_r:.2f}_{_tp_r:.2f}")
-        kb_leverage = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🛡️ 1x (افتراضي آمن)", callback_data=_lkb(1))],
+        kb_exectype = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⚡ Spot — تنفيذ عادي", callback_data=_mkb_type("spot"))],
             [
-                InlineKeyboardButton("2x",  callback_data=_lkb(2)),
-                InlineKeyboardButton("3x",  callback_data=_lkb(3)),
-                InlineKeyboardButton("5x",  callback_data=_lkb(5)),
-                InlineKeyboardButton("10x", callback_data=_lkb(10)),
+                InlineKeyboardButton("📈 Futures Long (شراء)", callback_data=_mkb_type("flong")),
+                InlineKeyboardButton("📉 Futures Short (بيع)", callback_data=_mkb_type("fshort")),
             ],
         ])
         _dir_ar    = "🟢 شراء" if direction in ("buy","long") else "🔴 بيع"
@@ -811,11 +885,10 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📈 نوع الأمر: {_ord_ar}\n"
             f"💵 السعر الحالي: {_price_str}\n"
             f"🏦 المنصة: {ex_name_q}\n\n"
-            f"⚙️ *كم مضاعف الرافعة المتاح لديك على المنصة؟*\n"
-            f"_(الافتراضي 1x حماية لك — اختر بوعي)_",
+            f"⚙️ *اختر نوع التنفيذ:*",
             parse_mode="Markdown",
-            reply_markup=kb_leverage)
-        return  # ننتظر callback اختيار الرافعة
+            reply_markup=kb_exectype)
+        return  # ننتظر callback اختيار نوع التنفيذ
 
     # إذا اختار virtual أو لا يوجد ربط → محفظة افتراضية
     if force_mode == "virtual" or not has_live:
@@ -2754,6 +2827,9 @@ def register(app):
     app.add_handler(CommandHandler("premium",       cmd_premium))
     app.add_handler(CallbackQueryHandler(
         handle_trade_callback, pattern=r"^(confirm|cancel)_"))
+    # إصلاح #219: اختيار نوع التنفيذ (Spot/Futures) — يسبق سؤال الرافعة
+    app.add_handler(CallbackQueryHandler(
+        callback_exectype, pattern=r"^exectype_"))
     # تطوير #209: اختيار الرافعة المالية (قبل execmode)
     app.add_handler(CallbackQueryHandler(
         callback_execlevg, pattern=r"^execlevg_"))

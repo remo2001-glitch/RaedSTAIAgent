@@ -1432,14 +1432,21 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parts.append(_clean_md(pro_block))
         if fib_lines:
             parts.append(_clean_md("\n".join(fib_lines)))
-        # إشارة Futures إذا مؤهل (ذهبي+ ولديه ربط فعال)
+        # إصلاح #219/#220: إشارة Futures فقط إذا مؤهل + futures_enabled في التداول الآلي
+        # وتوضيح نوع الصفقة (شراء Long / بيع Short) بدقة
         try:
-            user_id_sig = user_id  # M#69: user_id معرَّف مسبقاً
+            user_id_sig = user_id
             tt_sig      = getattr(signal, "trade_type", "spot")
             tier_sig    = _sm.get_tier(user_id_sig)
-            if tt_sig in ("futures_long", "futures_short") and tier_sig in ("gold","diamond","admin"):
+            # إصلاح #219: شرط futures_enabled — لا تظهر إلا إن فعَّل المستخدم Futures
+            fut_enabled = _sm.get_futures_enabled(user_id_sig)
+            if (tt_sig in ("futures_long", "futures_short")
+                    and tier_sig in ("gold","diamond","admin")
+                    and fut_enabled):
                 fut_atr  = _calc_atr(candles) / 100 if candles else 0.03
                 fut_dir  = "long" if tt_sig == "futures_long" else "short"
+                # إصلاح #220: توضيح نوع الصفقة بدقة (Long=شراء / Short=بيع)
+                fut_dir_ar = "📈 شراء (Long)" if fut_dir=="long" else "📉 بيع (Short)"
                 if fut_dir == "long":
                     fut_tp = price * (1 + fut_atr * 2)
                     fut_sl = price * (1 - fut_atr * 1.2)
@@ -1448,7 +1455,8 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     fut_sl = price * (1 + fut_atr * 1.2)
                 fut_txt = engine.risk_engine.format_futures_signal_ar(
                     symbol, fut_dir, price, fut_tp, fut_sl, leverage=1)
-                parts.append(_clean_md(fut_txt))
+                parts.append(_clean_md(
+                    f"🔮 *توصية Futures: {fut_dir_ar}*\n" + fut_txt))
         except Exception as _fe:
             logger.debug(f"futures display: {_fe}")
 
