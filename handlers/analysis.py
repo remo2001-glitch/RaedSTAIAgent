@@ -1420,6 +1420,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
 
     _use_futures = (_mkttype == "futures")
+    _mkt_arg_sig = "futures" if _use_futures else "spot"  # إصلاح #258
 
     # تطوير #188 (Phase 2) + إصلاح #248: tier2 يُعرَّف هنا (موحَّد)
     user_id2   = update.effective_user.id
@@ -1466,7 +1467,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     try:
-        _ohlcv_fn = engine.data_layer.get_ohlcv_perp(symbol, 365) if _is_perp_sig else engine.data_layer.get_ohlcv(symbol, "1d", 365)
+        _ohlcv_fn = engine.data_layer.get_ohlcv_perp(symbol, 365) if _is_perp_sig else engine.data_layer.get_ohlcv(symbol, "1d", 365, mkttype=_mkt_arg_sig)
         candles, onchain, fear, news_raw, btc_dom, _sig_4h = await asyncio.gather(
             _ohlcv_fn,
             engine.data_layer.get_onchain(),
@@ -1889,6 +1890,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if sent_an:
                 return
     _use_futures_an = (_mkttype_an == "futures")
+    _mkt_arg_an = "futures" if _use_futures_an else "spot"  # إصلاح #258
 
     # تطوير #188 (Phase 2): دعم أزواج BTC/ETH — فقرة إضافية في نهاية
     # التقرير إن كانت الباقة ماسي+ والزوج متوفر (build_pair_addon_lines)
@@ -1947,8 +1949,8 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 price_d, candles, fear, btc_dom = await asyncio.wait_for(
                     asyncio.gather(
-                        engine.data_layer.get_price(symbol),
-                        engine.data_layer.get_ohlcv(symbol, "1d", 365),
+                        engine.data_layer.get_price(symbol, mkttype=_mkt_arg_an),
+                        engine.data_layer.get_ohlcv(symbol, "1d", 365, mkttype=_mkt_arg_an),
                         engine.data_layer.get_fear_greed(),
                         engine.data_layer.get_btc_dominance(),
                         return_exceptions=True
@@ -2226,6 +2228,11 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _pair_addon_a = await build_pair_addon_lines(resolution, engine.data_layer)
         if _pair_addon_a:
             parts.extend(_pair_addon_a)
+        # إصلاح #250-B: "📌 أصل مُرمَّز" في /analyze كما في /signal
+        if _is_perp_an:
+            parts.append(f"📌 {symbol} — أصل مُرمَّز (Perpetual) على OKX")
+        # إصلاح #250-A: رابط /chart في /analyze كما في /signal
+        parts.append(f"📊 للتحليل البصري: /chart {symbol}")
         parts += ["", "⚠️ هذا التحليل استرشادي — القرار للمستخدم"]
         full = _clean_md("\n".join(parts))
 
@@ -2432,6 +2439,7 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if sent_qs:
                 return
     _use_futures_qs = (_mkttype_qs == "futures")
+    _mkt_arg_qs = "futures" if _use_futures_qs else "spot"  # إصلاح #258
 
     msg    = await _get_message(update, context).reply_text(
         f"🔍 جاري التحليل الأولي لـ {raw_arg}...")
@@ -2471,8 +2479,8 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 price_d, candles, fear, btc_dom = await asyncio.wait_for(
                     asyncio.gather(
-                        engine.data_layer.get_price(symbol, quote),
-                        engine.data_layer.get_ohlcv(symbol, "1d", 250, quote),
+                        engine.data_layer.get_price(symbol, quote, mkttype=_mkt_arg_qs),
+                        engine.data_layer.get_ohlcv(symbol, "1d", 250, quote, mkttype=_mkt_arg_qs),
                         engine.data_layer.get_fear_greed(),
                         engine.data_layer.get_btc_dominance(),
                         return_exceptions=True
