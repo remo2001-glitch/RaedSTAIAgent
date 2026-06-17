@@ -357,17 +357,20 @@ def _calc_adx(candles: list, period: int = 14) -> float:
 
 def _build_professional_block(
     symbol: str, price: float, signal, regime,
-    candles: list, rsi: float, atr_pct: float, fib: dict
+    candles: list, rsi: float, atr_pct: float, fib: dict,
+    tech_extra: dict = None
 ) -> str:
     """
     بناء بلوك الإشارة الاحترافية — ملاحظة #33
     يُعرض في /signal و /analyze فقط
+    tech_extra: معلومات إضافية (مثل is_perp_asset لإخفاء TVL/Whale)
     """
+    _extra = tech_extra or {}
     conf      = signal.confidence
     # إصلاح #948: rsi كـ int مبكراً — مصدر واحد للحقيقة
     rsi = int(round(rsi))  # ضمان int دائماً
     direction = signal.direction
-    tech      = getattr(signal, "technicals", {}) or {}
+    tech      = {**(getattr(signal, "technicals", {}) or {}), **_extra}  # دمج tech_extra
     # إصلاح #809/#61(ثانوي): _vol_ratio من technicals['vol_ratio'] مباشرة —
     # getattr(signal,'vol_ratio',...) كان يُعيد دائماً 1.0 الافتراضي لأن
     # SignalResult لا يملك حقل vol_ratio على المستوى الأعلى، فكان السطر
@@ -818,19 +821,17 @@ def _build_professional_block(
         deriv_lines.append(f"• Funding Rate: {_fund_pct:+.4f}% {_fund_sig}")
     if _oi_chg != 0:
         deriv_lines.append(f"• Open Interest: {_oi_chg:+.1f}% {_oi_sig}")
-    if _whale_sig:  # عرض إذا يوجد signal نصي حتى لو ratio=0
+    # إصلاح #241-A: Whale/TVL غير ذي صلة للأصول المُرمَّزة غير الرقمية
+    _is_perp_asset = tech.get("is_perp_asset", False)
+    if _whale_sig and not _is_perp_asset:
         _wr_txt = f" ({_whale_ratio:.2f})" if _whale_ratio > 0 else ""
         deriv_lines.append(f"• Whale Activity{_wr_txt}: {_whale_sig}")
-    # إضافة On-chain من DeFiLlama
-    # TVL من On-chain data — نتحقق من بنية الـ dict
+    # TVL من On-chain data
     _onchain = tech.get("onchain_data", {}) or {}
-    # get_onchain() يُعيد: {"tvl": ..., "tvl_change_24h": ...} أو {"total_tvl": ...}
     _tvl = float(_onchain.get("tvl") or 0)
-    if _tvl > 0:
+    if _tvl > 0 and not _is_perp_asset:
         _tvl_chg = float(_onchain.get("tvl_change_1d", 0) or 0)
-        deriv_lines.append(
-            f"• TVL الكلي: ${_tvl/1e9:.1f}B ({_tvl_chg:+.1f}% 24h)"
-        )
+        deriv_lines.append(f"• TVL الكلي: ${_tvl/1e9:.1f}B ({_tvl_chg:+.1f}% 24h)")
     if deriv_lines:
         parts.extend(["", "*🔗 Derivatives & On-Chain*"])
         parts.extend(deriv_lines)
@@ -1400,16 +1401,23 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args    = context.args or ["BTC"]
     raw_arg = args[0].upper()
 
-    # تطوير #221: سؤال نوع السوق (Spot/Futures) — لجميع المستخدمين
-    # (يُتجاوَز إذا جاء الطلب من callback_market_type الذي يحدد النوع مسبقاً)
+    # تطوير #221: سؤال نوع السوق (Spot/Futures)
+    # إصلاح #237-A: الأصول المُرمَّزة → Futures تلقائياً بدون سؤال
     _mkttype = context.user_data.pop("_mkttype", None)
     if _mkttype is None:
-        tier_pre = _sm.get_tier(user_id)
-        sent = await _ask_market_type(update, context, "signal", raw_arg, tier_pre)
-        if sent:
-            return  # ننتظر اختيار المستخدم عبر callback_market_type
+        _pre_asset_sig = False
+        if tier2 in ("diamond","admin"):
+            try:
+                _pre_asset_sig = await engine.data_layer.is_tokenized_stock(raw_arg)
+            except Exception:
+                _pre_asset_sig = False
+        if _pre_asset_sig:
+            _mkttype = "futures"
+        else:
+            sent = await _ask_market_type(update, context, "signal", raw_arg, _sm.get_tier(user_id))
+            if sent:
+                return
 
-    # نوع السوق: "futures" أو "spot" (الافتراضي)
     _use_futures = (_mkttype == "futures")
 
     # تطوير #188 (Phase 2): دعم أزواج BTC/ETH — فقرة إضافية في نهاية
@@ -1436,7 +1444,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if tier2 in ("gold","diamond","admin") and symbol.upper() in _ALWAYS_ALLOWED:
         pass  # مسموح
     elif _is_perp_sig and tier2 in ("diamond","admin"):
-        pass  # تطوير #209: أسهم مُرمَّزة مسموحة لماسي+
+        pass  # تطوير #209: أأصل مُرمَّزة مسموحة لماسي+
     elif not is_symbol_allowed(symbol, tier2):
         await _get_message(update, context).reply_text(
             (
@@ -1534,8 +1542,11 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Fibonacci + Professional Block
         fib        = _calc_fibonacci(candles)
+        # إصلاح #241-A: تمرير is_perp_asset لإخفاء TVL/Whale للأصول غير الرقمية
+        _sig_tech_extra = {"is_perp_asset": _is_perp_sig} if _is_perp_sig else {}
         pro_block  = _build_professional_block(
-            symbol, price, signal, regime, candles, rsi, atr_pct, fib)
+            symbol, price, signal, regime, candles, rsi, atr_pct, fib,
+            tech_extra=_sig_tech_extra)
         fib_lines  = _fmt_fib_lines(fib, price)
 
         # حذف تقييم المخاطر عند وجود Professional Block (M#51)
@@ -1586,9 +1597,11 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _pair_addon = await build_pair_addon_lines(resolution, engine.data_layer)
         if _pair_addon:
             full_text += "\n" + "\n".join(_pair_addon)
-        # تطوير #209: ملاحظة Perp للأسهم المُرمَّزة
+        # تطوير #209: ملاحظة Perp للأصول المُرمَّزة
         if _is_perp_sig:
-            full_text += f"\n\n📌 *{symbol}* — سهم مُرمَّز (Perpetual) على OKX"
+            full_text += f"\n\n📌 *{symbol}* — أصل مُرمَّز (Perpetual) على OKX"
+        # إصلاح #236: ربط /signal ↔ /chart للتكامل التحليلي
+        full_text += f"\n📊 للتحليل البصري: /chart {symbol}"
         await msg.edit_text(full_text, parse_mode=ParseMode.MARKDOWN)
 
     except Exception as e:
@@ -1853,13 +1866,23 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args   = context.args or []
     raw_arg = args[0].upper()
 
-    # تطوير #221: سؤال نوع السوق (Spot/Futures) إن لم يُحدَّد مسبقاً
+    # تطوير #221: سؤال نوع السوق (Spot/Futures)
+    # إصلاح #237-A: الأصول المُرمَّزة → Futures تلقائياً بدون سؤال
     _mkttype_an = context.user_data.pop("_mkttype", None)
     if _mkttype_an is None:
-        tier_pre_an = _sm.get_tier(user_id)
-        sent_an = await _ask_market_type(update, context, "analyze", raw_arg, tier_pre_an)
-        if sent_an:
-            return
+        tier_an_pre = _sm.get_tier(user_id)
+        _pre_asset_an = False
+        if tier_an_pre in ("diamond","admin"):
+            try:
+                _pre_asset_an = await engine.data_layer.is_tokenized_stock(raw_arg)
+            except Exception:
+                _pre_asset_an = False
+        if _pre_asset_an:
+            _mkttype_an = "futures"
+        else:
+            sent_an = await _ask_market_type(update, context, "analyze", raw_arg, tier_an_pre)
+            if sent_an:
+                return
     _use_futures_an = (_mkttype_an == "futures")
 
     # تطوير #188 (Phase 2): دعم أزواج BTC/ETH — فقرة إضافية في نهاية
@@ -1881,7 +1904,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if tier_an in ("gold","diamond","admin") and symbol.upper() in _LARGE_CAPS:
         pass  # إصلاح #1020: عملات كبيرة مسموحة للذهبي+
     elif _is_perp_an and tier_an in ("diamond","admin"):
-        pass  # تطوير #209: أسهم مُرمَّزة مسموحة لماسي+
+        pass  # تطوير #209: أأصل مُرمَّزة مسموحة لماسي+
     elif not is_symbol_allowed(symbol, tier_an):
         await _get_message(update, context).reply_text(
             (
@@ -2320,8 +2343,9 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _mkt_label = "Futures/Perp" if _chart_is_futures else "Spot"
         sym_label = f" — {symbol}" if symbol else ""
         # إضافة header بمعلومات العملة (M#54)
+        _sym_label = f" — {symbol}" if symbol else ""
         header_lines = [
-            f"📊 *تحليل الشارت البصري{sym_label}*",
+            f"📊 *تحليل الشارت البصري{_sym_label}*",
             f"🏪 نوع السوق: {'📈 Futures/Perp' if _chart_is_futures else '⚡ Spot'}",
             "━━━━━━━━━━━━━━━━━━",
         ]
@@ -2340,9 +2364,12 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         ]
             except Exception:
                 pass
+        # إصلاح #236: ربط /chart ↔ /signal للتكامل التحليلي
+        _signal_hint = f"\n💡 للتحليل الشامل متعدد المصادر: /signal {symbol}" if symbol else ""
         full = _clean_md(
             "\n".join(header_lines) + "\n\n" +
             f"{analysis}\n\n"
+            f"{_signal_hint}\n"
             f"⚠️ التحليل استرشادي — القرار للمستخدم"
         )
         if len(full) > 4000:
@@ -2382,11 +2409,22 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tier_q    = _sm.get_tier(user_id_q)
 
     # تطوير #221: سؤال نوع السوق (Spot/Futures) إن لم يُحدَّد مسبقاً
+    # إصلاح #237-A: الأصول المُرمَّزة (أسهم/معادن/سلع) → Futures تلقائياً بدون سؤال
     _mkttype_qs = context.user_data.pop("_mkttype", None)
     if _mkttype_qs is None:
-        sent_qs = await _ask_market_type(update, context, "quicksignal", raw_arg, tier_q)
-        if sent_qs:
-            return
+        # فحص مبكر: هل الرمز أصل مُرمَّز (Futures حصراً)؟
+        _pre_is_asset = False
+        if tier_q in ("diamond", "admin"):
+            try:
+                _pre_is_asset = await engine.data_layer.is_tokenized_stock(raw_arg.replace("BTC","").replace("ETH","") or raw_arg)
+            except Exception:
+                _pre_is_asset = False
+        if _pre_is_asset:
+            _mkttype_qs = "futures"  # Futures تلقائياً للأصول المُرمَّزة
+        else:
+            sent_qs = await _ask_market_type(update, context, "quicksignal", raw_arg, tier_q)
+            if sent_qs:
+                return
     _use_futures_qs = (_mkttype_qs == "futures")
 
     msg    = await _get_message(update, context).reply_text(
@@ -2500,16 +2538,30 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 pass
 
-        # مستويات الدعم والمقاومة (20 شمعة)
+        # إصلاح #239-A: دعم/مقاومة من أقرب مستويات السعر (5 شموع) لا القاع/القمة الشهرية
         support = resistance = 0.0
-        if len(candles) >= 20:
-            lows  = [float(c.get("low",  c.get("close", 0))) for c in candles[-20:]
-                     if float(c.get("low", c.get("close", 0))) > 0]
-            highs = [float(c.get("high", c.get("close", 0))) for c in candles[-20:]
-                     if float(c.get("high", c.get("close", 0))) > 0]
-            if lows and highs:
-                support    = min(lows)  * 0.99
-                resistance = max(highs) * 1.01
+        if len(candles) >= 5:
+            # أولاً: آخر 5 شموع (أقرب للسعر الحالي)
+            lows5  = [float(c.get("low",  c.get("close", 0))) for c in candles[-5:]
+                      if float(c.get("low", c.get("close", 0))) > 0]
+            highs5 = [float(c.get("high", c.get("close", 0))) for c in candles[-5:]
+                      if float(c.get("high", c.get("close", 0))) > 0]
+            if lows5 and highs5:
+                sup5 = min(lows5)  * 0.999
+                res5 = max(highs5) * 1.001
+                # إذا كانت مستويات 5 شموع قريبة بما يكفي (±15%) → استخدمها
+                if price > 0 and (price - sup5) / price <= 0.15 and (res5 - price) / price <= 0.15:
+                    support    = sup5
+                    resistance = res5
+            # fallback: آخر 20 شمعة إذا كانت 5 شموع ضيقة جداً أو غير كافية
+            if (support == 0 or resistance == 0) and len(candles) >= 20:
+                lows20  = [float(c.get("low",  c.get("close", 0))) for c in candles[-20:]
+                           if float(c.get("low", c.get("close", 0))) > 0]
+                highs20 = [float(c.get("high", c.get("close", 0))) for c in candles[-20:]
+                           if float(c.get("high", c.get("close", 0))) > 0]
+                if lows20 and highs20:
+                    support    = min(lows20)  * 0.99
+                    resistance = max(highs20) * 1.01
 
         # توصية شاملة: RSI + Fear + Regime + EMA
         # مبدأ الحذر: إذا regime غير محدد → لا توصية شراء
@@ -2520,14 +2572,13 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             direction = "🟢 شراء محتمل"
             entry = price * 0.99; tp1 = price * 1.05; tp2 = price * 1.10; sl = price * 0.95
         elif rsi < 30 and (is_bearish or ema_bearish or regime_unknown):
-            # ذروة بيع لكن في سوق هابط أو غير محدد → انتظار ارتداد فقط
+            # ذروة بيع لكن في سوق هابط → انتظار ارتداد فقط (لا شراء)
             direction = "⏳ انتظار ارتداد"
             entry = price * 0.98; tp1 = price * 1.03; tp2 = price * 1.06; sl = price * 0.95
         elif rsi > 70 and fear_val > 60:
             direction = "🔴 بيع محتمل"
             entry = price * 1.01; tp1 = price * 0.95; tp2 = price * 0.90; sl = price * 1.05
         elif rsi > 70 and ema_bearish:
-            # ذروة شراء + سوق هابط → بيع قوي
             direction = "🔴 بيع قوي"
             entry = price * 1.005; tp1 = price * 0.94; tp2 = price * 0.88; sl = price * 1.04
         elif 30 <= rsi <= 45 and fear_val < 50 and not is_bearish:
@@ -2536,9 +2587,22 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif 55 <= rsi <= 70 and fear_val > 50:
             direction = "🟠 بيع محتاط"
             entry = price * 1.01; tp1 = price * 0.96; tp2 = price * 0.92; sl = price * 1.04
+        # إصلاح #240: else branch — يجب مراعاة اتجاه السوق
+        # في السوق الهابط: لا يُعطي Long ضمنياً — TP/SL تعكس الانتظار الحقيقي
+        elif is_bearish or ema_bearish:
+            # سوق هابط + RSI وسط (لا ذروة) → انتظار حذر، لا اتجاه
+            direction = "⚪ انتظار — سوق هابط"
+            # نقطة الدخول المحتملة عند كسر المقاومة القريبة للـShort
+            # أو عند الدعم للـLong إذا تأكَّد الانعكاس
+            # لا نُعطي TP/SL محددة — المستخدم ينتظر تأكيداً
+            entry = price * 0.990   # عند الدعم القريب
+            tp1   = price * 1.030   # هدف ارتداد محدود فقط
+            tp2   = price * 1.060   # هدف ارتداد ثانٍ
+            sl    = price * 0.960   # وقف صارم
         else:
+            # سوق محايد + RSI وسط → انتظار بياض
             direction = "⚪ انتظار"
-            entry = price * 0.985; tp1 = price * 1.05; tp2 = price * 1.08; sl = price * 0.96  # M#109
+            entry = price * 0.985; tp1 = price * 1.05; tp2 = price * 1.08; sl = price * 0.96
 
         # regime_desc محسوبة أعلاه
 
