@@ -429,10 +429,12 @@ class DataLayer:
         _store(key, is_stock, "pairchk")
         return is_stock
 
-    async def get_price(self, symbol: str, quote: str = "USDT") -> Optional[Dict]:
+    async def get_price(self, symbol: str, quote: str = "USDT",
+                        mkttype: str = "spot") -> Optional[Dict]:
+        """إصلاح #258: mkttype يُميِّز كاش Spot عن Futures لنفس الرمز."""
         symbol = _clean_symbol(symbol)   # BTCUSDT → BTC (نظام-واسع)
         quote  = quote.upper()
-        key = f"price:{symbol.upper()}:{quote}"
+        key = f"price:{symbol.upper()}:{quote}:{mkttype}"
         if cached := _cached(key, "price"):
             return cached
 
@@ -725,10 +727,12 @@ class DataLayer:
     # 2. OHLCV — يُعيد دائماً List (قد تكون فارغة لكن ليست None)
     # ═══════════════════════════════════════════════════════════
     async def get_ohlcv(self, symbol: str, interval: str = "1d",
-                         limit: int = 365, quote: str = "USDT") -> List[Dict]:
+                         limit: int = 365, quote: str = "USDT",
+                         mkttype: str = "spot") -> List[Dict]:
+        """إصلاح #258: mkttype يُميِّز كاش Spot عن Futures."""
         symbol = _clean_symbol(symbol)   # BTCUSDT → BTC (نظام-واسع)
         quote  = quote.upper()
-        key = f"ohlcv:{symbol}:{quote}:{interval}:{limit}"
+        key = f"ohlcv:{symbol}:{quote}:{interval}:{limit}:{mkttype}"
         if cached := _cached(key, "ohlcv"):
             return cached  # دائماً List
 
