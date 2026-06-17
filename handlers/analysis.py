@@ -1402,38 +1402,43 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     raw_arg = args[0].upper()
 
     # تطوير #221: سؤال نوع السوق (Spot/Futures)
-    # إصلاح #237-A: الأصول المُرمَّزة → Futures تلقائياً بدون سؤال
+    # إصلاح #237-A+#248: الأصول المُرمَّزة → Futures تلقائياً
+    # ملاحظة: tier2 يُعرَّف لاحقاً — نستخدم user_id مباشرة هنا
     _mkttype = context.user_data.pop("_mkttype", None)
     if _mkttype is None:
-        _pre_asset_sig = False
-        if tier2 in ("diamond","admin"):
+        _tier_early = _sm.get_tier(user_id)
+        if _tier_early in ("diamond","admin"):
             try:
-                _pre_asset_sig = await engine.data_layer.is_tokenized_stock(raw_arg)
+                _raw_symbol = (context.args or ["BTC"])[0].upper()
+                if await engine.data_layer.is_tokenized_stock(_raw_symbol):
+                    _mkttype = "futures"  # أصل مُرمَّز → Futures بدون سؤال
             except Exception:
-                _pre_asset_sig = False
-        if _pre_asset_sig:
-            _mkttype = "futures"
-        else:
+                pass
+        if _mkttype is None:
             sent = await _ask_market_type(update, context, "signal", raw_arg, _sm.get_tier(user_id))
             if sent:
                 return
 
     _use_futures = (_mkttype == "futures")
 
-    # تطوير #188 (Phase 2): دعم أزواج BTC/ETH — فقرة إضافية في نهاية
-    # التقرير إن كانت الباقة ماسي+ والزوج متوفر (build_pair_addon_lines)
+    # تطوير #188 (Phase 2) + إصلاح #248: tier2 يُعرَّف هنا (موحَّد)
     user_id2   = update.effective_user.id
     tier2      = _sm.get_tier(user_id2)
     resolution = await resolve_symbol(raw_arg, tier2, engine.data_layer)
     symbol     = resolution.base
 
-    # تطوير #209: اكتشاف تلقائي للأسهم المُرمَّزة (ماسي+ فقط)
+    # تطوير #209: اكتشاف تلقائي للأصول المُرمَّزة (ماسي+ فقط)
+    # إصلاح #248: _is_perp_sig هو المصدر الوحيد (لا استدعاء مكرر)
     _is_perp_sig = False
     if tier2 in ("diamond", "admin"):
         try:
             _is_perp_sig = await engine.data_layer.is_tokenized_stock(symbol)
         except Exception:
             _is_perp_sig = False
+    # إذا اكتُشف كأصل مُرمَّز ولم يُحدَّد النوع مسبقاً → Futures تلقائياً
+    if _is_perp_sig and _mkttype is None:
+        _mkttype = "futures"
+        _use_futures = True
 
     # إصلاح #1020: عملات كبيرة مُعتمَدة دائماً للذهبي+
     _ALWAYS_ALLOWED = {
@@ -2185,7 +2190,8 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 value = "bear_trend" if is_bearish else "bull_trend"
         _reg_a = _AnalyzeRegime()
         pro_block_a = _build_professional_block(
-            symbol, price, _sig_a, _reg_a, candles, rsi, _atr_a, fib_a)
+            symbol, price, _sig_a, _reg_a, candles, rsi, _atr_a, fib_a,
+            tech_extra={"is_perp_asset": _is_perp_an} if _is_perp_an else {})
         fib_lines_a = _fmt_fib_lines(fib_a, price)
 
         parts = [
@@ -2590,15 +2596,13 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # إصلاح #240: else branch — يجب مراعاة اتجاه السوق
         # في السوق الهابط: لا يُعطي Long ضمنياً — TP/SL تعكس الانتظار الحقيقي
         elif is_bearish or ema_bearish:
-            # سوق هابط + RSI وسط (لا ذروة) → انتظار حذر، لا اتجاه
+            # إصلاح #244-A: سوق هابط + RSI وسط → انتظار حذر
+            # R/R يجب ≥ 1:1: SL=-4% → TP1 يجب ≥ +4% على الأقل
             direction = "⚪ انتظار — سوق هابط"
-            # نقطة الدخول المحتملة عند كسر المقاومة القريبة للـShort
-            # أو عند الدعم للـLong إذا تأكَّد الانعكاس
-            # لا نُعطي TP/SL محددة — المستخدم ينتظر تأكيداً
             entry = price * 0.990   # عند الدعم القريب
-            tp1   = price * 1.030   # هدف ارتداد محدود فقط
-            tp2   = price * 1.060   # هدف ارتداد ثانٍ
-            sl    = price * 0.960   # وقف صارم
+            tp1   = price * 1.040   # +4% (= SL، R/R 1:1 كحد أدنى)
+            tp2   = price * 1.080   # +8% (R/R 2:1)
+            sl    = price * 0.960   # -4% وقف صارم
         else:
             # سوق محايد + RSI وسط → انتظار بياض
             direction = "⚪ انتظار"
