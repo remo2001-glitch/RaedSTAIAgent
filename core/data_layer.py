@@ -1523,8 +1523,10 @@ class DataLayer:
         """
         return {"outflow_30d": 0.0, "signal": "محايد", "available": False}
 
-    def build_candles_summary(self, candles: list, symbol: str = "") -> str:
-        """يبني ملخص شموع احترافي لـ Groq — يشمل EMA + RSI + MACD + حجم."""
+    def build_candles_summary(self, candles: list, symbol: str = "", current_price: float = 0.0) -> str:
+        """يبني ملخص شموع احترافي لـ Groq — يشمل EMA + RSI + MACD + حجم.
+        إصلاح #328 (H2): current_price يُستخدم بدلاً من candles[-1] إذا مُعطى.
+        """
         if not candles or len(candles) < 5:
             return ""
         try:
@@ -1532,7 +1534,8 @@ class DataLayer:
             volumes = [float(c.get("volume", 0) or 0) for c in candles if c.get("volume")]
             if len(closes) < 5: return ""
 
-            last = closes[-1]
+            # إصلاح #328 (H2): استخدام current_price الحالي إذا مُعطى
+            last = current_price if current_price > 0 else closes[-1]
             # EMAs
             ema5  = sum(closes[-5:])  / 5  if len(closes) >= 5  else last
             ema20 = sum(closes[-20:]) / 20 if len(closes) >= 20 else last
