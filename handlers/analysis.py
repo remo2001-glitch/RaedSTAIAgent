@@ -230,6 +230,17 @@ def _calc_fibonacci(candles: list, lookback: int = 60) -> dict:
             swing_high = price_now * 1.15
             swing_low  = price_now * 0.85
 
+        # إصلاح #261: cap swing لمنع ATH تاريخي بعيد يُشوِّه المستويات
+        # swing_high لا يتجاوز 2.5× السعر الحالي (يمنع SPCX $2457 مع سعر $195)
+        # swing_low لا يقل عن 40% من السعر الحالي
+        if price_now > 0:
+            swing_high = min(swing_high, price_now * 2.5)
+            swing_low  = max(swing_low,  price_now * 0.4)
+            # إعادة التحقق بعد الـ cap
+            if swing_high <= swing_low or swing_high <= price_now * 0.95:
+                swing_high = price_now * 1.15
+                swing_low  = price_now * 0.85
+
         diff = swing_high - swing_low
         if diff <= 0:
             return {}
@@ -874,7 +885,10 @@ def _build_professional_block(
         entry_lines.append("• الأهداف: متاحة بعد تأكيد 2/4 مؤشرات")
     entry_lines.extend([
         f"• وقف الخسارة: {_fmt_price(pro_sl)} ({sl_pct:.1f}%-)",
-        f"• R/R الواقعي: 1:{rr_real}{_rr_adjusted_note}",
+        # إصلاح #264/#268/#276: R/R لا معنى له عند WAIT — يُخفى
+        (f"• R/R الواقعي: 1:{rr_real}{_rr_adjusted_note}"
+         if conf >= 0.65
+         else "• R/R: غير محسوب — انتظر تأكيد الإشارة"),
         f"• الحجم: {_pos_size_rule}",
     ])
     parts.extend(entry_lines)
@@ -1414,10 +1428,21 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args    = context.args or ["BTC"]
     raw_arg = args[0].upper()
 
+    # إصلاح #272/#278/#279/#281 (G1): كشف نوع السوق من args[1..] مباشرةً
+    # يمنع سؤال Spot/Futures عندما يكتب المستخدم: /signal ETH فيوتشر
+    _FUTURES_KW = {"فيوتشر","فيوتشرز","futures","future","فوري","perp","swap","perpetual"}
+    _SPOT_KW    = {"سبوت","spot","عادي","نقدي","فوري_سبوت"}
+    _extra_args = [a.lower() for a in args[1:]]
+    _kw_mkttype = None
+    if any(k in _extra_args for k in _FUTURES_KW):
+        _kw_mkttype = "futures"
+    elif any(k in _extra_args for k in _SPOT_KW):
+        _kw_mkttype = "spot"
+
     # تطوير #221: سؤال نوع السوق (Spot/Futures)
     # إصلاح #237-A+#248: الأصول المُرمَّزة → Futures تلقائياً
     # ملاحظة: tier2 يُعرَّف لاحقاً — نستخدم user_id مباشرة هنا
-    _mkttype = context.user_data.pop("_mkttype", None)
+    _mkttype = context.user_data.pop("_mkttype", None) or _kw_mkttype
     if _mkttype is None:
         _tier_early = _sm.get_tier(user_id)
         if _tier_early in ("diamond","admin"):
@@ -1502,14 +1527,21 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             news_an = {}
 
-        if len(candles) < 50:
+        # إصلاح #265: تخفيض الحد 50→30 للعملات الجديدة + تنبيه عند 30-49
+        if len(candles) < 30:
             await msg.edit_text(
                 f"⚠️ بيانات {symbol} غير كافية حالياً\n"
                 f"أعد المحاولة بعد دقيقة")
             return
+        _limited_data = len(candles) < 50  # تنبيه بيانات محدودة
 
         fear_val = int(fear.get("value") or 50)
         regime   = engine.regime_detector.detect(candles, btc_dominance=btc_dom, fear_greed=fear_val, symbol=symbol)
+        # إصلاح #265: تنبيه بيانات محدودة
+        if locals().get("_limited_data"):
+            await msg.edit_text(
+                f"📡 جاري تحليل {symbol} (⚠️ بيانات محدودة < 50 يوم)...\n"
+                "⏳ قد يستغرق 20-30 ثانية")
 
         sentiment = 0.0
         if news_an:
@@ -1885,9 +1917,20 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args   = context.args or []
     raw_arg = args[0].upper()
 
+    # إصلاح G1: كشف نوع السوق من args[1..] في /analyze أيضاً
+    _FUTURES_KW_AN = {"فيوتشر","فيوتشرز","futures","future","فوري","perp","swap","perpetual"}
+    _SPOT_KW_AN    = {"سبوت","spot","عادي","نقدي"}
+    _args_an = context.args or []
+    _extra_an = [a.lower() for a in _args_an[1:]]
+    _kw_mkttype_an = None
+    if any(k in _extra_an for k in _FUTURES_KW_AN):
+        _kw_mkttype_an = "futures"
+    elif any(k in _extra_an for k in _SPOT_KW_AN):
+        _kw_mkttype_an = "spot"
+
     # تطوير #221: سؤال نوع السوق (Spot/Futures)
     # إصلاح #237-A: الأصول المُرمَّزة → Futures تلقائياً بدون سؤال
-    _mkttype_an = context.user_data.pop("_mkttype", None)
+    _mkttype_an = context.user_data.pop("_mkttype", None) or _kw_mkttype_an
     if _mkttype_an is None:
         tier_an_pre = _sm.get_tier(user_id)
         _pre_asset_an = False
@@ -2139,11 +2182,25 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _atr_a = _calc_atr(candles)
         # إصلاح #34: onchain_data خاص بالعملة بدل {} الفارغة
         _onchain_a = await engine.data_layer.get_signal_enrichment(symbol, {})
+        # إصلاح #912 (G3): جلب الأخبار وتحليلها في /analyze كما في /signal
+        # يضمن أن news_sentiment حقيقي لا 0.0 افتراضي
+        _news_raw_an = []
+        _news_sentiment_an = float(getattr(engine, "_last_news_sentiment", 0) or 0)
+        try:
+            _news_raw_an = await engine.data_layer.get_news(currencies=symbol)
+            if _news_raw_an:
+                _news_an_result = await engine.news_engine.analyze(_news_raw_an, [symbol])
+                if _news_an_result and isinstance(_news_an_result, dict):
+                    _raw_sent_an = _news_an_result.get("sentiment_score")
+                    if _raw_sent_an is not None:
+                        _news_sentiment_an = float(_raw_sent_an)
+        except Exception:
+            pass
         try:
             _sig_a = engine.signal_layer.generate(
                 symbol=symbol, candles=candles,
                 onchain_data=_onchain_a,
-                news_sentiment=float(getattr(engine, "_last_news_sentiment", 0) or 0),
+                news_sentiment=_news_sentiment_an,
                 backtest_win_rate=0.55,
                 macro_data={"fear_greed": fear_val},
                 regime=engine.regime_detector.detect(

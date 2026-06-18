@@ -1424,11 +1424,7 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _avg_win       = (sum(t["pnl"] for t in _wins) / max(len(_wins), 1)) if _wins else 0
         _losses        = [t for t in _sells if t.get("pnl", 0) <= 0]
         _avg_loss      = (sum(t["pnl"] for t in _losses) / max(len(_losses), 1)) if _losses else 0
-        # إصلاح #707: Drawdown يشمل PnL الحي
-        _current_total = _vw_total + _live_pnl if _vw else portfolio_val
-        _drawdown_pct  = max(0, (portfolio_val - _current_total) / portfolio_val * 100)
-
-        # حساب PnL الحي للمراكز المفتوحة
+        # إصلاح #1083: _live_pnl يُعرَّف أولاً ثم يُحسب ثم يُستخدم في Drawdown
         _live_pnl = 0.0
         try:
             for sym, pos in _vw_positions.items():
@@ -1439,6 +1435,10 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
         _today_pnl = _live_pnl
+
+        # إصلاح #707: Drawdown يشمل PnL الحي (بعد حسابه)
+        _current_total = _vw_total + _live_pnl if _vw else portfolio_val
+        _drawdown_pct  = max(0, (portfolio_val - _current_total) / portfolio_val * 100)
 
         lines = [
             "📊 *إحصائيات رائد الفورية*",

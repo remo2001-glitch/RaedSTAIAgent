@@ -153,9 +153,22 @@ async def cmd_live(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 trades  = om.get_open_trades(user_id) if om else []
                 pnl     = om.total_pnl(user_id) if om else 0
                 import asyncio as _aio_live
-                balance = await _aio_live.wait_for(
-                    info["exchange"].get_balance("USDT"),
-                    timeout=15.0)
+                # إصلاح #1082 (G8): MEXC بطيء — timeout مرفوع + retry
+                _exname = info.get("name", "").lower()
+                _bal_timeout = 25.0 if "mexc" in _exname else 15.0
+                try:
+                    balance = await _aio_live.wait_for(
+                        info["exchange"].get_balance("USDT"),
+                        timeout=_bal_timeout)
+                except asyncio.TimeoutError:
+                    # retry واحدة للـ MEXC
+                    if "mexc" in _exname:
+                        await asyncio.sleep(2)
+                        balance = await _aio_live.wait_for(
+                            info["exchange"].get_balance("USDT"),
+                            timeout=20.0)
+                    else:
+                        raise
                 port_v  = engine.get_user_portfolio(user_id)
                 futures_ok = um.can_use_futures(user_id)
                 margin_ok  = um.can_use_margin(user_id)
@@ -348,9 +361,20 @@ async def cmd_live(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if ok:
                 info    = engine.get_user_exchange(user_id)
                 import asyncio as _aio_live
-                balance = await _aio_live.wait_for(
-                    info["exchange"].get_balance("USDT"),
-                    timeout=15.0)
+                _exname2 = info.get("name", "").lower()
+                _bal_timeout2 = 25.0 if "mexc" in _exname2 else 15.0
+                try:
+                    balance = await _aio_live.wait_for(
+                        info["exchange"].get_balance("USDT"),
+                        timeout=_bal_timeout2)
+                except asyncio.TimeoutError:
+                    if "mexc" in _exname2:
+                        await asyncio.sleep(2)
+                        balance = await _aio_live.wait_for(
+                            info["exchange"].get_balance("USDT"),
+                            timeout=20.0)
+                    else:
+                        raise
 
                 # تشخيص الرصيد
                 balance_lines = []
