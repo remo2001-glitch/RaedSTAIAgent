@@ -1460,7 +1460,8 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"• متوسط الخسارة: ${abs(_avg_loss):,.2f}",
             "",
             "🔬 *حالة النموذج*",
-            f"• معدل فوز: {drift_st.current_win_rate:.0%}",
+            # إصلاح #299 (H9): معدل الفوز من virtual_wallet (المصدر الحقيقي)
+            f"• معدل فوز: {_win_rate:.1f}% ({len(_wins)}/{_total_trades} صفقة)",
             f"• الانحراف: {drift_st.drift_pct:.1f}%",
             f"• {drift_st.recommendation_ar}",
             "",
@@ -1469,7 +1470,8 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "",
             "⏰ *التقارير التلقائية*",
             f"• {_clean(sched_w)}",
-            f"• {_clean(sched_m)}",
+            # إصلاح #301 (H10): تنظيف "يوم X" الزائدة في التاريخ الشهري
+            f"• {_clean(sched_m).replace(' يوم ', ' ').replace('  ', ' ')}",
             "",
             kill_st,
             "",

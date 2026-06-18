@@ -230,16 +230,23 @@ def _calc_fibonacci(candles: list, lookback: int = 60) -> dict:
             swing_high = price_now * 1.15
             swing_low  = price_now * 0.85
 
-        # إصلاح #261: cap swing لمنع ATH تاريخي بعيد يُشوِّه المستويات
-        # swing_high لا يتجاوز 2.5× السعر الحالي (يمنع SPCX $2457 مع سعر $195)
-        # swing_low لا يقل عن 40% من السعر الحالي
+        # إصلاح #261/#302 (H6): cap swing لمنع ATH/ATL تاريخي بعيد
+        # swing_high ≤ 2.5× السعر | swing_low ≥ 50% من السعر
         if price_now > 0:
             swing_high = min(swing_high, price_now * 2.5)
-            swing_low  = max(swing_low,  price_now * 0.4)
-            # إعادة التحقق بعد الـ cap
-            if swing_high <= swing_low or swing_high <= price_now * 0.95:
-                swing_high = price_now * 1.15
-                swing_low  = price_now * 0.85
+            swing_low  = max(swing_low,  price_now * 0.5)  # رُفع من 0.4 → 0.5
+            # إعادة التحقق: السعر يجب أن يكون بين swing_low و swing_high
+            if swing_high <= swing_low:
+                swing_high = price_now * 1.20
+                swing_low  = price_now * 0.80
+            elif price_now <= swing_low:
+                # السعر أقل من swing_low المُصحَّح — نبني حول السعر
+                swing_low  = price_now * 0.80
+                swing_high = min(swing_high, price_now * 1.50)
+            elif price_now >= swing_high:
+                # السعر أعلى من swing_high — نبني حول السعر
+                swing_high = price_now * 1.20
+                swing_low  = max(swing_low, price_now * 0.80)
 
         diff = swing_high - swing_low
         if diff <= 0:
@@ -873,11 +880,15 @@ def _build_professional_block(
         f"• Entry 1 (Aggressive): {_fmt_price(entry_agg)} — {_agg_label}",
         f"• Entry 2 (Conservative): {_fmt_price(entry_cons)} — بعد تأكيد الارتداد",
     ]
-    if _conf_score >= 40:  # لا أهداف عند WAIT
+    # إصلاح #285 (H5): إخفاء TP عند conf < 65% (WAIT و LOW)
+    # الأهداف تظهر فقط عند إشارة حقيقية ≥ 65%
+    if _conf_score >= 65:
         entry_lines.extend([
             f"• TP1: {_fmt_price(tp1_v)} (+{tp1_pct:.1f}%)",
             f"• TP2: {_fmt_price(tp2_v)} (+{tp2_pct:.1f}%)",
         ])
+    elif _conf_score >= 40:
+        entry_lines.append("• الأهداف: متاحة بعد تأكيد 2/4 مؤشرات")
         if tp3_v:
             tp3_pct = abs(tp3_v - entry_agg) / max(entry_agg, 1e-9) * 100
             entry_lines.append(f"• TP3 (اختياري): {_fmt_price(tp3_v)} (+{tp3_pct:.1f}%)")
@@ -1066,16 +1077,26 @@ def _build_scenarios_context(
     sup2 = ns - atr * 1.5
     sup3 = ns - atr * 3.0
     res1 = nr
-    res2 = f382 if f382 > price else nr * 1.04
-    res3 = f618 if f618 > price else nr * 1.08
+    # إصلاح #304 (H7): فرض res2 > res1 > price دائماً
+    res2 = f382 if f382 > res1 else nr * 1.04
+    res3 = f618 if f618 > res2 else res2 * 1.04
+    res3 = f786 if f786 > res2 else res3
+    # تأكيد الترتيب التصاعدي
+    res1 = max(res1, price * 1.01)
+    res2 = max(res2, res1 * 1.02)
+    res3 = max(res3, res2 * 1.02)
+    sup2 = min(sup2, sup1 * 0.98)
+    sup3 = min(sup3, sup2 * 0.97)
 
+    # إصلاح #318/#326/#329 (H3): RSI يُقرَّب قبل إرساله لـ Groq
+    rsi = round(rsi)
     rsi_note = ""
     if rsi < 20:
-        rsi_note = f"RSI={rsi:.0f} (تشبع بيعي تاريخي — يرفع احتمال الارتداد قبل استئناف الاتجاه)."
+        rsi_note = f"RSI={rsi} (تشبع بيعي تاريخي — يرفع احتمال الارتداد قبل استئناف الاتجاه)."
     elif rsi < 30:
-        rsi_note = f"RSI={rsi:.0f} (تشبع بيعي — احتمال ارتداد قصير)."
+        rsi_note = f"RSI={rsi} (تشبع بيعي — احتمال ارتداد قصير)."
     elif rsi > 70:
-        rsi_note = f"RSI={rsi:.0f} (تشبع شرائي — احتمال تصحيح)."
+        rsi_note = f"RSI={rsi} (تشبع شرائي — احتمال تصحيح)."
 
     if is_bear:
         scenarios = (
@@ -1434,9 +1455,10 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _SPOT_KW    = {"سبوت","spot","عادي","نقدي","فوري_سبوت"}
     _extra_args = [a.lower() for a in args[1:]]
     _kw_mkttype = None
-    if any(k in _extra_args for k in _FUTURES_KW):
+    # إصلاح #287/#322 (H1): فحص جزئي — "الفيوتشر" يحتوي "فيوتشر"
+    if any(k in arg for arg in _extra_args for k in _FUTURES_KW):
         _kw_mkttype = "futures"
-    elif any(k in _extra_args for k in _SPOT_KW):
+    elif any(k in arg for arg in _extra_args for k in _SPOT_KW):
         _kw_mkttype = "spot"
 
     # تطوير #221: سؤال نوع السوق (Spot/Futures)
@@ -1923,9 +1945,10 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _args_an = context.args or []
     _extra_an = [a.lower() for a in _args_an[1:]]
     _kw_mkttype_an = None
-    if any(k in _extra_an for k in _FUTURES_KW_AN):
+    # إصلاح #287/#322 (H1): فحص جزئي — "الفيوتشر" يحتوي "فيوتشر"
+    if any(k in arg for arg in _extra_an for k in _FUTURES_KW_AN):
         _kw_mkttype_an = "futures"
-    elif any(k in _extra_an for k in _SPOT_KW_AN):
+    elif any(k in arg for arg in _extra_an for k in _SPOT_KW_AN):
         _kw_mkttype_an = "spot"
 
     # تطوير #221: سؤال نوع السوق (Spot/Futures)
@@ -2086,13 +2109,22 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.warning(f"regime detect: {e}")
 
-        # EMA check
+        # إصلاح #317 (H4): EMA50 من regime_obj (EMA حقيقي) لا SMA
+        # يوحّد مصدر EMA بين Header وقسم المؤشرات
         if len(candles) >= 20:
             try:
                 closes = [float(c.get("close", 0)) for c in candles if c.get("close")]
                 ema20  = sum(closes[-20:]) / 20
                 ema50  = sum(closes[-50:]) / 50 if len(closes) >= 50 else ema20
-                ema_bearish = price < ema20 and price < ema50
+                # استخدم price_vs_ema50 من regime إذا متاح (EMA حقيقي)
+                if "regime_obj" in dir() and hasattr(regime_obj, "metrics"):
+                    _pve50 = regime_obj.metrics.get("price_vs_ema50", None)
+                    if _pve50 is not None:
+                        ema_bearish = _pve50 < 0  # سالب = السعر تحت EMA50
+                    else:
+                        ema_bearish = price < ema20 and price < ema50
+                else:
+                    ema_bearish = price < ema20 and price < ema50
             except Exception:
                 pass
 
@@ -2102,7 +2134,9 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                  else "محايد")
 
         # candles_summary كـ JSON احترافي لـ Groq
-        candles_summary = engine.data_layer.build_candles_summary(candles, symbol)
+        # إصلاح #328 (H2): تمرير السعر الحالي لـ build_candles_summary
+        # يمنع تناقض السعر بين Header ونص Groq
+        candles_summary = engine.data_layer.build_candles_summary(candles, symbol, current_price=price)
         if not candles_summary:
             # fallback نصي
             try:

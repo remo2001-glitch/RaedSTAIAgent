@@ -2519,6 +2519,16 @@ async def cb_vclose(update, context):
             try:
                 if engine:
                     engine.drift_monitor.record_outcome(pnl > 0)
+                    # إصلاح #299 (H9): audit_logger يتلقى نتائج الصفقات أيضاً
+                    if hasattr(engine, "audit_logger") and engine.audit_logger:
+                        try:
+                            engine.audit_logger.record_trade_outcome(
+                                symbol=sym,
+                                pnl=pnl,
+                                win=pnl > 0
+                            )
+                        except Exception:
+                            pass
             except Exception:
                 pass
             _close_type = "كامل" if pct == 100 else f"{pct}%"
