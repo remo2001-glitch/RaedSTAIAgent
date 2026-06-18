@@ -882,6 +882,14 @@ class NewsEngine:
                 if text and len(text) > 20:
                     text = _strip_mixed_language_artifacts(text, price=price)
                     text = _strip_header_duplicates(text)
+                    # إصلاح #274: تصحيح "ل " المنقوصة ← "لـ {symbol} "
+                    import re as _re
+                    # تصحيح "السوق الحالي ل بالاتجاه" → "السوق الحالي لـ {symbol} بالاتجاه"
+                    if f" ل ب" in text or "الحالي ل ب" in text:
+                        text = text.replace(
+                            "السوق الحالي ل ب",
+                            f"السوق الحالي لـ {symbol} ب"
+                        )
                     return text
         except Exception as _ae:
             logger.error(f"analyze_symbol ({symbol}): {_ae}")
