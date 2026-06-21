@@ -230,23 +230,35 @@ def _calc_fibonacci(candles: list, lookback: int = 60) -> dict:
             swing_high = price_now * 1.15
             swing_low  = price_now * 0.85
 
-        # إصلاح #261/#302 (H6): cap swing لمنع ATH/ATL تاريخي بعيد
-        # swing_high ≤ 2.5× السعر | swing_low ≥ 50% من السعر
+        # إصلاح #261/#302/#343/#367 (I2): منطق ديناميكي شامل
+        # يضمن أن السعر يقع في المنطقة الوسطى من النطاق (15%-85%)
         if price_now > 0:
             swing_high = min(swing_high, price_now * 2.5)
-            swing_low  = max(swing_low,  price_now * 0.5)  # رُفع من 0.4 → 0.5
-            # إعادة التحقق: السعر يجب أن يكون بين swing_low و swing_high
-            if swing_high <= swing_low:
-                swing_high = price_now * 1.20
+            swing_low  = max(swing_low,  price_now * 0.5)
+            # حالة 1: النطاق معكوس أو منعدم
+            if swing_high <= swing_low or swing_high <= price_now * 1.001:
+                swing_high = price_now * 1.25
                 swing_low  = price_now * 0.80
+            # حالة 2: السعر خارج النطاق كلياً
             elif price_now <= swing_low:
-                # السعر أقل من swing_low المُصحَّح — نبني حول السعر
                 swing_low  = price_now * 0.80
                 swing_high = min(swing_high, price_now * 1.50)
             elif price_now >= swing_high:
-                # السعر أعلى من swing_high — نبني حول السعر
-                swing_high = price_now * 1.20
+                swing_high = price_now * 1.25
                 swing_low  = max(swing_low, price_now * 0.80)
+            else:
+                # حالة 3: السعر داخل النطاق لكن في منطقة ميتة (< 15% أو > 85%)
+                _diff_tmp = swing_high - swing_low
+                if _diff_tmp > 0:
+                    _pct = (price_now - swing_low) / _diff_tmp
+                    if _pct < 0.15:
+                        # السعر قريب جداً من swing_low — أعد بناء النطاق كاملاً
+                        swing_low  = price_now * 0.80
+                        swing_high = price_now * 1.25  # cap الطرف العلوي أيضاً
+                    elif _pct > 0.85:
+                        # السعر قريب جداً من swing_high — أعد بناء النطاق كاملاً
+                        swing_high = price_now * 1.25
+                        swing_low  = price_now * 0.80  # cap الطرف السفلي أيضاً
 
         diff = swing_high - swing_low
         if diff <= 0:
@@ -798,12 +810,17 @@ def _build_professional_block(
     # Worst-Case
     # إصلاح #95: ضمان أن مستويات Worst-Case أعمق من (أو تساوي) SL المعروض،
     # ووصف wc_loss يعكس المستوى الأعمق (wc_bd2) لا pro_sl
+    # إصلاح #306/#347/#369 (I8): Worst-Case يعتمد على ATR الفعلي
+    # SL cap 12% جعل wc_loss ثابتاً دائماً — الإصلاح يستخدم ATR
+    _atr_abs = price * atr_pct / 100 if atr_pct > 0 else price * 0.05
     if pro_sl > 0 and pro_sl < price:
-        wc_bd1 = min(price * 0.95, pro_sl)
-        wc_bd2 = min(price * 0.90, pro_sl * 0.95)
+        wc_bd1 = pro_sl                          # مستوى كسر SL
+        wc_bd2 = pro_sl - _atr_abs * 0.5         # بعد كسر SL بنصف ATR
+        wc_bd2 = max(wc_bd2, price * 0.80)       # حد أقصى 20% خسارة
     else:
-        wc_bd1 = price * 0.95
-        wc_bd2 = price * 0.90
+        wc_bd1 = price * (1 - 0.05)
+        wc_bd2 = price * (1 - 0.05 - atr_pct/100 * 0.5)
+        wc_bd2 = max(wc_bd2, price * 0.80)
     wc_loss = abs(price - wc_bd2) / max(price, 1e-9) * 100
 
     sl_type_ar    = _get_sl_type(_scenario, rsi)
@@ -2193,7 +2210,8 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 symbol=symbol, price=price, price_change_24h=change_24h,
                 volume_24h=volume_24h, market_cap=market_cap, rsi=rsi,
                 fear_greed=fear_val, regime_desc=regime_desc,
-                candles_summary=_full_context)
+                candles_summary=_full_context,
+                ema_bearish=ema_bearish)  # إصلاح #344/#368 (I3): EMA موحَّد
             if not analysis or len(analysis.strip()) < 20:
                 raise ValueError("تحليل فارغ")
         except Exception as _ae:
@@ -2382,14 +2400,18 @@ async def cmd_chart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # إصلاح #372 (I6): استئناف /chart — إرسال تعليمات رفع الصورة
+    symbol_arg = (context.args or [""])[0].upper() if context.args else ""
+    hint = f" لـ {symbol_arg}" if symbol_arg else ""
     await _get_message(update, context).reply_text(
-        "⚙️ *تحليل الشارت البصري — قيد الصيانة*\n"
+        f"📊 *تحليل الشارت البصري{hint}*\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
-        "🔄 *بدائل متاحة الآن:*\n"
-        "• /analyze — تحليل عميق شامل (ذهبي+)\n"
-        "• /signal  — إشارة + مستويات دخول\n"
-        "• /quicksignal — تحليل سريع مجاني\n\n"
-        "⏳ سيعود تحليل الشارت البصري قريباً",
+        "📸 *أرسل صورة الشارت الآن*\n"
+        "وسأحللها فوراً بالذكاء الاصطناعي\n\n"
+        "💡 *نصائح للحصول على أفضل تحليل:*\n"
+        "• استخدم شارتاً واضحاً (TradingView)\n"
+        "• اختر الإطار الزمني المناسب (1H/4H/1D)\n"
+        "• تأكد من وضوح المستويات والشموع",
         parse_mode="Markdown")
 
 

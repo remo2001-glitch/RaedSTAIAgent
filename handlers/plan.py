@@ -1470,8 +1470,8 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "",
             "⏰ *التقارير التلقائية*",
             f"• {_clean(sched_w)}",
-            # إصلاح #301 (H10): تنظيف "يوم X" الزائدة في التاريخ الشهري
-            f"• {_clean(sched_m).replace(' يوم ', ' ').replace('  ', ' ')}",
+            # إصلاح #301/#350 (I9): تنظيف "يوم X" والرقم الزائد في التاريخ الشهري
+            f"• {__import__('re').sub(r'(\d{4}-\d{2}-\d{2}) \d+ ', r'\1 ', _clean(sched_m).replace(' يوم ', ' ')).replace('  ', ' ')}",
             "",
             kill_st,
             "",
