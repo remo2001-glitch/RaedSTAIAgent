@@ -322,8 +322,12 @@ class SignalLayer:
         ema200 = _ema(closes, 200) if len(closes) >= 200 else ema50
         macd_hist = _macd_histogram(closes)
         bb_pos    = _bb_position(closes, 20)
-        vol_ratio  = vols[-1] / (_sma(vols, 20) or 1)
+        # إصلاح #376/#400/#411 (J1): vol_ratio يستخدم متوسط 3 شموع لا الأخيرة فقط
+        # الشمعة الأخيرة (اليوم الحالي غير مكتمل) قد تحتوي حجماً صفرياً → 0.0x
         vol_avg20  = _sma(vols, 20) or 1
+        _vols_recent = [v for v in vols[-3:] if v > 0]  # آخر 3 شموع بحجم موجب
+        _last_vol  = sum(_vols_recent) / len(_vols_recent) if _vols_recent else vols[-1]
+        vol_ratio  = _last_vol / vol_avg20
 
         # تعريف مبكر لمنع NameError (#510)
         rsi_div     = "none"
@@ -508,6 +512,21 @@ class SignalLayer:
                 score += 0.10
             elif funding_pct > 0.03:   # Funding مرتفع = ضغط على Longs
                 score -= 0.10
+
+        # إصلاح #447 (J4): Fear & Greed و MVRV يُغذّيان oc_score
+        # هذه بيانات On-Chain عالمية تؤثر على كل العملات
+        fear_greed = data.get("fear_greed")
+        if fear_greed is not None:
+            has_real_data = True
+            if fear_greed < 15:    score += 0.15   # ذعر تاريخي = فرصة
+            elif fear_greed < 25:  score += 0.10   # خوف شديد = إيجابي
+            elif fear_greed > 75:  score -= 0.10   # جشع = خطر
+
+        mvrv = data.get("mvrv_z")
+        if mvrv is not None:
+            has_real_data = True
+            if mvrv < 0:      score += 0.15   # أقل من صفر = تقييم رخيص تاريخياً
+            elif mvrv < 1.0:  score += 0.05   # نطاق طبيعي منخفض
 
         if has_real_data:
             return round(min(max(score, 0), 1), 3)

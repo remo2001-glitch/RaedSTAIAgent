@@ -1332,6 +1332,12 @@ class DataLayer:
                 enriched["funding_rate_pct"] = fr.get("rate_pct", 0.0)
         except Exception as e:
             logger.debug(f"signal_enrichment ({symbol}): {e}")
+        # إصلاح J4: إضافة fear_greed و mvrv_z من base_onchain
+        if base_onchain:
+            if "fear_greed" in base_onchain:
+                enriched["fear_greed"] = base_onchain["fear_greed"]
+            if "mvrv_z" in base_onchain:
+                enriched["mvrv_z"] = base_onchain["mvrv_z"]
         return enriched
 
     async def _bgeo_fetch(self, slug: str, extra_keys: tuple = (),
@@ -1551,8 +1557,10 @@ class DataLayer:
             rsi = 100 - (100 / (1 + avg_g / avg_l)) if avg_l > 0 else 50
 
             # حجم vs متوسط
-            avg_vol  = sum(volumes[-20:]) / max(len(volumes[-20:]), 1) if volumes else 0
-            last_vol = volumes[-1] if volumes else 0
+            # إصلاح J1: متوسط آخر 3 شموع لا الشمعة الأخيرة فقط
+            avg_vol   = sum(volumes[-20:]) / max(len(volumes[-20:]), 1) if volumes else 0
+            _vols3    = [v for v in volumes[-3:] if v > 0]
+            last_vol  = sum(_vols3) / len(_vols3) if _vols3 else (volumes[-1] if volumes else 0)
             vol_ratio = last_vol / max(avg_vol, 1)
 
             # اتجاه آخر 5 شموع
