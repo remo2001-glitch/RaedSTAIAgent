@@ -1068,10 +1068,12 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         _rsi_cond = (f"  • ✅ RSI فوق {rsi_t} (حالياً {rsi_w:.0f}) — مُستوفى"
                                      if rsi_w > rsi_t else
                                      f"  • RSI يرتفع فوق {rsi_t} (حالياً {rsi_w:.0f})")
-                        _ema_cond = (f"  • ✅ السعر فوق EMA50 ({_fmt_price(ema50_w)}) — مُستوفى"
-                                     if price > ema50_w else
-                                     f"  • إغلاق فوق EMA50 ({_fmt_price(ema50_w)})")
-                        entry_lines = [
+                        # إصلاح #428 (J2): إضافة نسبة البُعد عن EMA50
+                _ema50_dist = abs(price - ema50_w) / max(ema50_w, 1) * 100
+                _ema_cond = (f"  • ✅ السعر فوق EMA50 ({_fmt_price(ema50_w)}) — مُستوفى"
+                             if price > ema50_w else
+                             f"  • إغلاق فوق EMA50 ({_fmt_price(ema50_w)} — بُعد {_ema50_dist:.1f}%)")
+                entry_lines = [
                             f"  ⏳ شروط الدخول:",
                             _rsi_cond,
                             _ema_cond,
@@ -1397,10 +1399,19 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sched_m    = engine.scheduler.next_monthly_ar() if engine.scheduler else "غير مُفعَّل"
         # إصلاح #301/#350 (I9): تنظيف "يوم X" خارج f-string
         import re as _re_plan
-        _sched_m_clean = _re_plan.sub(
-            r'(\d{4}-\d{2}-\d{2}) \d+ ', r' ',
-            _clean(sched_m).replace(' يوم ', ' ')
-        ).replace('  ', ' ')
+        # إصلاح #389 (J7): استخدام lambda بدل backreference لتجنب 
+        _sched_m_str = _clean(sched_m).replace(' يوم ', ' ')
+        _sched_m_match = _re_plan.search(r'(\d{4}-\d{2}-\d{2})', _sched_m_str)
+        if _sched_m_match:
+            _date_part = _sched_m_match.group(1)
+            # احتفظ بالتاريخ + ما بعد الرقم الزائد
+            _sched_m_clean = _re_plan.sub(
+                r'\d{4}-\d{2}-\d{2} \d+ ',
+                _date_part + ' ',
+                _sched_m_str
+            ).replace('  ', ' ')
+        else:
+            _sched_m_clean = _sched_m_str
         sched_scan = engine.scheduler.next_scan_ar()    if engine.scheduler else ""
 
         # ── قراءة Virtual Wallet الحقيقي من state_manager (Redis) ──────

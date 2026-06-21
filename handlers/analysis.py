@@ -754,9 +754,11 @@ def _build_professional_block(
     _cons_offset = (price - entry_agg) * 0.4  # 40% من المسافة
     entry_cons = entry_agg + _cons_offset
     entry_cons = min(entry_cons, price * 0.998)  # لا يتجاوز السعر الحالي
-    # ضمان: Aggressive < Conservative
-    if entry_agg >= entry_cons:
-        entry_cons = entry_agg * 1.005
+    # إصلاح #404 (J6): ضمان فارق كافٍ بين Entry1 وEntry2 (≥ 0.8% من السعر)
+    _min_gap = price * 0.008
+    if entry_cons - entry_agg < _min_gap:
+        entry_cons = entry_agg + _min_gap
+    entry_cons = min(entry_cons, price * 0.998)  # لا يتجاوز السعر الحالي
 
     # ── TP متدرج حسب نوع الصفقة ──────────────────────────────
     if _scenario == "counter_trend_bounce":
@@ -868,7 +870,7 @@ def _build_professional_block(
     if _fund_pct != 0:
         deriv_lines.append(f"• Funding Rate: {_fund_pct:+.4f}% {_fund_sig}")
     if _oi_chg != 0:
-        deriv_lines.append(f"• Open Interest: {_oi_chg:+.1f}% {_oi_sig}")
+        deriv_lines.append(f"• Open Interest: {_oi_chg:+.1f}% {_oi_sig}".replace("-0.0%", "0.0%"))
     # إصلاح #241-A: Whale/TVL غير ذي صلة للأصول المُرمَّزة غير الرقمية
     _is_perp_asset = tech.get("is_perp_asset", False)
     if _whale_sig and not _is_perp_asset:
@@ -1360,7 +1362,7 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     _fsig = "⚪ محايد"
                 lines.append(f"• Funding Rate: {_fund_pct:+.4f}% {_fsig}")
             if _oi_chg:
-                lines.append(f"• Open Interest: {_oi_chg:+.1f}% {_oi_sig}")
+                lines.append(f"• Open Interest: {_oi_chg:+.1f}% {_oi_sig}".replace("-0.0%", "0.0%"))
             if _whale_sig:
                 _wr_txt = f" ({_whale_r:.2f})" if _whale_r > 0 else ""
                 lines.append(f"• Whale Ratio{_wr_txt}: {_whale_sig}")
@@ -1856,7 +1858,7 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _fsig = "⚪ محايد"
             deriv_lines.append(f"• Funding Rate: {_fund_pct:+.4f}% {_fsig}")
         if _oi_chg:
-            deriv_lines.append(f"• Open Interest: {_oi_chg:+.1f}% {_oi_sig}")
+            deriv_lines.append(f"• Open Interest: {_oi_chg:+.1f}% {_oi_sig}".replace("-0.0%", "0.0%"))
         if _whale_sig:
             _wr_txt = f" ({_whale_r:.2f})" if _whale_r > 0 else ""
             deriv_lines.append(f"• Whale Ratio (Long/Short){_wr_txt}: {_whale_sig}")
