@@ -436,7 +436,13 @@ class SignalLayer:
                 score = 0.5 + (bull_ratio - 0.5) * 1.2
                 bias  = "bullish"
             elif bull_ratio < 0.4:
-                score = 0.5 - (0.5 - bull_ratio) * 1.2
+                score_raw_bear = 0.5 - (0.5 - bull_ratio) * 1.2
+                # إصلاح #280/#295/#321 (I1): RSI محايد (35-65) = لا إشارة واضحة
+                # → score لا يقل عن 0.28 (هابط معتدل لا شديد)
+                if 35 <= rsi <= 65:
+                    score = max(score_raw_bear, 0.28)
+                else:
+                    score = score_raw_bear
                 bias  = "bearish"
 
         # إصلاح #34: مكوّن مستمر لتمييز عملات ذات نظام نقاط خشن متطابق

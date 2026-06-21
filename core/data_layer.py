@@ -1558,13 +1558,14 @@ class DataLayer:
             # اتجاه آخر 5 شموع
             trend_5d = (closes[-1] - closes[-5]) / max(closes[-5], 1) * 100
 
+            # إصلاح #357/#362 (I4) + #363 (I5): RSI وEMA مُنسَّقان — لا منازل عشرية زائدة
             summary = {
-                "price":     round(last, 6),
-                "ema5":      round(ema5, 6),
-                "ema20":     round(ema20, 6),
-                "ema50":     round(ema50, 6),
-                "rsi14":     round(rsi, 1),
-                "trend_5d":  round(trend_5d, 2),
+                "price":     round(last, 2),
+                "EMA5":      round(ema5, 2),
+                "EMA20":     round(ema20, 2),
+                "EMA50":     round(ema50, 2),
+                "RSI":       int(round(rsi)),
+                "trend_5d":  round(trend_5d, 1),
                 "vol_ratio": round(vol_ratio, 2),
                 "candles_n": len(closes),
                 "above_ema5":  last > ema5,

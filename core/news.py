@@ -824,14 +824,22 @@ class NewsEngine:
         _cs = (f" | {candles_summary}" if candles_summary else "")
         # الـ prompt الآن يستخدم السيناريوهات المُبنية من البيانات الحقيقية
         # candles_summary يحتوي على السيناريوهات الجاهزة من analysis.py
+        # إصلاح #344/#368 (I3): EMA50 موحَّد + إصلاح #357/#362 (I4): RSI كـ int
+        _ema_bearish = kwargs.get("ema_bearish", False)
+        _ema_status  = "تحت EMA50" if _ema_bearish else "فوق EMA50"
+        _rsi_int     = int(round(rsi))  # لا منازل عشرية في النص
+        _is_perp_asset = any(x in symbol.upper() for x in ["SPCX","TSLA","AAPL","NVDA","MSFT","AMZN","GOOGL","META"])
+        _asset_type  = "الأصل المُرمَّز" if _is_perp_asset else "العملة"
         prompt = (
             f"أنت محلل فني محايد متخصص في الكريبتو."
-            f" البيانات: {symbol} | السعر: ${price:,.4g}"
+            f" البيانات: {_asset_type} {symbol} | السعر: ${price:,.4g}"
             f" | التغيير 24h: {price_change_24h:+.2f}%"
-            f" | RSI: {rsi:.0f} | Fear & Greed: {fear_greed}"
-            f" | السوق: {regime_desc}."
+            f" | RSI: {_rsi_int} | Fear & Greed: {fear_greed}"
+            f" | السوق: {regime_desc} | EMA50: {_ema_status}."
             f"{_cs}"
             " المطلوب: اكتب تحليلاً نصياً احترافياً باللغة العربية بدون markdown."
+            " مهم: اكتب دائماً EMA5 و EMA20 و EMA50 بأحرف إنجليزية كبيرة."
+            " مهم جداً: اكتب الأرقام بدون منازل عشرية زائدة (RSI=48 لا 48.5، EMA=1755 لا 1754.99)."
             " استخدم الأرقام والسيناريوهات الواردة أعلاه كمرجع."
             " اكتب 4-5 جمل تغطي:"
             " 1-الاتجاه العام وموقع SAR وMACD."
