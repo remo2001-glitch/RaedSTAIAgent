@@ -761,17 +761,23 @@ def _build_professional_block(
     _cons_offset = (price - entry_agg) * 0.4  # 40% من المسافة
     entry_cons = entry_agg + _cons_offset
     entry_cons = min(entry_cons, price * 0.998)  # لا يتجاوز السعر الحالي
-    # إصلاح #404 (J6): ضمان فارق كافٍ بين Entry1 وEntry2 (≥ 0.8% من السعر)
-    _min_gap = price * 0.008
-    if entry_cons - entry_agg < _min_gap:
-        entry_cons = entry_agg + _min_gap
-    entry_cons = min(entry_cons, price * 0.998)  # لا يتجاوز السعر الحالي
+    # إصلاح #567/#575 (M1): فارق Entry للأسعار الصغيرة
+    # المشكلة: min(price*0.998) كان يحد الفارق عند أسعار صغيرة
+    _min_gap = price * 0.008  # 0.8% حد أدنى
+    # ضمان الفارق المطلوب أولاً
+    entry_cons = max(entry_agg + _min_gap, entry_cons)
+    # لا يتجاوز السعر الحالي أبداً (يُقبل فارق أقل إذا السعر قريب من entry_agg)
+    if entry_cons >= price:
+        entry_cons = price * 0.999
 
     # ── TP متدرج حسب نوع الصفقة ──────────────────────────────
     if _scenario == "counter_trend_bounce":
         # إصلاح #622/#729: TP من الحساب فقط — لا Fibonacci في counter-trend
-        _tp1_pct = min(0.06, atr_dec * 1.2)   # max 6% للـ scalp
-        _tp2_pct = min(0.09, atr_dec * 2.0)   # max 9%
+        # إصلاح #555/#562 (M4): TP عند ذروة البيع يجب أن يتجاوز SL
+        # TP1=12% (يساوي SL_cap) → R/R=1:1 كحد أدنى
+        # TP2=18% → R/R فعلي مع TP2 = 1:1.5
+        _tp1_pct = min(0.12, atr_dec * 1.5)   # رُفع من 6% → 12% لـ R/R=1:1
+        _tp2_pct = min(0.18, atr_dec * 2.5)   # رُفع من 9% → 18%
         tp1_v = price * (1 + _tp1_pct)
         tp2_v = price * (1 + _tp2_pct)
         # ضمان: TP2 > TP1 بفارق لا يقل عن 2%
@@ -911,7 +917,11 @@ def _build_professional_block(
     _agg_label = "عند الدعم" if (ns > 0 and abs(entry_agg - ns) / max(ns, 1e-9) < 0.005) else "سحب فني (Pullback)"
     # إصلاح #542/#543/#547 (L1): منطق مالي — سوق هابط + WAIT → إخفاء Entry
     # عرض مناطق دخول Long في سوق هابط مضلل ومخالف للمنطق المالي
-    _is_bearish_wait = is_bear and conf < 0.50 and _conf_score < 65
+    # إصلاح #650/#660 (M2): توسيع L1 ليشمل التوزيع والتذبذب وليس الهبوط فقط
+    # "هابط" أو "توزيع" أو "تذبذب" = لا Entry Long مضلل
+    _regime_desc_lower = regime.description_ar if hasattr(regime, "description_ar") else ""
+    _is_not_bullish = any(x in _regime_desc_lower for x in ["هابط", "توزيع", "تذبذب"])
+    _is_bearish_wait = _is_not_bullish and conf < 0.50 and _conf_score < 65
     if _is_bearish_wait:
         # في سوق هابط: نعرض مناطق المراقبة لا الدخول الفعلي
         entry_lines = [

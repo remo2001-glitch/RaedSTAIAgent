@@ -718,11 +718,14 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 # capital_engine قرر عدم الدخول
                 week_plan = [
-                    f"• أسبوع 1: احتفظ بـ 100% سيولة (${user_portfolio:,.0f}) — RSI يرتد فوق 30 ({_rsi_label})",
-                    f"• أسبوع 2: مراقبة مستويات الدعم ودخول تدريجي عند ارتداد RSI فوق 35",
-                    # إصلاح #864: أسبوع 3 فقط إذا يوجد أصول مؤهلة
-                    # إصلاح #985/#1002: لا نُظهر ✅ عند لا أصول مؤهلة
-                    f"• أسبوع 3: Fear & Greed < 25 → انتظر تأكيد ارتداد ({_fg_label})",
+                    # إصلاح #422/#665/#674 (M5): شروط تُفعَّل إجراءات حقيقية
+                    (f"• أسبوع 1: 🟡 تجميع محدود 3-5% عند الدعم — Fear={fear_val} < 20 (خوف شديد = فرصة)"
+                     if fear_val < 20
+                     else f"• أسبوع 1: احتفظ بـ 100% سيولة (${user_portfolio:,.0f}) — RSI يرتد فوق 30 ({_rsi_label})"),
+                    (f"• أسبوع 2: 🟢 دخول تدريجي 5-10% — RSI={int(round(_rsi_w))} في ذروة بيع (< 30)"
+                     if _rsi_w < 30
+                     else f"• أسبوع 2: مراقبة مستويات الدعم ودخول عند ارتداد RSI فوق 35"),
+                    f"• أسبوع 3: Fear & Greed < 25 → {'🟢 ابدأ التجميع التدريجي' if fear_val < 25 else 'انتظر تأكيد ارتداد'} ({_fg_label})",
                     "• أسبوع 4: تقييم: هل تشكّل قاع؟ قرار الدخول الكامل",
                 ]
         elif regime.regime in (Regime.BULL_TREND, Regime.ACCUMULATION):
