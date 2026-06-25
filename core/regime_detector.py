@@ -121,7 +121,10 @@ class RegimeDetector:
             "price_vs_ema50": round((price - ema50) / ema50 * 100, 2),
             "btc_dominance": btc_dominance,
             "fear_greed":    fear_greed,
-            "vol_ratio":     round(volumes[-1] / vol_ma, 2) if vol_ma > 0 else 1.0,
+            # إصلاح L4 (نفس J1): متوسط 3 شموع لمنع 0.0x
+            "vol_ratio":     round(
+                (sum(v for v in volumes[-3:] if v > 0) / max(len([v for v in volumes[-3:] if v > 0]), 1))
+                / vol_ma, 2) if vol_ma > 0 and volumes else 1.0,
         }
 
         # ── منطق التشخيص ──────────────────────────────────────
@@ -135,13 +138,13 @@ class RegimeDetector:
         _action_basis = ""  # إصلاح #149: سبب القرار للشفافية/التشخيص
         if regime == Regime.HIGH_VOLATILITY:
             action = "reduce_size"
-        elif regime == Regime.BEAR_TREND and adx > 30:
+        elif regime == Regime.BEAR_TREND and adx >= 30:  # إصلاح L6
             if fear_greed < 20:
                 action = "avoid"
-                _action_basis = f" (ADX={adx:.0f}>30، Fear={fear_greed}<20)"
+                _action_basis = f" (ADX={adx:.0f}≥30، Fear={fear_greed}<20)"
             else:
                 action = "reduce_size"
-                _action_basis = f" (ADX={adx:.0f}>30)"
+                _action_basis = f" (ADX={adx:.0f}≥30)"
         # إذا RSI في ذروة بيع (< 30) → تحذير انعكاس بغض النظر عن الاتجاه
         if rsi_val < 30:
             action = "wait_reversal"
