@@ -1567,11 +1567,16 @@ class DataLayer:
             trend_5d = (closes[-1] - closes[-5]) / max(closes[-5], 1) * 100
 
             # إصلاح #357/#362 (I4) + #363 (I5): RSI وEMA مُنسَّقان — لا منازل عشرية زائدة
+            # إصلاح #641/#642 (M3): cap EMA50 لمنع قيم تاريخية مشوهة
+            # SPCX perp لديه بيانات قديمة بأسعار $1000+ → EMA50=$1,277
+            _ema50_capped = min(ema50, last * 3.0) if last > 0 else ema50
+            _ema20_capped = min(ema20, last * 3.0) if last > 0 else ema20
+            _ema5_capped  = min(ema5,  last * 3.0) if last > 0 else ema5
             summary = {
                 "price":     round(last, 2),
-                "EMA5":      round(ema5, 2),
-                "EMA20":     round(ema20, 2),
-                "EMA50":     round(ema50, 2),
+                "EMA5":      round(_ema5_capped, 2),
+                "EMA20":     round(_ema20_capped, 2),
+                "EMA50":     round(_ema50_capped, 2),
                 "RSI":       int(round(rsi)),
                 "trend_5d":  round(trend_5d, 1),
                 "vol_ratio": round(vol_ratio, 2),

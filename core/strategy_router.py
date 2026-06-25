@@ -598,7 +598,7 @@ class SignalLayer:
             f"• أخبار:   {s.signal_sources['news']:.0%}\n"
             f"• زخم 30 يوم: {s.signal_sources['momentum']:.0%}\n"
             f"• ماكرو:   {s.signal_sources['macro']:.0%}\n\n"
-            f"RSI: {rsi_val:.0f} | "
+            f"RSI: {int(round(rsi_val))} | "  # إصلاح M6: int(round) لمنع تناقض 44 vs 45
             f"EMA: {'✅' if s.technicals.get('ema_align') else '❌'} (محاذاة EMA20/50) | "
             f"حجم: {vol_r:.1f}x"
         )
