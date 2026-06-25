@@ -869,7 +869,16 @@ def _build_professional_block(
     smc_lines.append(f"• Volume Profile: {_get_vol_profile_ar(_vol_prof, _vol_ratio)}")
     smc_lines.append(f"• Bollinger Bands: {_get_bb_status_ar(_bb_pos_v)}")
     if _atr_val:
-        smc_lines.append(f"• ATR (تقلب): ${_atr_val:,.0f} يومياً")
+        # إصلاح #546 (L2): تنسيق ATR ذكي للأسعار الصغيرة
+        if _atr_val >= 1:
+            _atr_str = f"${_atr_val:,.0f}"
+        elif _atr_val >= 0.01:
+            _atr_str = f"${_atr_val:.4f}"
+        elif _atr_val >= 0.0001:
+            _atr_str = f"${_atr_val:.6f}"
+        else:
+            _atr_str = f"${_atr_val:.8f}"
+        smc_lines.append(f"• ATR (تقلب): {_atr_str} يومياً ({atr_pct:.1f}%)")
     parts.extend(smc_lines)
 
     # 3. Derivatives (إذا متاحة)
@@ -900,12 +909,24 @@ def _build_professional_block(
     tp2_pct = abs(tp2_v - price) / max(price, 1e-9) * 100 if tp2_v else 0
     # إصلاح #8: تسمية دقيقة — "عند الدعم" فقط إذا entry_agg ≈ مستوى الدعم المعروض
     _agg_label = "عند الدعم" if (ns > 0 and abs(entry_agg - ns) / max(ns, 1e-9) < 0.005) else "سحب فني (Pullback)"
-    entry_lines = [
-        "",
-        "*📍 مناطق الدخول والخروج*",
-        f"• Entry 1 (Aggressive): {_fmt_price(entry_agg)} — {_agg_label}",
-        f"• Entry 2 (Conservative): {_fmt_price(entry_cons)} — بعد تأكيد الارتداد",
-    ]
+    # إصلاح #542/#543/#547 (L1): منطق مالي — سوق هابط + WAIT → إخفاء Entry
+    # عرض مناطق دخول Long في سوق هابط مضلل ومخالف للمنطق المالي
+    _is_bearish_wait = is_bear and conf < 0.50 and _conf_score < 65
+    if _is_bearish_wait:
+        # في سوق هابط: نعرض مناطق المراقبة لا الدخول الفعلي
+        entry_lines = [
+            "",
+            "*📍 مستويات المراقبة*",
+            f"• مقاومة للمراقبة: {_fmt_price(entry_cons)} — اختراق صاعد مؤكَّد",
+            f"• دعم رئيسي: {_fmt_price(entry_agg)} — لا دخول قبل تأكيد الارتداد",
+        ]
+    else:
+        entry_lines = [
+            "",
+            "*📍 مناطق الدخول والخروج*",
+            f"• Entry 1 (Aggressive): {_fmt_price(entry_agg)} — {_agg_label}",
+            f"• Entry 2 (Conservative): {_fmt_price(entry_cons)} — بعد تأكيد الارتداد",
+        ]
     # إصلاح #285 (H5): إخفاء TP عند conf < 65% (WAIT و LOW)
     # الأهداف تظهر فقط عند إشارة حقيقية ≥ 65%
     if _conf_score >= 65:
@@ -921,7 +942,10 @@ def _build_professional_block(
     else:
         entry_lines.append("• الأهداف: متاحة بعد تأكيد 2/4 مؤشرات")
     entry_lines.extend([
-        f"• وقف الخسارة: {_fmt_price(pro_sl)} ({sl_pct:.1f}%-)",
+        # إصلاح L1: في سوق هابط + WAIT → SL لا معنى له كـ Long
+        (f"• مستوى الخطر: {_fmt_price(pro_sl)} (−{sl_pct:.1f}%)"
+         if _is_bearish_wait else
+         f"• وقف الخسارة: {_fmt_price(pro_sl)} ({sl_pct:.1f}%-)"),
         # إصلاح #264/#268/#276: R/R لا معنى له عند WAIT — يُخفى
         (f"• R/R الواقعي: 1:{rr_real}{_rr_adjusted_note}"
          if conf >= 0.65
