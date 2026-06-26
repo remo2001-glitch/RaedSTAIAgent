@@ -918,6 +918,62 @@ class NewsEngine:
                     f"RSI: {rsi:.0f} | Fear & Greed: {fear_greed}\n"
                     f"السوق: {regime_desc}")
 
+    async def detect_market_type_from_image(self, image_data: bytes) -> str:
+        """
+        R1 (#1024): تحديد نوع السوق من الصورة بسؤال مباشر وبسيط.
+        يُستدعى قبل analyze_chart_image لتجاوز خطأ Groq في تصنيف Futures.
+        يُعيد: 'futures' أو 'spot'
+        """
+        if not self.groq_key:
+            return "spot"
+
+        import base64, ssl, urllib.request, urllib.error, asyncio, json
+
+        try:
+            b64_image = base64.b64encode(image_data).decode("utf-8")
+            ctx  = ssl.create_default_context()
+            loop = asyncio.get_event_loop()
+
+            # سؤال مباشر جداً — إجابة كلمة واحدة فقط
+            detect_prompt = (
+                "Look at this trading chart carefully. "
+                "Is this a Futures/Perpetual contract chart or a Spot chart? "
+                "Check for ANY of these indicators: "
+                "Arabic text 'العقود الدائمة' or 'عقود آجلة', "
+                "English text: Perp, Perpetual, Swap, USDT-SWAP, Mark Price, Funding Rate. "
+                "Reply with ONLY one word: 'futures' or 'spot'. No explanation."
+            )
+
+            payload = json.dumps({
+                "model": "meta-llama/llama-4-scout-17b-16e-instruct",
+                "messages": [{"role": "user", "content": [
+                    {"type": "image_url",
+                     "image_url": {"url": f"data:image/jpeg;base64,{b64_image}"}},
+                    {"type": "text", "text": detect_prompt}
+                ]}],
+                "temperature": 0.0, "max_tokens": 10,
+            }, ensure_ascii=False).encode("utf-8")
+
+            req = urllib.request.Request(
+                GROQ_API_URL, data=payload,
+                headers={"Authorization": f"Bearer {self.groq_key}",
+                         "Content-Type": "application/json",
+                         "User-Agent": "RaedTradingAgent/3.0"},
+                method="POST")
+
+            resp = await loop.run_in_executor(
+                None,
+                lambda r=req: urllib.request.urlopen(r, context=ctx, timeout=15).read().decode())
+            data    = json.loads(resp)
+            answer  = data["choices"][0]["message"]["content"].strip().lower()
+            result  = "futures" if "futures" in answer else "spot"
+            logger.info(f"detect_market_type: '{answer}' → {result}")
+            return result
+
+        except Exception as e:
+            logger.warning(f"detect_market_type error: {e}")
+            return "spot"  # fallback آمن
+
     async def analyze_chart_image(self, image_data: bytes,
                                    symbol: str = "") -> str:
         """تحليل صورة الشارت — نموذج Vision محدَّث مع fallback."""
