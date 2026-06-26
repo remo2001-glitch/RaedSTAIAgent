@@ -2509,6 +2509,12 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         image_bytes = await file.download_as_bytearray()
+        # إصلاح #845: تحقق من حجم الصورة + log للتشخيص
+        _img_size_kb = len(image_bytes) / 1024
+        logger.info(f"cmd_chart: صورة {_img_size_kb:.0f}KB مستلمة")
+        if _img_size_kb > 5000:  # 5MB حد أقصى
+            await msg.edit_text("⚠️ الصورة كبيرة جداً (> 5MB). يُرجى إرسال صورة أصغر.")
+            return
         caption = _get_message(update, context).caption or ""
         symbol  = ""
         for word in caption.split():
@@ -2569,6 +2575,14 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
         # إصلاح #236: ربط /chart ↔ /signal للتكامل التحليلي
         _signal_hint = f"\n💡 للتحليل الشامل متعدد المصادر: /signal {symbol}" if symbol else ""
+        # إصلاح #845: تحقق من نتيجة analysis قبل العرض
+        if not analysis or len(analysis.strip()) < 30 or analysis.startswith("❌"):
+            logger.error(f"cmd_chart: تحليل فاشل أو فارغ: {analysis[:100] if analysis else 'فارغ'}")
+            await msg.edit_text(
+                f"⚠️ لم يتمكن النموذج من تحليل الصورة.\n"
+                f"السبب: {analysis or 'لا استجابة من النموذج'}\n\n"
+                f"💡 جرب إرسال صورة أوضح أو أصغر حجماً.")
+            return
         full = _clean_md(
             "\n".join(header_lines) + "\n\n" +
             f"{analysis}\n\n"
@@ -2582,15 +2596,13 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.edit_text(full, parse_mode="Markdown")
 
     except Exception as e:
-        logger.error(f"cmd_chart: {e}")
+        logger.error(f"cmd_chart exception: {type(e).__name__}: {e}")
         await msg.edit_text(
-            "⚙️ *تحليل الشارت البصري — قيد الصيانة*\n\n"
-            "🔄 *بدائل متاحة الآن:*\n"
-            "• /analyze — تحليل عميق شامل\n"
-            "• /signal  — إشارة + مستويات دخول\n"
-            "• /quicksignal — تحليل سريع",
-            parse_mode=ParseMode.MARKDOWN
-        )
+            f"⚠️ خطأ في تحليل الشارت\n"
+            f"التفاصيل: {type(e).__name__}\n\n"
+            f"💡 جرب:\n"
+            f"• إرسال صورة أصغر\n"
+            f"• أو استخدم /analyze للتحليل النصي")
 
 
 # ════════════════════════════════════════════════════════════════
