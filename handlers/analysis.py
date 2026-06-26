@@ -2583,16 +2583,22 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             image_data=bytes(image_bytes), symbol=symbol)
 
         # فحص نص التحليل — القسم "0-نوع السوق" يُصرِّح بالنوع صراحةً
-        if not _chart_is_futures and analysis:
+        # إصلاح Q1: الاكتشاف من نص Groq — لا يُلغي اكتشاف caption/symbol
+        if analysis:
             _analysis_upper = analysis.upper()
-            # إصلاح O5: إضافة مصطلحات عربية لاكتشاف Futures
-        _chart_is_futures = any(kw in _analysis_upper
-                                     for kw in ("FUTURES/PERP", "FUTURES", "PERP",
-                                                 "SWAP", "PERPETUAL", "MARK PRICE",
-                                                 "FUNDING RATE", "OVERNIGHT",
-                                                 "فيوتشر", "عقد دائم", "عقد مستمر",
-                                                 "العقود الدائمة", "العقود الآجلة",
-                                                 "TRAD-FI", "TRADFI", "LINKED STOCK"))
+            _analysis_ar    = analysis  # النص العربي
+            _futures_in_analysis = any(kw in _analysis_upper
+                                       for kw in ("FUTURES/PERP", "FUTURES", "PERP",
+                                                   "SWAP", "PERPETUAL", "MARK PRICE",
+                                                   "FUNDING RATE", "OVERNIGHT",
+                                                   "TRAD-FI", "TRADFI", "LINKED STOCK"))
+            _futures_in_analysis_ar = any(kw in _analysis_ar
+                                          for kw in ("العقود الدائمة", "العقود الآجلة",
+                                                      "فيوتشر", "عقد دائم", "عقد مستمر",
+                                                      "FUTURES/PERP"))
+            # Futures يُثبَّت إذا وُجد في أي مصدر — لا يُلغى
+            if _futures_in_analysis or _futures_in_analysis_ar:
+                _chart_is_futures = True
 
         _mkt_label = "Futures/Perp" if _chart_is_futures else "Spot"
         sym_label = f" — {symbol}" if symbol else ""
