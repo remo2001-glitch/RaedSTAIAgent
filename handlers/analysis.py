@@ -920,16 +920,26 @@ def _build_professional_block(
     # إصلاح #650/#660 (M2): توسيع L1 ليشمل التوزيع والتذبذب وليس الهبوط فقط
     # "هابط" أو "توزيع" أو "تذبذب" = لا Entry Long مضلل
     _regime_desc_lower = regime.description_ar if hasattr(regime, "description_ar") else ""
-    _is_not_bullish = any(x in _regime_desc_lower for x in ["هابط", "توزيع", "تذبذب"])
+    # إصلاح #715/#721 (N5): إضافة "تقلب" لتشمل HighVol
+    _is_not_bullish = any(x in _regime_desc_lower for x in ["هابط", "توزيع", "تذبذب", "تقلب"])
     # إصلاح crash: _conf_score غير مُعرَّف هنا — نستخدم conf فقط
     _is_bearish_wait = _is_not_bullish and conf < 0.65
     if _is_bearish_wait:
         # في سوق هابط: نعرض مناطق المراقبة لا الدخول الفعلي
+        # إصلاح #770/#776/#789 (N2): مقاومة المراقبة تأتي من فيبو (فوق السعر)
+        _nr_watch = fib.get("nearest_resistance", 0)
+        _ns_watch = fib.get("nearest_support", 0)
+        # إذا nearest_resistance أقل من السعر → استخدم entry_cons كـ fallback
+        if _nr_watch <= price:
+            _nr_watch = entry_cons if entry_cons > price else price * 1.02
+        # إذا nearest_support أعلى من السعر → استخدم entry_agg
+        if _ns_watch >= price:
+            _ns_watch = entry_agg
         entry_lines = [
             "",
             "*📍 مستويات المراقبة*",
-            f"• مقاومة للمراقبة: {_fmt_price(entry_cons)} — اختراق صاعد مؤكَّد",
-            f"• دعم رئيسي: {_fmt_price(entry_agg)} — لا دخول قبل تأكيد الارتداد",
+            f"• مقاومة للمراقبة: {_fmt_price(_nr_watch)} — اختراق صاعد مؤكَّد",
+            f"• دعم رئيسي: {_fmt_price(_ns_watch)} — لا دخول قبل تأكيد الارتداد",
         ]
     else:
         entry_lines = [
@@ -979,7 +989,10 @@ def _build_professional_block(
     # 6. إصلاح #204/#206: قسمان منفصلان بتسميات واضحة
     # 6-A. تأكيدات الدخول الحاسمة (تؤثر على حجم الصفقة عبر _confirmed/_flags_found)
     parts.extend(["", "*🔑 تأكيدات الدخول (تُحدِّد حجم الصفقة — الحد الأدنى: 2 من 4)*"])
-    if _confirmed:
+    # إصلاح #728/#736 (N4): في وضع المراقبة → "متاحة للمراقبة" لا "الإشارة نشطة"
+    if _confirmed and _is_bearish_wait:
+        parts.append(f"✅ {_flags_found}/4 — *تأكيدات للمراقبة* (لا دخول فعلي بعد)")
+    elif _confirmed:
         parts.append(f"✅ {_flags_found}/4 مؤكدة — الإشارة *نشطة*")
     else:
         parts.append(f"⚠️ {_flags_found}/4 — انتظر مؤشر إضافي")
