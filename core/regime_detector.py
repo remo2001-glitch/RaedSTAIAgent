@@ -107,10 +107,12 @@ class RegimeDetector:
         ema50  = self._ema(closes, 50)
         ema200 = self._ema(closes, 200) if len(closes) >= 200 else ema50
         # إصلاح M3: cap EMA لمنع بيانات تاريخية مشوهة (SPCX perp)
-        if price > 0:
-            ema50  = min(ema50,  price * 3.0)
-            ema20  = min(ema20,  price * 3.0)
-            ema200 = min(ema200, price * 3.0)
+        # price = آخر سعر إغلاق (closes[-1])
+        _current_price = closes[-1] if closes else 0
+        if _current_price > 0:
+            ema50  = min(ema50,  _current_price * 3.0)
+            ema20  = min(ema20,  _current_price * 3.0)
+            ema200 = min(ema200, _current_price * 3.0)
         rsi    = self._rsi(closes, 14)
         vol_ma = self._sma(volumes, 20)
         atr_pct = (atr / closes[-1] * 100) if closes[-1] > 0 else 0
