@@ -412,7 +412,8 @@ class RegimeDetector:
             f"📈 *المؤشرات*\n"
             f"• ATR: {m.get('atr_pct',0):.1f}% | ADX: {m.get('adx',0):.0f}\n"
             f"• RSI: {m.get('rsi',0):.0f} | حجم: {vol_ratio:.1f}x\n"
-            f"• السعر vs EMA50: {m.get('price_vs_ema50',0):+.1f}%\n"
+            # إصلاح O3: تنبيه عند EMA50 بعيد جداً
+            f"• السعر vs EMA50: {m.get('price_vs_ema50',0):+.1f}%{' ⚠️ (EMA تاريخي)' if abs(m.get('price_vs_ema50',0)) > 50 else ''}\n"
             f"• Fear & Greed: {m.get('fear_greed',50)} | هيمنة BTC: {m.get('btc_dominance',50):.0f}%\n\n"
             f"🎯 *الاستراتيجية الموصى بها*\n"
             f"• {strategies_txt}\n"
