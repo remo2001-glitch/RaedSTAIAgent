@@ -517,6 +517,14 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             # إصلاح #254: timeout صارم لجلب OHLCV + تقليل العملات
             symbols = symbols[:8]   # أقصى 8 بدلاً من 10
+
+            # إصلاح P3 (#945/#951): Futures → إضافة الأصول المُرمَّزة
+            if _use_futures_pm:
+                _tokenized_defaults = ["SPCX", "COIN", "AAPL", "NVDA", "TSLA"]
+                for _tk in _tokenized_defaults:
+                    if _tk not in symbols and len(symbols) < 10:
+                        symbols.append(_tk)
+                logger.info(f"plan_month Futures symbols: {symbols}")
             try:
                 ohlcv_all = await asyncio.wait_for(
                     asyncio.gather(
@@ -886,8 +894,13 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sym_str2 = ", ".join(symbols)
         plan_label = f"خطة مخصصة لـ {sym_str2}"
     else:
-        symbols    = ["BTC", "ETH", "BNB", "SOL"]
-        sym_str2   = "BTC, ETH, BNB, SOL"
+        # إصلاح P3: Futures/Spot تحدد قائمة العملات
+        if _use_futures_pw:
+            symbols    = ["BTC", "ETH", "BNB", "SOL", "SPCX", "COIN", "AAPL"]
+            sym_str2   = "BTC, ETH, BNB, SOL, SPCX, COIN, AAPL"
+        else:
+            symbols    = ["BTC", "ETH", "BNB", "SOL"]
+            sym_str2   = "BTC, ETH, BNB, SOL"
         plan_label = "خطة السوق العامة — Top 4"
     # إصلاح #875: دعم msg من callback
     _msg_ov_w = context.user_data.pop("_plan_msg_override", None)

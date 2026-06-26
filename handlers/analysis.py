@@ -2464,18 +2464,30 @@ async def cmd_chart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # إصلاح #372 (I6): استئناف /chart — إرسال تعليمات رفع الصورة
+    # إصلاح P1 (#967): إذا /chart جاء مع صورة في نفس الرسالة → حللها مباشرة
     symbol_arg = (context.args or [""])[0].upper() if context.args else ""
+    _msg_cmd = _get_message(update, context)
+    _has_photo = bool(_msg_cmd.photo)
+    _has_doc   = bool(_msg_cmd.document)
+
+    if _has_photo or _has_doc:
+        # الصورة في نفس رسالة /chart → نُعالجها مباشرة
+        logger.info(f"cmd_chart_cmd: صورة في نفس الرسالة — معالجة مباشرة")
+        await cmd_chart(update, context)
+        return
+
     hint = f" لـ {symbol_arg}" if symbol_arg else ""
-    await _get_message(update, context).reply_text(
+    if symbol_arg:
+        context.user_data["_chart_symbol"] = symbol_arg
+    await _msg_cmd.reply_text(
         f"📊 *تحليل الشارت البصري{hint}*\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
         "📸 *أرسل صورة الشارت الآن*\n"
         "وسأحللها فوراً بالذكاء الاصطناعي\n\n"
-        "💡 *نصائح للحصول على أفضل تحليل:*\n"
-        "• استخدم شارتاً واضحاً (TradingView)\n"
-        "• اختر الإطار الزمني المناسب (1H/4H/1D)\n"
-        "• تأكد من وضوح المستويات والشموع",
+        "💡 *طريقة الإرسال:*\n"
+        "• اضغط 📎 واختر صورة من الجهاز\n"
+        "• أرسلها مباشرة في المحادثة\n"
+        "• أو أرسل الصورة مع كتابة /chart في الـ caption",
         parse_mode="Markdown")
 
 
