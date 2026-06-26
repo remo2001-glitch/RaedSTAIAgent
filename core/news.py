@@ -927,10 +927,11 @@ class NewsEngine:
         import base64, ssl, urllib.request, urllib.error, asyncio
 
         # إصلاح #551 (L5): تحديث نماذج Vision لأحدث المتاح في Groq
-        # إصلاح #845: تحديث نماذج Vision — الترتيب من الأكثر دعماً للصور
+        # إصلاح P2 (#919/#920): حذف llama-3.2 المُوقَفة رسمياً من Groq
+        # llama-3.2-90b-vision-preview → decommissioned
+        # llama-3.2-11b-vision-preview → decommissioned (HTTP 400)
+        # llama-4-scout يعمل ✅ (1022 حرف)
         VISION_MODELS = [
-            "llama-3.2-90b-vision-preview",
-            "llama-3.2-11b-vision-preview",
             "meta-llama/llama-4-scout-17b-16e-instruct",
             "meta-llama/llama-4-maverick-17b-128e-instruct",
         ]
