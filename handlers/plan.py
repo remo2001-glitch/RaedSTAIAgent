@@ -77,10 +77,14 @@ async def callback_planmkt(update, context):
     else:
         context.args = []
 
+    # إصلاح O2: تمرير رسالة "جاري" للأوامر لمنع التكرار
     label = "⚡ Spot" if mkttype == "spot" else "📈 Futures + الأسهم"
+    plan_name = "الأسبوعية" if plan_type == "week" else "الشهرية"
     await query.edit_message_text(
-        f"{label} — جاري بناء الخطة {'الأسبوعية' if plan_type=='week' else 'الشهرية'}...",
+        f"{label} — جاري بناء الخطة {plan_name}...",
         parse_mode="Markdown")
+    # تمرير رسالة query كـ msg_override لمنع رسالة "جاري" مكررة
+    context.user_data["_plan_msg_override"] = query.message
 
     if plan_type == "week":
         await cmd_plan_week(update, context)
@@ -1155,7 +1159,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 week_lines = [
                     f"• أسبوع 1: انتظار تأكيد — RSI يرتد فوق 30 ({_rsi_lbl})",
                     f"• أسبوع 2: دخول تدريجي في {_buy_names} عند ارتداد RSI فوق 35",
-                    f"• أسبوع 3: Fear & Greed < 25 → ابدأ التجميع التدريجي عند تأكيد الارتداد ({_fg_lbl})",
+                    f"• أسبوع 3: Fear & Greed < 25 → {'🟢 ابدأ التجميع التدريجي' if _fg_pw < 25 else 'انتظر تأكيد ارتداد'} ({_fg_lbl})",
                     "• أسبوع 4: تقييم القاع — قرار الدخول الكامل",
                 ]
             else:
@@ -1165,7 +1169,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                      if _fg_pw < 20
                      else f"• أسبوع 1: لا دخول — RSI يرتد فوق 30 ({_rsi_lbl})"),
                     "• أسبوع 2: دخول تدريجي عند ارتداد RSI فوق 35",
-                    f"• أسبوع 3: Fear & Greed < 25 → ابدأ التجميع التدريجي عند تأكيد الارتداد ({_fg_lbl})",
+                    f"• أسبوع 3: Fear & Greed < 25 → {'🟢 ابدأ التجميع التدريجي' if _fg_pw < 25 else 'انتظر تأكيد ارتداد'} ({_fg_lbl})",
                     "• أسبوع 4: تقييم القاع — قرار الدخول الكامل",
                 ]
         elif regime.regime.value in ("bull_trend", "accumulation"):

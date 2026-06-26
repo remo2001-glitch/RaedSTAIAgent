@@ -2497,15 +2497,26 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await _get_message(update, context).reply_text("🔍 جاري تحليل الشارت...")
 
     try:
-        photo = _get_message(update, context).photo
+        # إصلاح O1: تحقق شامل من جميع أنواع إرسال الصور
+        _msg = _get_message(update, context)
+        photo = _msg.photo
+        _doc  = _msg.document
+        logger.info(f"cmd_chart: photo={bool(photo)}, doc={bool(_doc)}, "
+                    f"doc_mime={getattr(_doc,'mime_type','') if _doc else ''}")
         if photo:
             file = await photo[-1].get_file()
-        elif _get_message(update, context).document:
-            file = await _get_message(update, context).document.get_file()
+        elif _doc and (getattr(_doc, "mime_type", "") or "").startswith("image/"):
+            file = await _doc.get_file()
+        elif _doc:
+            # document بدون mime_type صريح — نحاول على أي حال
+            file = await _doc.get_file()
         else:
             await msg.edit_text(
-                "⚠️ يُرجى إرسال صورة الشارت.\n"
-                "اكتب /chart لمعرفة طريقة الاستخدام")
+                "⚠️ يُرجى إرسال صورة الشارت مباشرةً.\n\n"
+                "💡 *طريقة الإرسال الصحيحة:*\n"
+                "• اضغط على أيقونة الصورة 📎\n"
+                "• اختر الصورة من الجهاز\n"
+                "• أرسلها في المحادثة (بدون ضغط إرسال كملف)")
             return
 
         image_bytes = await file.download_as_bytearray()
@@ -2532,10 +2543,14 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "COIN-M", "DELIVERY", "QUARTERLY", "FUTURES/PERP",
         )
         _caption_upper = caption.upper()
-        _chart_is_futures = any(kw in _caption_upper for kw in _futures_keywords)
+        _caption_ar    = caption  # النص العربي بدون upper
+        _futures_keywords_ar = ("العقود الدائمة", "العقود الآجلة", "فيوتشر", 
+                                  "عقد دائم", "سوق مغلق", "تسليم")
+        _chart_is_futures = (any(kw in _caption_upper for kw in _futures_keywords)
+                              or any(kw in _caption_ar for kw in _futures_keywords_ar))
         if not _chart_is_futures and symbol:
             _chart_is_futures = any(kw in symbol.upper()
-                                     for kw in ("PERP","SWAP","FUT"))
+                                     for kw in ("PERP","SWAP","FUT","SPCX","TSLA","AAPL","NVDA","COIN"))
 
         analysis = await engine.news_engine.analyze_chart_image(
             image_data=bytes(image_bytes), symbol=symbol)
@@ -2543,11 +2558,14 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # فحص نص التحليل — القسم "0-نوع السوق" يُصرِّح بالنوع صراحةً
         if not _chart_is_futures and analysis:
             _analysis_upper = analysis.upper()
-            _chart_is_futures = any(kw in _analysis_upper
+            # إصلاح O5: إضافة مصطلحات عربية لاكتشاف Futures
+        _chart_is_futures = any(kw in _analysis_upper
                                      for kw in ("FUTURES/PERP", "FUTURES", "PERP",
                                                  "SWAP", "PERPETUAL", "MARK PRICE",
                                                  "FUNDING RATE", "OVERNIGHT",
-                                                 "فيوتشر", "عقد دائم", "عقد مستمر"))
+                                                 "فيوتشر", "عقد دائم", "عقد مستمر",
+                                                 "العقود الدائمة", "العقود الآجلة",
+                                                 "TRAD-FI", "TRADFI", "LINKED STOCK"))
 
         _mkt_label = "Futures/Perp" if _chart_is_futures else "Spot"
         sym_label = f" — {symbol}" if symbol else ""
