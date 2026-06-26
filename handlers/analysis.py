@@ -921,7 +921,8 @@ def _build_professional_block(
     # "هابط" أو "توزيع" أو "تذبذب" = لا Entry Long مضلل
     _regime_desc_lower = regime.description_ar if hasattr(regime, "description_ar") else ""
     _is_not_bullish = any(x in _regime_desc_lower for x in ["هابط", "توزيع", "تذبذب"])
-    _is_bearish_wait = _is_not_bullish and conf < 0.50 and _conf_score < 65
+    # إصلاح crash: _conf_score غير مُعرَّف هنا — نستخدم conf فقط
+    _is_bearish_wait = _is_not_bullish and conf < 0.65
     if _is_bearish_wait:
         # في سوق هابط: نعرض مناطق المراقبة لا الدخول الفعلي
         entry_lines = [

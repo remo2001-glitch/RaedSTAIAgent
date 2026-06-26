@@ -722,8 +722,8 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     (f"• أسبوع 1: 🟡 تجميع محدود 3-5% عند الدعم — Fear={fear_val} < 20 (خوف شديد = فرصة)"
                      if fear_val < 20
                      else f"• أسبوع 1: احتفظ بـ 100% سيولة (${user_portfolio:,.0f}) — RSI يرتد فوق 30 ({_rsi_label})"),
-                    (f"• أسبوع 2: 🟢 دخول تدريجي 5-10% — RSI={int(round(_rsi_w))} في ذروة بيع (< 30)"
-                     if _rsi_w < 30
+                    (f"• أسبوع 2: 🟢 دخول تدريجي 5-10% — RSI={int(round(rsi_w))} في ذروة بيع (< 30)"
+                     if rsi_w < 30
                      else f"• أسبوع 2: مراقبة مستويات الدعم ودخول عند ارتداد RSI فوق 35"),
                     f"• أسبوع 3: Fear & Greed < 25 → {'🟢 ابدأ التجميع التدريجي' if fear_val < 25 else 'انتظر تأكيد ارتداد'} ({_fg_label})",
                     "• أسبوع 4: تقييم: هل تشكّل قاع؟ قرار الدخول الكامل",
