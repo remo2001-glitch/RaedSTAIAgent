@@ -927,11 +927,12 @@ class NewsEngine:
         import base64, ssl, urllib.request, urllib.error, asyncio
 
         # إصلاح #551 (L5): تحديث نماذج Vision لأحدث المتاح في Groq
+        # إصلاح #845: تحديث نماذج Vision — الترتيب من الأكثر دعماً للصور
         VISION_MODELS = [
-            "meta-llama/llama-4-scout-17b-16e-instruct",
-            "meta-llama/llama-4-maverick-17b-128e-instruct",
             "llama-3.2-90b-vision-preview",
             "llama-3.2-11b-vision-preview",
+            "meta-llama/llama-4-scout-17b-16e-instruct",
+            "meta-llama/llama-4-maverick-17b-128e-instruct",
         ]
 
         try:
@@ -979,7 +980,7 @@ class NewsEngine:
 
                     resp = await loop.run_in_executor(
                         None,
-                        lambda r=req: urllib.request.urlopen(r, context=ctx, timeout=30).read().decode())
+                        lambda r=req: urllib.request.urlopen(r, context=ctx, timeout=60).read().decode())
                     data    = json.loads(resp)
                     content = data["choices"][0]["message"]["content"].strip()
                     content = _strip_markdown_headers(content)
@@ -987,8 +988,8 @@ class NewsEngine:
                     return content
 
                 except urllib.error.HTTPError as e:
-                    err = e.read().decode()[:300]
-                    logger.warning(f"Groq Vision ({model}) HTTP {e.code}: {err[:80]}")
+                    err = e.read().decode()[:500]
+                    logger.error(f"Groq Vision ({model}) HTTP {e.code}: {err[:200]}")
                     if e.code in (400, 404) and ("decommiss" in err.lower() or "not found" in err.lower()):
                         continue
                     if e.code in (401, 403):
