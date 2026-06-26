@@ -2579,6 +2579,18 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _chart_is_futures = any(kw in symbol.upper()
                                      for kw in ("PERP","SWAP","FUT","SPCX","TSLA","AAPL","NVDA","COIN"))
 
+        # إصلاح R1 (#1024): تحديد نوع السوق من الصورة بسؤال مباشر قبل التحليل الكامل
+        # هذا يتجاوز خطأ Groq الذي يكتب "Spot" رغم وجود "العقود الدائمة"
+        if not _chart_is_futures:
+            try:
+                _detected_type = await engine.news_engine.detect_market_type_from_image(
+                    bytes(image_bytes))
+                if _detected_type == "futures":
+                    _chart_is_futures = True
+                    logger.info("R1: نوع السوق = Futures (من detect_market_type)")
+            except Exception as _det_e:
+                logger.warning(f"R1 detect error: {_det_e}")
+
         analysis = await engine.news_engine.analyze_chart_image(
             image_data=bytes(image_bytes), symbol=symbol)
 
