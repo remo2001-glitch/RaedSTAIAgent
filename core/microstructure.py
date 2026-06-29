@@ -495,7 +495,10 @@ class MicrostructureLayer:
             f"🔬 *تحليل السيولة — {profile.symbol}*",
             "━━━━━━━━━━━━━━━━━━",
             f"السيولة: {score_bar} {profile.liquidity_score:.0%}",
-            f"الحكم: {'✅ قابل للتداول' if profile.is_tradeable else '⛔ غير موصى بالتداول'}",
+            # U6: حكم مُحسَّن يُوضّح سبب "غير موصى"
+            (f"الحكم: ✅ قابل للتداول"
+             if profile.is_tradeable
+             else f"الحكم: {'⚠️ بيانات غير موثوقة' if any('تقديرية' in w for w in profile.warnings) else '⛔ غير موصى بالتداول'}"),
             "",
             "📊 *Order Book*",
             f"• Spread: {profile.spread_pct:.5f}%",
@@ -673,7 +676,8 @@ class MicrostructureLayer:
             bid_depth_usd=round(bid_depth, 0), ask_depth_usd=round(ask_depth, 0),
             imbalance=0.0, estimated_slippage_pct=round(slippage, 4),
             liquidity_score=round(score, 3), pressure=0.0,
-            is_tradeable=score > 0.1,
+            # إصلاح U6 (#1126/#1133): بيانات تقديرية → غير موصى بالتداول
+            is_tradeable=False,
             warnings=["⚠️ بيانات تقديرية — ليست Order Book حقيقي"],
             source="coingecko",
         )
