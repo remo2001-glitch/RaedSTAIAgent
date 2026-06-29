@@ -66,8 +66,11 @@ class MicrostructureLayer:
     # 1. تحليل السيولة الرئيسي
     # ═══════════════════════════════════════════════════════════
     async def analyze(self, symbol: str,
-                       order_size_usd: float = 10_000) -> "LiquidityProfile":
-        """يحلل سيولة العملة — OKX أولاً ثم Bybit ثم CoinGecko."""
+                       order_size_usd: float = 10_000,
+                       is_futures: bool = False) -> "LiquidityProfile":
+        """يحلل سيولة العملة — OKX أولاً ثم Bybit ثم CoinGecko.
+        is_futures=True → يجلب Futures/SWAP Order Book (سيولة أدق)
+        """
         # فحص الـ cache
         if symbol in self._cache:
             profile, ts = self._cache[symbol]
@@ -79,7 +82,10 @@ class MicrostructureLayer:
         # ── 1. OKX Public API (أفضل مصدر متاح من Railway) ────
         try:
             if self.session:
-                okx_sym = f"{symbol.upper()}-USDT"
+                # إصلاح S1: Futures → SWAP Order Book (سيولة أدق)
+                okx_sym = (f"{symbol.upper()}-USDT-SWAP"
+                           if is_futures
+                           else f"{symbol.upper()}-USDT")
                 url = f"https://www.okx.com/api/v5/market/books?instId={okx_sym}&sz=50"
                 async with self.session.get(
                     url, timeout=aiohttp.ClientTimeout(total=8)
@@ -228,7 +234,10 @@ class MicrostructureLayer:
         # fallback: OKX Public API (لا يحتاج API key)
         try:
             if self.session:
-                okx_sym = f"{symbol.upper()}-USDT"
+                # إصلاح S1: Futures → SWAP Order Book (سيولة أدق)
+                okx_sym = (f"{symbol.upper()}-USDT-SWAP"
+                           if is_futures
+                           else f"{symbol.upper()}-USDT")
                 url = f"https://www.okx.com/api/v5/market/books?instId={okx_sym}&sz={depth_limit}"
                 async with self.session.get(
                     url, timeout=aiohttp.ClientTimeout(total=6)
@@ -265,7 +274,10 @@ class MicrostructureLayer:
         # OKX Public API fallback
         try:
             if self.session:
-                okx_sym = f"{symbol.upper()}-USDT"
+                # إصلاح S1: Futures → SWAP Order Book (سيولة أدق)
+                okx_sym = (f"{symbol.upper()}-USDT-SWAP"
+                           if is_futures
+                           else f"{symbol.upper()}-USDT")
                 url = f"https://www.okx.com/api/v5/market/books?instId={okx_sym}&sz={depth_limit}"
                 async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=6)) as r:
                     if r.status == 200:
