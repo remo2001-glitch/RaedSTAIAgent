@@ -1872,8 +1872,20 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await _get_message(update, context).reply_text(f"🔬 جاري تحليل السيولة لـ {symbol}...")
 
     try:
+        # إصلاح S2: تحديد نوع السوق للسيولة
+        # SWAP في الاسم الأصلي أو أصل مُرمَّز → Futures
+        # إصلاح S2: الأصل النظيف (symbol) كُسِّر من raw_sym بالفعل
+        # is_futures = SWAP/PERP في الاسم الأصلي أو أصل مُرمَّز
+        _orig_arg = (args[0].upper() if args else "")
+        _liq_is_futures = (
+            "SWAP" in _orig_arg or
+            "PERP" in _orig_arg or
+            symbol in ("SPCX", "COIN", "AAPL", "NVDA", "TSLA", "MSTR", "GOOGL",
+                       "OPENAI", "MSFT", "AMZN", "META", "TSLA")
+        )
         profile, walls, funding, oi, whale = await asyncio.gather(
-            engine.microstructure.analyze(symbol, order_size_usd=1000),
+            engine.microstructure.analyze(symbol, order_size_usd=1000,
+                                          is_futures=_liq_is_futures),
             engine.microstructure.detect_walls(symbol),
             engine.data_layer.get_funding_rate(symbol),
             engine.data_layer.get_open_interest(symbol),
@@ -1887,7 +1899,12 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # تمرير walls لـ format_ar مباشرة
         walls_safe = walls if not isinstance(walls, Exception) else None
-        text = _clean_md(engine.microstructure.format_ar(profile, walls=walls_safe))
+        # إصلاح S3: إضافة نوع السوق في Header /liquidity
+        _liq_type_label = "📈 Futures/SWAP" if _liq_is_futures else "⚡ Spot"
+        text = _clean_md(
+            f"🏪 نوع السوق: {_liq_type_label}\n" +
+            engine.microstructure.format_ar(profile, walls=walls_safe)
+        )
 
         # إصلاح #14: قسم المشتقات (Funding/OI/Whale) — كان مفقوداً تماماً
         funding = funding if isinstance(funding, dict) else {}
