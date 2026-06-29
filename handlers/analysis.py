@@ -1334,17 +1334,41 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ النظام لم يُهيَّأ بعد")
         return
 
-    msg = await update.message.reply_text("🔗 جاري جلب بيانات On-Chain...")
+    # تطوير U1: /onchain يقبل symbol لجميع العملات
+    _args_oc = context.args or []
+    _sym_oc  = _args_oc[0].upper().strip() if _args_oc else "BTC"
+    # تنظيف الاسم
+    for _sfx in ("-USDT-SWAP","-USDT","USDT","SWAP","PERP"):
+        if _sym_oc.endswith(_sfx) and len(_sym_oc) > len(_sfx):
+            _sym_oc = _sym_oc[:-len(_sfx)]
+            break
+    _sym_oc = _sym_oc.replace("-","").replace("/","")
+    _is_btc = (_sym_oc == "BTC")
+
+    msg = await update.message.reply_text(
+        f"🔗 جاري جلب بيانات On-Chain لـ {_sym_oc}...")
     try:
-        data, fear, funding, oi, whale, btc_adv = await asyncio.gather(
-            engine.data_layer.get_onchain(),
-            engine.data_layer.get_fear_greed(),
-            engine.data_layer.get_funding_rate("BTC"),
-            engine.data_layer.get_open_interest("BTC"),
-            engine.data_layer.get_whale_ratio("BTC"),
-            engine.data_layer.get_btc_onchain_advanced(),
-            return_exceptions=True
-        )
+        # U2: جلب البيانات حسب العملة
+        if _is_btc:
+            data, fear, funding, oi, whale, btc_adv = await asyncio.gather(
+                engine.data_layer.get_onchain(),
+                engine.data_layer.get_fear_greed(),
+                engine.data_layer.get_funding_rate("BTC"),
+                engine.data_layer.get_open_interest("BTC"),
+                engine.data_layer.get_whale_ratio("BTC"),
+                engine.data_layer.get_btc_onchain_advanced(),
+                return_exceptions=True
+            )
+        else:
+            data, fear, funding, oi, whale = await asyncio.gather(
+                engine.data_layer.get_onchain(),
+                engine.data_layer.get_fear_greed(),
+                engine.data_layer.get_funding_rate(_sym_oc),
+                engine.data_layer.get_open_interest(_sym_oc),
+                engine.data_layer.get_whale_ratio(_sym_oc),
+                return_exceptions=True
+            )
+            btc_adv = {"available": False}
         btc_adv = btc_adv if isinstance(btc_adv, dict) else {"available": False}
         funding = funding if isinstance(funding, dict) else {}
         oi      = oi      if isinstance(oi,      dict) else {}
@@ -1369,22 +1393,23 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
             fear_emoji = "🤑"
 
         lines = [
-            "🔗 *تحليل On-Chain — رائد*",
+            f"🔗 *تحليل On-Chain — {_sym_oc} | رائد*",
             "━━━━━━━━━━━━━━━━━━",
             f"📊 إجمالي TVL: ${tvl/1e9:.2f}B",
             f"{fear_emoji} Fear & Greed: {fear_val} — {fear.get('label_ar', 'محايد')}",
             f"📈 تغيير TVL 24h: {tvl_change:+.2f}%",
         ]
 
-        # بيانات شبكة Bitcoin
-        btc_hashrate = data.get("btc_hashrate", 0)
-        btc_tx       = data.get("btc_tx_count_24h", 0)
-        if btc_hashrate > 0 or btc_tx > 0:
-            lines += ["", "⛏️ *شبكة Bitcoin*"]
-            if btc_hashrate > 0:
-                lines.append(f"• Hashrate: {btc_hashrate/1e9:.1f} EH/s")
-            if btc_tx > 0:
-                lines.append(f"• معاملات 24h: {btc_tx:,}")
+        # U3: بيانات شبكة Bitcoin (للـ BTC فقط)
+        if _is_btc:
+            btc_hashrate = data.get("btc_hashrate", 0)
+            btc_tx       = data.get("btc_tx_count_24h", 0)
+            if btc_hashrate > 0 or btc_tx > 0:
+                lines += ["", "⛏️ *شبكة Bitcoin*"]
+                if btc_hashrate > 0:
+                    lines.append(f"• Hashrate: {btc_hashrate/1e9:.1f} EH/s")
+                if btc_tx > 0:
+                    lines.append(f"• معاملات 24h: {btc_tx:,}")
 
         if top_p:
             lines += ["", "🏆 *أكبر البروتوكولات*"]
@@ -1402,8 +1427,9 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _whale_sig = (whale or {}).get("signal", "")
         _whale_r   = float((whale or {}).get("ratio", 0) or 0)
 
+        # U4: قسم المشتقات للعملة المحددة
         if _fund_pct or _oi_chg or _whale_sig:
-            lines += ["", "📐 *مشتقات BTC*"]
+            lines += ["", f"📐 *مشتقات {_sym_oc}*"]
             if _fund_pct:
                 if _fund_pct < -0.02:
                     _fsig = "🟢 سالب جداً — ضغط Shorts (فرصة Long)"
