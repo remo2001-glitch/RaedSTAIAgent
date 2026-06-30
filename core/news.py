@@ -782,7 +782,8 @@ class NewsEngine:
         if extra:
             lines += ["", "📡 *أخبار إضافية*"]
             for t in extra:
-                title = t[:90]
+                # V4b (#1345/#1347): رفع حد العنوان من 90 → 150 حرف
+                title = t[:150]
                 # فك HTML entities
                 import html
                 title = html.unescape(title)

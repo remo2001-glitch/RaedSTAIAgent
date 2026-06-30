@@ -653,7 +653,8 @@ class MicrostructureLayer:
                 liquidity_score=round(score, 3),
                 pressure=("شراء" if imbalance > 0.55 else "بيع" if imbalance < 0.45 else "neutral"),
                 # V3 (#1216/#1221): إضافة حد عمق أدنى $25K للحكم "قابل للتداول"
-                is_tradeable=(score > 0.3 and total >= 25_000),
+                # V3 إصلاح (#1319/#1325): min(bid,ask) >= $10K
+                is_tradeable=(score > 0.3 and min(total_bid, total_ask) >= 10_000),
                 warnings=warnings_,
                 source="exchange",
             )
@@ -688,10 +689,11 @@ class MicrostructureLayer:
     
     def _fallback_profile(self, symbol: str) -> "LiquidityProfile":
         """بروفايل افتراضي."""
+        # إصلاح V3c (#1324/#1333): imbalance=0.5 وis_tradeable=False للـ fallback
         return LiquidityProfile(
             symbol=symbol,
             bid_price=0, ask_price=0, mid_price=0, spread_pct=0.1,
-            bid_depth_usd=0, ask_depth_usd=0, imbalance=0.0,
+            bid_depth_usd=0, ask_depth_usd=0, imbalance=0.5,
             estimated_slippage_pct=1.0, liquidity_score=0.5,
             pressure=0.0, is_tradeable=False,
             warnings=["⚠️ بيانات غير متاحة"], source="fallback",
