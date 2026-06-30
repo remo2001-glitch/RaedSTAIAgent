@@ -952,7 +952,9 @@ class RaedEngine:
             summary = self.audit_logger.pnl_summary()
             return (
                 f"📅 *التقرير الشهري — رائد التداول الذكي*\n"
-                f"━━━━━━━━━━━━━━━━━━\n\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                # X2: إضافة تاريخ مماثل لـ V6 في التقرير الأسبوعي
+                f"📅 الشهر المنتهي: {__import__('datetime').date.today().strftime('%Y-%m')}\n\n"
                 f"💰 *ملخص الشهر*\n"
                 f"• إجمالي الصفقات: {summary.get('trades', 0)}\n"
                 f"• صافي الربح/الخسارة: ${summary.get('total_pnl', 0):+,.2f}\n"

@@ -653,8 +653,9 @@ class MicrostructureLayer:
                 liquidity_score=round(score, 3),
                 pressure=("شراء" if imbalance > 0.55 else "بيع" if imbalance < 0.45 else "neutral"),
                 # V3 (#1216/#1221): إضافة حد عمق أدنى $25K للحكم "قابل للتداول"
-                # V3 إصلاح (#1319/#1325): min(bid,ask) >= $10K
-                is_tradeable=(score > 0.3 and min(total_bid, total_ask) >= 10_000),
+                # X3 (#1356/#1357/#1359): رفع الحد من $10K → $25K
+                # OPENAI ($12.8K) كان "قابل" خطأً — $25K يفرّق بدقة أكبر
+                is_tradeable=(score > 0.3 and min(total_bid, total_ask) >= 25_000),
                 warnings=warnings_,
                 source="exchange",
             )
