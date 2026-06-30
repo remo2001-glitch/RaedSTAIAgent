@@ -3070,6 +3070,21 @@ async def cmd_weekly_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text(f"⚠️ خطأ في إعداد التقرير: {type(e).__name__}")
 
 
+async def cmd_monthly_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """X1 (#1355): /monthly_report — تقرير شهري فوري بطلب المستخدم"""
+    engine = _eng(context)
+    if not engine:
+        await _get_message(update, context).reply_text("⚠️ النظام لم يُهيَّأ بعد")
+        return
+    msg = await _get_message(update, context).reply_text("📊 جاري إعداد التقرير الشهري...")
+    try:
+        report = await engine._generate_monthly_report()
+        await msg.edit_text(report, parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"cmd_monthly_report: {e}")
+        await msg.edit_text(f"⚠️ خطأ في إعداد التقرير: {type(e).__name__}")
+
+
 def register(app):
     logger.info("analysis handlers: جاري التسجيل...")
     app.add_handler(CommandHandler("news",         cmd_news))
@@ -3085,6 +3100,7 @@ def register(app):
     app.add_handler(CommandHandler("upgrade",      cmd_upgrade))
     app.add_handler(CommandHandler("chart",        cmd_chart_cmd))
     app.add_handler(CommandHandler("weekly_report", cmd_weekly_report))
+    app.add_handler(CommandHandler("monthly_report", cmd_monthly_report))
     app.add_handler(MessageHandler(
         filters.PHOTO | filters.Document.IMAGE,
         cmd_chart))
