@@ -1436,7 +1436,8 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 elif _fund_pct < -0.005:
                     _fsig = "🟢 سالب — فرصة Long"
                 elif _fund_pct > 0.02:
-                    _fsig = "🔴 مرتفع جداً — ضغط Longs"
+                    # V2 (#1299): تنبيه صريح عند Funding مرتفع جداً
+                    _fsig = "🔴 مرتفع جداً — ⚠️ خطر تصفية Longs"
                 elif _fund_pct > 0.005:
                     _fsig = "🟡 إيجابي — محايد"
                 else:
