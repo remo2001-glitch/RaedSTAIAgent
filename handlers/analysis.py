@@ -1470,6 +1470,9 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _reco_parts.append("Greed مرتفع → حذر من الانعكاس")
         if _fund_pct < -0.01:
             _reco_parts.append("Funding سالب يدعم سيناريو الارتداد")
+        # V_interp (#1342): تنبيه Funding مرتفع جداً في التفسير
+        if _fund_pct > 0.02:
+            _reco_parts.append("⚠️ Funding مرتفع جداً — خطر تصفية Longs")
         if _whale_r and _whale_r < 0.6:
             _reco_parts.append("الحيتان تتراكم")
         if tvl_change < -3:
@@ -3052,6 +3055,21 @@ async def cmd_upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ════════════════════════════════════════════════════════════════
 # تسجيل الـ handlers
 # ════════════════════════════════════════════════════════════════
+async def cmd_weekly_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """W1 (#1350): /weekly_report — تقرير أسبوعي فوري بطلب المستخدم"""
+    engine = _eng(context)
+    if not engine:
+        await _get_message(update, context).reply_text("⚠️ النظام لم يُهيَّأ بعد")
+        return
+    msg = await _get_message(update, context).reply_text("📊 جاري إعداد التقرير الأسبوعي...")
+    try:
+        report = await engine._generate_weekly_report()
+        await msg.edit_text(report, parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"cmd_weekly_report: {e}")
+        await msg.edit_text(f"⚠️ خطأ في إعداد التقرير: {type(e).__name__}")
+
+
 def register(app):
     logger.info("analysis handlers: جاري التسجيل...")
     app.add_handler(CommandHandler("news",         cmd_news))
@@ -3066,6 +3084,7 @@ def register(app):
     app.add_handler(CommandHandler("quicksignal",  cmd_quicksignal))
     app.add_handler(CommandHandler("upgrade",      cmd_upgrade))
     app.add_handler(CommandHandler("chart",        cmd_chart_cmd))
+    app.add_handler(CommandHandler("weekly_report", cmd_weekly_report))
     app.add_handler(MessageHandler(
         filters.PHOTO | filters.Document.IMAGE,
         cmd_chart))
