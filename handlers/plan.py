@@ -20,6 +20,7 @@ except ImportError:
     get_tier_message  = lambda s, t: f'⛔ {s} غير متاحة'
 from core.state_manager import state_manager as _sm
 from core.pair_resolver import resolve_symbol, PairResolution, build_pair_addon_inline
+from handlers.analysis import normalize_symbol_alias  # X6: مرادفات الرموز المركزية
 
 
 def _fmt_price(price: float) -> str:
@@ -99,6 +100,7 @@ async def _resolve_custom_symbols(raw_symbols, tier, data_layer):
     الإضافي عبر build_pair_addon_inline داخل سطر العملة."""
     resolved, resolutions = [], []
     for raw in raw_symbols:
+        raw = normalize_symbol_alias(raw)  # X6: تطبيع المرادفات
         try:
             res = await resolve_symbol(raw, tier, data_layer)
         except Exception:

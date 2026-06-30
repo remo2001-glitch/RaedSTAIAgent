@@ -26,6 +26,59 @@ from core.user_manager import user_manager as _um
 from core.pair_resolver import resolve_symbol, build_pair_addon_lines, build_usdt_addendum
 from telegram.constants import ParseMode
 
+# ══════════════════════════════════════════════════════════════
+# X1 — خريطة مرادفات الرموز الشاملة (#1405/#1406/#1407)
+# تُطبَّق مركزياً قبل أي resolve_symbol/get_price لضمان عمل النظام
+# لجميع الأوامر (/signal /analyze /quicksignal /liquidity /onchain /chart)
+# ولجميع المستخدمين بدون استثناء
+# ══════════════════════════════════════════════════════════════
+SYMBOL_ALIASES = {
+    # شركات تقنية كبرى
+    "GOOGLE": "GOOGL", "ALPHABET": "GOOGL",
+    "FACEBOOK": "META", "FB": "META",
+    "MICROSOFT": "MSFT",
+    "AMAZON": "AMZN",
+    "APPLE": "AAPL",
+    "TESLA": "TSLA",
+    "NVIDIA": "NVDA",
+    "AMD": "AMD",
+    "COINBASE": "COIN",
+    "SPACEX": "SPCX", "SPACE-X": "SPCX",
+    "MICROSTRATEGY": "MSTR",
+    "OPENAI": "OPENAI", "CHATGPT": "OPENAI",
+    "GOLD": "XAU", "XAUUSD": "XAU",
+    # عملات كريبتو رئيسية بأسماء كاملة
+    "BITCOIN": "BTC", "ETHEREUM": "ETH",
+    "SOLANA": "SOL", "BINANCE": "BNB", "BINANCECOIN": "BNB",
+    "RIPPLE": "XRP", "DOGECOIN": "DOGE",
+    "CARDANO": "ADA", "POLKADOT": "DOT",
+    "AVALANCHE": "AVAX", "POLYGON": "MATIC",
+    "CHAINLINK": "LINK", "LITECOIN": "LTC",
+    "TRON": "TRX",
+}
+
+
+def normalize_symbol_alias(raw: str) -> str:
+    """X1: يُطبِّع الرمز عبر خريطة المرادفات + fuzzy match احتياطي.
+    يُستدعى في بداية كل أمر يقبل رمز عملة/أصل قبل resolve_symbol/get_price.
+    """
+    if not raw:
+        return raw
+    s = raw.upper().strip()
+    # تطابق مباشر في خريطة المرادفات
+    if s in SYMBOL_ALIASES:
+        return SYMBOL_ALIASES[s]
+    # fuzzy match احتياطي لأخطاء إملائية قريبة (حد أعلى تشابه 0.8)
+    try:
+        import difflib
+        candidates = list(SYMBOL_ALIASES.keys())
+        match = difflib.get_close_matches(s, candidates, n=1, cutoff=0.8)
+        if match:
+            return SYMBOL_ALIASES[match[0]]
+    except Exception:
+        pass
+    return s
+
 logger = logging.getLogger(__name__)
 
 
@@ -1342,7 +1395,7 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if _sym_oc.endswith(_sfx) and len(_sym_oc) > len(_sfx):
             _sym_oc = _sym_oc[:-len(_sfx)]
             break
-    _sym_oc = _sym_oc.replace("-","").replace("/","")
+    _sym_oc = normalize_symbol_alias(_sym_oc.replace("-","").replace("/",""))  # X4
     _is_btc = (_sym_oc == "BTC")
 
     msg = await update.message.reply_text(
@@ -1551,7 +1604,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     args    = context.args or ["BTC"]
-    raw_arg = args[0].upper()
+    raw_arg = normalize_symbol_alias(args[0].upper())  # X2: تطبيع المرادفات
 
     # إصلاح #272/#278/#279/#281 (G1): كشف نوع السوق من args[1..] مباشرةً
     # يمنع سؤال Spot/Futures عندما يكتب المستخدم: /signal ETH فيوتشر
@@ -1655,9 +1708,18 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # إصلاح #265: تخفيض الحد 50→30 للعملات الجديدة + تنبيه عند 30-49
         if len(candles) < 30:
-            await msg.edit_text(
-                f"⚠️ بيانات {symbol} غير كافية حالياً\n"
-                f"أعد المحاولة بعد دقيقة")
+            # X9: رسالة موحَّدة مع /analyze — تُفرِّق بين "رمز غير موجود" و"بيانات غير كافية مؤقتاً"
+            if len(candles) == 0:
+                await msg.edit_text(
+                    f"⚠️ لم أجد بيانات لـ *{symbol}*\n\n"
+                    f"• تأكد من صحة الرمز (مثال: BTC, ETH, SOL)\n"
+                    f"• العملة قد تكون جديدة أو غير مدعومة\n"
+                    f"• جرّب: /chart {symbol} للتحليل البصري",
+                    parse_mode="Markdown")
+            else:
+                await msg.edit_text(
+                    f"⚠️ بيانات {symbol} غير كافية حالياً (تحتاج 30 شمعة على الأقل)\n"
+                    f"أعد المحاولة بعد دقيقة")
             return
         _limited_data = len(candles) < 50  # تنبيه بيانات محدودة
 
@@ -1901,7 +1963,7 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if raw_sym.endswith(_sfx) and len(raw_sym) > len(_sfx):
             raw_sym = raw_sym[:-len(_sfx)]
             break
-    symbol = raw_sym.replace("-", "").replace("/", "")
+    symbol = normalize_symbol_alias(raw_sym.replace("-", "").replace("/", ""))  # X3
     msg = await _get_message(update, context).reply_text(f"🔬 جاري تحليل السيولة لـ {symbol}...")
 
     try:
@@ -2064,7 +2126,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     args   = context.args or []
-    raw_arg = args[0].upper()
+    raw_arg = normalize_symbol_alias(args[0].upper())  # X2: تطبيع المرادفات
 
     # إصلاح G1: كشف نوع السوق من args[1..] في /analyze أيضاً
     _FUTURES_KW_AN = {"فيوتشر","فيوتشرز","futures","future","فوري","perp","swap","perpetual"}
@@ -2264,6 +2326,16 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # إصلاح #328 (H2): تمرير السعر الحالي لـ build_candles_summary
         # يمنع تناقض السعر بين Header ونص Groq
         candles_summary = engine.data_layer.build_candles_summary(candles, symbol, current_price=price)
+        # إصلاح X7 (#1398): توحيد above_ema50 مع Header الموثوق (ema_bearish)
+        # لمنع تناقض "EMA50: ✅ فوق" في Header مقابل "تحت EMA50" في نص Groq
+        if candles_summary:
+            try:
+                import json as _json_x7
+                _cs_dict = _json_x7.loads(candles_summary)
+                _cs_dict["above_ema50"] = not ema_bearish
+                candles_summary = _json_x7.dumps(_cs_dict, ensure_ascii=False)
+            except Exception:
+                pass
         if not candles_summary:
             # fallback نصي
             try:
@@ -2518,7 +2590,7 @@ async def cmd_chart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # إصلاح P1 (#967): إذا /chart جاء مع صورة في نفس الرسالة → حللها مباشرة
-    symbol_arg = (context.args or [""])[0].upper() if context.args else ""
+    symbol_arg = normalize_symbol_alias((context.args or [""])[0].upper()) if context.args else ""  # X5
     _msg_cmd = _get_message(update, context)
     _has_photo = bool(_msg_cmd.photo)
     _has_doc   = bool(_msg_cmd.document)
@@ -2735,7 +2807,7 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     args      = context.args or []
-    raw_arg   = args[0].upper() if args else "BTC"
+    raw_arg   = normalize_symbol_alias(args[0].upper()) if args else "BTC"  # X2
     user_id_q = update.effective_user.id if update.effective_user else 0
     tier_q    = _sm.get_tier(user_id_q)
 
@@ -2832,9 +2904,13 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         change_24h = float(price_d.get("change_24h") or price_d.get("price_change_percentage_24h") or 0)
 
         if price <= 0:
+            # X10: رسالة موحَّدة مع /analyze
             await msg.edit_text(
-                f"❌ لم أجد سعراً لـ {display_symbol}.\n"
-                f"تحقق من الرمز وأعد المحاولة")
+                f"⚠️ لم أجد سعراً لـ *{display_symbol}*\n\n"
+                f"• تأكد من صحة الرمز (مثال: BTC, ETH, SOL)\n"
+                f"• العملة قد تكون جديدة أو غير مدعومة\n"
+                f"• جرّب: /chart {display_symbol} للتحليل البصري",
+                parse_mode="Markdown")
             return
 
         rsi = _calc_rsi(candles)
