@@ -693,7 +693,7 @@ class NewsEngine:
                 f"مشاعر السوق {direction} بدرجة {abs(score):.2f}. "
                 f"{'يُنصح بالحذر والمراقبة.' if score < -0.1 else 'السوق يُبدي إشارات إيجابية.' if score > 0.1 else 'السوق في حالة ترقب.'}"
             ),
-            "key_events":      [_html.unescape(i.get("title", ""))[:80] for i in items[:3] if i.get("title")],
+            "key_events":      [_html.unescape(i.get("title", ""))[:120] for i in items[:3] if i.get("title")],
             "affected_coins":  ["BTC", "ETH"],
             "market_impact_ar": f"تأثير {direction} متوقع — يُنصح بالمراقبة",
             "confidence":      0.55,

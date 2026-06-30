@@ -652,7 +652,8 @@ class MicrostructureLayer:
                 estimated_slippage_pct=round(slippage, 4),
                 liquidity_score=round(score, 3),
                 pressure=("شراء" if imbalance > 0.55 else "بيع" if imbalance < 0.45 else "neutral"),
-                is_tradeable=score > 0.3,
+                # V3 (#1216/#1221): إضافة حد عمق أدنى $25K للحكم "قابل للتداول"
+                is_tradeable=(score > 0.3 and total >= 25_000),
                 warnings=warnings_,
                 source="exchange",
             )
