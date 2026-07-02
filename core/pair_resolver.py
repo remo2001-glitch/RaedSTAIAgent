@@ -129,6 +129,24 @@ class PairResolution:
         self.pair_available = pair_available
 
 
+# Z1: خريطة مرادفات في pair_resolver — طبقة دفاع ثانية
+_SYMBOL_ALIASES_PR = {
+    "GOOGLE": "GOOGL", "ALPHABET": "GOOGL",
+    "FACEBOOK": "META", "FB": "META",
+    "MICROSOFT": "MSFT", "AMAZON": "AMZN",
+    "APPLE": "AAPL", "TESLA": "TSLA",
+    "NVIDIA": "NVDA", "COINBASE": "COIN",
+    "SPACEX": "SPCX", "MICROSTRATEGY": "MSTR",
+    "OPENAI": "OPENAI", "CHATGPT": "OPENAI",
+    "GOLD": "XAU", "XAUUSD": "XAU",
+    "BITCOIN": "BTC", "ETHEREUM": "ETH",
+    "SOLANA": "SOL", "DOGECOIN": "DOGE",
+    "BINANCE": "BNB", "RIPPLE": "XRP",
+    "CARDANO": "ADA", "AVALANCHE": "AVAX",
+    "TRON": "TRX", "CHAINLINK": "LINK",
+}
+
+
 async def resolve_symbol(raw_symbol: str, tier: str, data_layer) -> PairResolution:
     """
     نقطة الدخول الموحَّدة لكل الأوامر (إصلاح/تطوير #188 — Phase 2).
@@ -140,6 +158,9 @@ async def resolve_symbol(raw_symbol: str, tier: str, data_layer) -> PairResoluti
       كما هو)، quote=BTC/ETH، is_pair_request=True. eligible_tier/
       pair_available تُحدِّدان إن كانت إضافة الزوج ستُعرَض.
     """
+    # Z1: تطبيع المرادفات قبل أي معالجة
+    raw_symbol = _SYMBOL_ALIASES_PR.get(raw_symbol.upper().strip(), raw_symbol)
+
     parsed = parse_quote_pair(raw_symbol)
     if not parsed:
         return PairResolution(base=_clean_symbol(raw_symbol))

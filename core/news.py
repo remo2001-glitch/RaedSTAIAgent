@@ -785,10 +785,15 @@ class NewsEngine:
                 # V4b (#1345/#1347): رفع حد العنوان من 90 → 150 حرف
                 title = t[:150]
                 # فك HTML entities
-                import html
-                title = html.unescape(title)
+                import html as _html_y2
+                title = _html_y2.unescape(title)
                 title = title.replace("_", " ").replace("*", "").replace("`", "")
-                lines.append(f"• {title}")
+                # Y2 (#1428): تمييز الأخبار السلبية بأيقونة تحذير
+                _neg_kw = ("hack", "breach", "ransom", "arrest", "scam", "fraud",
+                           "extradite", "suspect", "stolen", "exploit", "attack",
+                           "اختراق", "احتيال", "سرقة", "اعتقال")
+                _prefix = "🔴 " if any(k in title.lower() for k in _neg_kw) else "• "
+                lines.append(f"{_prefix}{title}")
 
         # توصية تداول بناءً على مشاعر الأخبار (M#59)
         s_val = float(analysis.get("sentiment_score", 0) or 0)
@@ -838,8 +843,7 @@ class NewsEngine:
             f" | RSI: {_rsi_int} | Fear & Greed: {fear_greed}"
             f" | السوق: {regime_desc} | EMA50: {_ema_status}."
             f"{_cs}"
-            f" مهم جداً (X8): اتجاه EMA50 الموثوق هو '{_ema_status}' فقط —"
-            f" تجاهل أي قيم EMA50 خام تتعارض مع هذا التصنيف."
+            f" [ملاحظة داخلية: اتجاه EMA50 هو '{_ema_status}' — استخدم هذا في تحليلك ولا تذكره كنص حرفي]"
             " المطلوب: اكتب تحليلاً نصياً احترافياً باللغة العربية بدون markdown."
             " مهم: اكتب دائماً EMA5 و EMA20 و EMA50 بأحرف إنجليزية كبيرة."
             " مهم جداً: اكتب الأرقام بدون منازل عشرية زائدة (RSI=48 لا 48.5، EMA=1755 لا 1754.99)."
