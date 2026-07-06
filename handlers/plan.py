@@ -1088,7 +1088,9 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         pro_tp_w    = price * (1 + atr_v * 1.8)
                         pro_sl_w    = pro_entry_w * (1 - atr_v * 1.2)
                         rr_w        = abs(pro_tp_w - pro_entry_w) / max(abs(pro_sl_w - pro_entry_w), 1e-9)
-                        _rsi_cond = (f"  • ✅ RSI فوق {rsi_t} (حالياً {rsi_w:.0f}) — مُستوفى"
+                        # AA4 (#1494): تحذير عند RSI > 70 (قرب ذروة شراء)
+                        _rsi_warn = " ⚠️ قرب ذروة شراء" if rsi_w > 70 else ""
+                        _rsi_cond = (f"  • ✅ RSI فوق {rsi_t} (حالياً {rsi_w:.0f}){_rsi_warn} — مُستوفى"
                                      if rsi_w > rsi_t else
                                      f"  • RSI يرتفع فوق {rsi_t} (حالياً {rsi_w:.0f})")
                         # إصلاح #428 (J2): إضافة نسبة البُعد عن EMA50
