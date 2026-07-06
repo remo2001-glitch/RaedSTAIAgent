@@ -322,12 +322,8 @@ class SignalLayer:
         ema200 = _ema(closes, 200) if len(closes) >= 200 else ema50
         macd_hist = _macd_histogram(closes)
         bb_pos    = _bb_position(closes, 20)
-        # إصلاح #376/#400/#411 (J1): vol_ratio يستخدم متوسط 3 شموع لا الأخيرة فقط
-        # الشمعة الأخيرة (اليوم الحالي غير مكتمل) قد تحتوي حجماً صفرياً → 0.0x
+        vol_ratio  = vols[-1] / (_sma(vols, 20) or 1)
         vol_avg20  = _sma(vols, 20) or 1
-        _vols_recent = [v for v in vols[-3:] if v > 0]  # آخر 3 شموع بحجم موجب
-        _last_vol  = sum(_vols_recent) / len(_vols_recent) if _vols_recent else vols[-1]
-        vol_ratio  = _last_vol / vol_avg20
 
         # تعريف مبكر لمنع NameError (#510)
         rsi_div     = "none"
@@ -440,13 +436,7 @@ class SignalLayer:
                 score = 0.5 + (bull_ratio - 0.5) * 1.2
                 bias  = "bullish"
             elif bull_ratio < 0.4:
-                score_raw_bear = 0.5 - (0.5 - bull_ratio) * 1.2
-                # إصلاح #280/#295/#321 (I1): RSI محايد (35-65) = لا إشارة واضحة
-                # → score لا يقل عن 0.28 (هابط معتدل لا شديد)
-                if 35 <= rsi <= 65:
-                    score = max(score_raw_bear, 0.28)
-                else:
-                    score = score_raw_bear
+                score = 0.5 - (0.5 - bull_ratio) * 1.2
                 bias  = "bearish"
 
         # إصلاح #34: مكوّن مستمر لتمييز عملات ذات نظام نقاط خشن متطابق
@@ -512,21 +502,6 @@ class SignalLayer:
                 score += 0.10
             elif funding_pct > 0.03:   # Funding مرتفع = ضغط على Longs
                 score -= 0.10
-
-        # إصلاح #447 (J4): Fear & Greed و MVRV يُغذّيان oc_score
-        # هذه بيانات On-Chain عالمية تؤثر على كل العملات
-        fear_greed = data.get("fear_greed")
-        if fear_greed is not None:
-            has_real_data = True
-            if fear_greed < 15:    score += 0.15   # ذعر تاريخي = فرصة
-            elif fear_greed < 25:  score += 0.10   # خوف شديد = إيجابي
-            elif fear_greed > 75:  score -= 0.10   # جشع = خطر
-
-        mvrv = data.get("mvrv_z")
-        if mvrv is not None:
-            has_real_data = True
-            if mvrv < 0:      score += 0.15   # أقل من صفر = تقييم رخيص تاريخياً
-            elif mvrv < 1.0:  score += 0.05   # نطاق طبيعي منخفض
 
         if has_real_data:
             return round(min(max(score, 0), 1), 3)
@@ -598,7 +573,7 @@ class SignalLayer:
             f"• أخبار:   {s.signal_sources['news']:.0%}\n"
             f"• زخم 30 يوم: {s.signal_sources['momentum']:.0%}\n"
             f"• ماكرو:   {s.signal_sources['macro']:.0%}\n\n"
-            f"RSI: {int(round(rsi_val))} | "  # إصلاح M6: int(round) لمنع تناقض 44 vs 45
+            f"RSI: {rsi_val:.0f} | "
             f"EMA: {'✅' if s.technicals.get('ema_align') else '❌'} (محاذاة EMA20/50) | "
             f"حجم: {vol_r:.1f}x"
         )
@@ -878,6 +853,8 @@ def _calc_suggested_leverage(
     is_bull = _reg in ("BULL_TREND", "ACCUMULATION")
 
     if is_bear:                                   return 1
+    # إصلاح AA1 (#1457/#1462): 2x فقط عند conf >= 0.50 — لا رافعة بثقة منخفضة
+    if confidence < 0.50:                         return 1
     if confidence < 0.60:                         return 2
     if confidence < 0.70:                         return 3
     if is_bull:                                   return 5

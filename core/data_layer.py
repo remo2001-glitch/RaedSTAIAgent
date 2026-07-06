@@ -1332,12 +1332,6 @@ class DataLayer:
                 enriched["funding_rate_pct"] = fr.get("rate_pct", 0.0)
         except Exception as e:
             logger.debug(f"signal_enrichment ({symbol}): {e}")
-        # إصلاح J4: إضافة fear_greed و mvrv_z من base_onchain
-        if base_onchain:
-            if "fear_greed" in base_onchain:
-                enriched["fear_greed"] = base_onchain["fear_greed"]
-            if "mvrv_z" in base_onchain:
-                enriched["mvrv_z"] = base_onchain["mvrv_z"]
         return enriched
 
     async def _bgeo_fetch(self, slug: str, extra_keys: tuple = (),
@@ -1529,10 +1523,8 @@ class DataLayer:
         """
         return {"outflow_30d": 0.0, "signal": "محايد", "available": False}
 
-    def build_candles_summary(self, candles: list, symbol: str = "", current_price: float = 0.0) -> str:
-        """يبني ملخص شموع احترافي لـ Groq — يشمل EMA + RSI + MACD + حجم.
-        إصلاح #328 (H2): current_price يُستخدم بدلاً من candles[-1] إذا مُعطى.
-        """
+    def build_candles_summary(self, candles: list, symbol: str = "") -> str:
+        """يبني ملخص شموع احترافي لـ Groq — يشمل EMA + RSI + MACD + حجم."""
         if not candles or len(candles) < 5:
             return ""
         try:
@@ -1540,8 +1532,7 @@ class DataLayer:
             volumes = [float(c.get("volume", 0) or 0) for c in candles if c.get("volume")]
             if len(closes) < 5: return ""
 
-            # إصلاح #328 (H2): استخدام current_price الحالي إذا مُعطى
-            last = current_price if current_price > 0 else closes[-1]
+            last = closes[-1]
             # EMAs
             ema5  = sum(closes[-5:])  / 5  if len(closes) >= 5  else last
             ema20 = sum(closes[-20:]) / 20 if len(closes) >= 20 else last
@@ -1557,28 +1548,20 @@ class DataLayer:
             rsi = 100 - (100 / (1 + avg_g / avg_l)) if avg_l > 0 else 50
 
             # حجم vs متوسط
-            # إصلاح J1: متوسط آخر 3 شموع لا الشمعة الأخيرة فقط
-            avg_vol   = sum(volumes[-20:]) / max(len(volumes[-20:]), 1) if volumes else 0
-            _vols3    = [v for v in volumes[-3:] if v > 0]
-            last_vol  = sum(_vols3) / len(_vols3) if _vols3 else (volumes[-1] if volumes else 0)
+            avg_vol  = sum(volumes[-20:]) / max(len(volumes[-20:]), 1) if volumes else 0
+            last_vol = volumes[-1] if volumes else 0
             vol_ratio = last_vol / max(avg_vol, 1)
 
             # اتجاه آخر 5 شموع
             trend_5d = (closes[-1] - closes[-5]) / max(closes[-5], 1) * 100
 
-            # إصلاح #357/#362 (I4) + #363 (I5): RSI وEMA مُنسَّقان — لا منازل عشرية زائدة
-            # إصلاح #641/#642 (M3): cap EMA50 لمنع قيم تاريخية مشوهة
-            # SPCX perp لديه بيانات قديمة بأسعار $1000+ → EMA50=$1,277
-            _ema50_capped = min(ema50, last * 3.0) if last > 0 else ema50
-            _ema20_capped = min(ema20, last * 3.0) if last > 0 else ema20
-            _ema5_capped  = min(ema5,  last * 3.0) if last > 0 else ema5
             summary = {
-                "price":     round(last, 2),
-                "EMA5":      round(_ema5_capped, 2),
-                "EMA20":     round(_ema20_capped, 2),
-                "EMA50":     round(_ema50_capped, 2),
-                "RSI":       int(round(rsi)),
-                "trend_5d":  round(trend_5d, 1),
+                "price":     round(last, 6),
+                "ema5":      round(ema5, 6),
+                "ema20":     round(ema20, 6),
+                "ema50":     round(ema50, 6),
+                "rsi14":     round(rsi, 1),
+                "trend_5d":  round(trend_5d, 2),
                 "vol_ratio": round(vol_ratio, 2),
                 "candles_n": len(closes),
                 "above_ema5":  last > ema5,
@@ -1922,8 +1905,10 @@ def _filter_recent_news(items: list, max_hours: int = 48) -> list:
 
 
 def _fear_ar(value: int) -> str:
-    if value >= 75: return "جشع شديد"
-    if value >= 55: return "جشع"
-    if value >= 45: return "محايد"
-    if value >= 25: return "خوف"
+    # إصلاح AA2 (#1491): حدود Fear & Greed حسب المعيار الحقيقي (CoinMarketCap)
+    # 0-19: خوف شديد، 20-39: خوف، 40-59: محايد، 60-79: جشع، 80-100: جشع شديد
+    if value >= 80: return "جشع شديد"
+    if value >= 60: return "جشع"
+    if value >= 40: return "محايد"
+    if value >= 20: return "خوف"
     return "خوف شديد"

@@ -106,13 +106,6 @@ class RegimeDetector:
         ema20  = self._ema(closes, 20)
         ema50  = self._ema(closes, 50)
         ema200 = self._ema(closes, 200) if len(closes) >= 200 else ema50
-        # إصلاح M3: cap EMA لمنع بيانات تاريخية مشوهة (SPCX perp)
-        # price = آخر سعر إغلاق (closes[-1])
-        _current_price = closes[-1] if closes else 0
-        if _current_price > 0:
-            ema50  = min(ema50,  _current_price * 3.0)
-            ema20  = min(ema20,  _current_price * 3.0)
-            ema200 = min(ema200, _current_price * 3.0)
         rsi    = self._rsi(closes, 14)
         vol_ma = self._sma(volumes, 20)
         atr_pct = (atr / closes[-1] * 100) if closes[-1] > 0 else 0
@@ -128,10 +121,7 @@ class RegimeDetector:
             "price_vs_ema50": round((price - ema50) / ema50 * 100, 2),
             "btc_dominance": btc_dominance,
             "fear_greed":    fear_greed,
-            # إصلاح L4 (نفس J1): متوسط 3 شموع لمنع 0.0x
-            "vol_ratio":     round(
-                (sum(v for v in volumes[-3:] if v > 0) / max(len([v for v in volumes[-3:] if v > 0]), 1))
-                / vol_ma, 2) if vol_ma > 0 and volumes else 1.0,
+            "vol_ratio":     round(volumes[-1] / vol_ma, 2) if vol_ma > 0 else 1.0,
         }
 
         # ── منطق التشخيص ──────────────────────────────────────
@@ -145,13 +135,14 @@ class RegimeDetector:
         _action_basis = ""  # إصلاح #149: سبب القرار للشفافية/التشخيص
         if regime == Regime.HIGH_VOLATILITY:
             action = "reduce_size"
-        elif regime == Regime.BEAR_TREND and adx >= 30:  # إصلاح L6
-            if fear_greed < 20:
+        elif regime == Regime.BEAR_TREND:
+            # إصلاح AA3 (#1480): BEAR_TREND → دائماً احترس بغض النظر عن ADX
+            if fear_greed < 20 or adx > 30:
                 action = "avoid"
-                _action_basis = f" (ADX={adx:.0f}≥30، Fear={fear_greed}<20)"
+                _action_basis = f" (ADX={adx:.0f}، Fear={fear_greed}<20)"
             else:
                 action = "reduce_size"
-                _action_basis = f" (ADX={adx:.0f}≥30)"
+                _action_basis = f" (سوق هابط)"
         # إذا RSI في ذروة بيع (< 30) → تحذير انعكاس بغض النظر عن الاتجاه
         if rsi_val < 30:
             action = "wait_reversal"
@@ -412,8 +403,7 @@ class RegimeDetector:
             f"📈 *المؤشرات*\n"
             f"• ATR: {m.get('atr_pct',0):.1f}% | ADX: {m.get('adx',0):.0f}\n"
             f"• RSI: {m.get('rsi',0):.0f} | حجم: {vol_ratio:.1f}x\n"
-            # إصلاح O3: تنبيه عند EMA50 بعيد جداً
-            f"• السعر vs EMA50: {m.get('price_vs_ema50',0):+.1f}%{' ⚠️ (EMA تاريخي)' if abs(m.get('price_vs_ema50',0)) > 50 else ''}\n"
+            f"• السعر vs EMA50: {m.get('price_vs_ema50',0):+.1f}%\n"
             f"• Fear & Greed: {m.get('fear_greed',50)} | هيمنة BTC: {m.get('btc_dominance',50):.0f}%\n\n"
             f"🎯 *الاستراتيجية الموصى بها*\n"
             f"• {strategies_txt}\n"
