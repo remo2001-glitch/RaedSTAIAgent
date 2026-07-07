@@ -1130,7 +1130,8 @@ def _calc_atr(candles: list, period: int = 14) -> float:
             return 3.0
         atr   = sum(trs[-period:]) / period
         price = float(candles[-1].get("close", 0))
-        return (atr / price * 100) if price > 0 else 3.0
+        # BB1 (#1550/#1555/#1574): cap ATR عند 30% — منع قيم مشوهة من انهيار حاد
+        return min((atr / price * 100) if price > 0 else 3.0, 30.0)
     except (ValueError, TypeError, ZeroDivisionError):
         return 3.0
 
@@ -1768,6 +1769,15 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # تحديث rsi في technicals لضمان التطابق في العرض
         if hasattr(signal, "technicals") and isinstance(signal.technicals, dict):
             signal.technicals["rsi"] = round(rsi, 1)
+
+        # BB1b (#1550/#1553/#1574/#1575): فحص جودة البيانات — انهيار حاد
+        _pve50_chk = float(regime.metrics.get("price_vs_ema50", 0) or 0)
+        _data_corrupted = (atr_pct > 25 or rsi < 5 or _pve50_chk < -50)
+        if _data_corrupted:
+            # تحذير مالي: منع رافعة عالية + تنبيه المستخدم
+            if hasattr(signal, "suggested_leverage"):
+                signal.suggested_leverage = 1
+            signal.confidence = min(signal.confidence, 0.49)  # → [LOW] بحد أقصى
             # إصلاح #479: BB من 4H إذا متاح
             if len(_sig_4h) >= 20:
                 _c4h = [float(c.get("close",0)) for c in _sig_4h]
@@ -1831,6 +1841,14 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as _fe:
             logger.debug(f"futures display: {_fe}")
 
+        # BB1c (#1550/#1575): تحذير بيانات مشوهة عند انهيار حاد
+        if _data_corrupted:
+            warning = (
+                "\n\n⚠️ *تحذير مالي: بيانات غير موثوقة*\n"
+                f"• السعر انهار بشكل حاد — المؤشرات التقنية مشوهة\n"
+                f"• ATR={atr_pct:.1f}% | RSI={rsi:.0f} | EMA50={_pve50_chk:.0f}%\n"
+                "• *لا تعتمد على هذا التحليل للتداول الفعلي*"
+            )
         full_text = "\n\n".join(parts) + warning
         # تطوير #188 (Phase 2): إلحاق فقرة الزوج الإضافية إن وُجدت
         _pair_addon = await build_pair_addon_lines(resolution, engine.data_layer)
