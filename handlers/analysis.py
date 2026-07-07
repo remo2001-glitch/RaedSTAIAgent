@@ -26,72 +26,17 @@ from core.user_manager import user_manager as _um
 from core.pair_resolver import resolve_symbol, build_pair_addon_lines, build_usdt_addendum
 from telegram.constants import ParseMode
 
-# ══════════════════════════════════════════════════════════════
-# X1 — خريطة مرادفات الرموز الشاملة (#1405/#1406/#1407)
-# تُطبَّق مركزياً قبل أي resolve_symbol/get_price لضمان عمل النظام
-# لجميع الأوامر (/signal /analyze /quicksignal /liquidity /onchain /chart)
-# ولجميع المستخدمين بدون استثناء
-# ══════════════════════════════════════════════════════════════
-SYMBOL_ALIASES = {
-    # شركات تقنية كبرى
-    "GOOGLE": "GOOGL", "ALPHABET": "GOOGL",
-    "FACEBOOK": "META", "FB": "META",
-    "MICROSOFT": "MSFT",
-    "AMAZON": "AMZN",
-    "APPLE": "AAPL",
-    "TESLA": "TSLA",
-    "NVIDIA": "NVDA",
-    "AMD": "AMD",
-    "COINBASE": "COIN",
-    "SPACEX": "SPCX", "SPACE-X": "SPCX",
-    "MICROSTRATEGY": "MSTR",
-    "OPENAI": "OPENAI", "CHATGPT": "OPENAI",
-    "GOLD": "XAU", "XAUUSD": "XAU",
-    # عملات كريبتو رئيسية بأسماء كاملة
-    "BITCOIN": "BTC", "ETHEREUM": "ETH",
-    "SOLANA": "SOL", "BINANCE": "BNB", "BINANCECOIN": "BNB",
-    "RIPPLE": "XRP", "DOGECOIN": "DOGE",
-    "CARDANO": "ADA", "POLKADOT": "DOT",
-    "AVALANCHE": "AVAX", "POLYGON": "MATIC",
-    "CHAINLINK": "LINK", "LITECOIN": "LTC",
-    "TRON": "TRX",
-}
-
-
-def normalize_symbol_alias(raw: str) -> str:
-    """X1: يُطبِّع الرمز عبر خريطة المرادفات + fuzzy match احتياطي.
-    يُستدعى في بداية كل أمر يقبل رمز عملة/أصل قبل resolve_symbol/get_price.
-    """
-    if not raw:
-        return raw
-    s = raw.upper().strip()
-    # تطابق مباشر في خريطة المرادفات
-    if s in SYMBOL_ALIASES:
-        return SYMBOL_ALIASES[s]
-    # fuzzy match احتياطي لأخطاء إملائية قريبة (حد أعلى تشابه 0.8)
-    try:
-        import difflib
-        candidates = list(SYMBOL_ALIASES.keys())
-        match = difflib.get_close_matches(s, candidates, n=1, cutoff=0.8)
-        if match:
-            return SYMBOL_ALIASES[match[0]]
-    except Exception:
-        pass
-    return s
-
 logger = logging.getLogger(__name__)
 
 
 def _rsi_label(rsi: float) -> str:
     """تسمية RSI بمناطق احترافية."""
-    # إصلاح #478 (K2): توحيد حدود RSI مع signal_context.py
-    # >70=ذروة شراء، >60=قريب ذروة شراء، 40-60=محايد، <30=ذروة بيع
-    if rsi >= 70:   return f"🔴 ذروة شراء ({int(round(rsi))})"
-    elif rsi >= 60: return f"🟠 قريب ذروة شراء ({int(round(rsi))})"
-    elif rsi >= 40: return f"⚪ محايد ({int(round(rsi))})"
-    elif rsi >= 30: return f"🟡 قريب ذروة بيع ({int(round(rsi))})"
-    elif rsi >= 20: return f"🟠 ذروة بيع ({int(round(rsi))})"
-    else:           return f"🔴 ذروة بيع شديدة ({int(round(rsi))})"
+    if rsi >= 70:   return f"🔴 ذروة شراء ({rsi:.0f})"
+    elif rsi >= 60: return f"🟠 قريب ذروة شراء ({rsi:.0f})"
+    elif rsi >= 45: return f"⚪ محايد ({rsi:.0f})"
+    elif rsi >= 35: return f"🟡 قريب ذروة بيع ({rsi:.0f})"
+    elif rsi >= 25: return f"🟠 ذروة بيع ({rsi:.0f})"
+    else:           return f"🔴 ذروة بيع شديدة ({rsi:.0f})"
 
 
 def _market_contradiction(rsi: float, fear_greed: int, regime_desc: str) -> str:
@@ -285,36 +230,6 @@ def _calc_fibonacci(candles: list, lookback: int = 60) -> dict:
             swing_high = price_now * 1.15
             swing_low  = price_now * 0.85
 
-        # إصلاح #261/#302/#343/#367 (I2): منطق ديناميكي شامل
-        # يضمن أن السعر يقع في المنطقة الوسطى من النطاق (15%-85%)
-        if price_now > 0:
-            swing_high = min(swing_high, price_now * 2.5)
-            swing_low  = max(swing_low,  price_now * 0.5)
-            # حالة 1: النطاق معكوس أو منعدم
-            if swing_high <= swing_low or swing_high <= price_now * 1.001:
-                swing_high = price_now * 1.25
-                swing_low  = price_now * 0.80
-            # حالة 2: السعر خارج النطاق كلياً
-            elif price_now <= swing_low:
-                swing_low  = price_now * 0.80
-                swing_high = min(swing_high, price_now * 1.50)
-            elif price_now >= swing_high:
-                swing_high = price_now * 1.25
-                swing_low  = max(swing_low, price_now * 0.80)
-            else:
-                # حالة 3: السعر داخل النطاق لكن في منطقة ميتة (< 15% أو > 85%)
-                _diff_tmp = swing_high - swing_low
-                if _diff_tmp > 0:
-                    _pct = (price_now - swing_low) / _diff_tmp
-                    if _pct < 0.15:
-                        # السعر قريب جداً من swing_low — أعد بناء النطاق كاملاً
-                        swing_low  = price_now * 0.80
-                        swing_high = price_now * 1.25  # cap الطرف العلوي أيضاً
-                    elif _pct > 0.85:
-                        # السعر قريب جداً من swing_high — أعد بناء النطاق كاملاً
-                        swing_high = price_now * 1.25
-                        swing_low  = price_now * 0.80  # cap الطرف السفلي أيضاً
-
         diff = swing_high - swing_low
         if diff <= 0:
             return {}
@@ -330,19 +245,10 @@ def _calc_fibonacci(candles: list, lookback: int = 60) -> dict:
             "1.618": round(swing_high + diff * 0.618, 8),
         }
         price             = float(candles[-1].get("close", 0))
-        # إصلاح #260-A: nearest_support/resistance يشمل الامتدادات (1.272، 1.618)
-        # إذا كان السعر فوق swing_high — نستخدم 1.272 كمقاومة أولى
-        below             = {k: v for k, v in levels.items() if v < price}
-        above_in          = {k: v for k, v in levels.items() if v > price and float(k) <= 1.0}
-        above_ext         = {k: v for k, v in levels.items() if v > price and float(k) > 1.0}
-        nearest_support   = max(below.values())   if below    else swing_low
-        # مقاومة: نفضل المستويات الداخلية أولاً، ثم الامتداد الأول 1.272
-        if above_in:
-            nearest_resistance = min(above_in.values())
-        elif above_ext:
-            nearest_resistance = min(above_ext.values())   # 1.272 أو 1.618
-        else:
-            nearest_resistance = swing_high
+        below             = {k: v for k, v in levels.items() if v < price and float(k) <= 1.0}
+        above             = {k: v for k, v in levels.items() if v > price and float(k) <= 1.0}
+        nearest_support   = max(below.values()) if below else swing_low
+        nearest_resistance= min(above.values()) if above else swing_high
         return {
             "levels": levels,
             "swing_high": swing_high, "swing_low": swing_low,
@@ -374,9 +280,8 @@ def _fmt_fib_lines(fib: dict, price: float) -> list:
 
     for _, val, label in ordered:
         icon    = "🟢" if val < price else "🔴"
-        # إصلاح #379/#384/#491 (K4): رفع حد "أنت هنا" من 2% → 3.5%
-        # يضمن ظهور العلامة حتى عند بُعد 3.5% عن المستوى
-        is_here = (label == closest_lbl and closest_dst < 3.5)
+        # "أنت هنا" فقط للمستوى الأقرب وبشرط < 2%
+        is_here = (label == closest_lbl and closest_dst < 2.0)
         mark    = " ◀ أنت هنا" if is_here else ""
         lines.append(f"  {icon} {label:>5} — {_fmt_price(val)}{mark}")
     ns = fib.get("nearest_support", 0)
@@ -515,13 +420,9 @@ def _build_professional_block(
     if rsi < 30:
         reasons.append(f"• RSI = {int(rsi)} → ذروة بيع (فرصة انتعاش)")
     elif rsi > 70:
-        reasons.append(f"• RSI = {int(round(rsi))} → ذروة شراء (خطر تصحيح)")
-    elif rsi > 58 and is_bear:
-        # إصلاح #471/#432 (K6): RSI مرتفع في سوق هابط = تحذير
-        reasons.append(f"• RSI = {int(round(rsi))} → ارتداد في سوق هابط — احذر من الانعكاس")
+        reasons.append(f"• RSI = {int(rsi)} → ذروة شراء (خطر تصحيح)")
     else:
-        # إصلاح #486 (K3): توحيد RSI بـ int(round) لا :.0f
-        reasons.append(f"• RSI = {int(round(rsi))}")
+        reasons.append(f"• RSI = {rsi:.0f}")
     ns = fib.get("nearest_support", 0)
     nr = fib.get("nearest_resistance", 0)
     if ns > 0:
@@ -598,10 +499,6 @@ def _build_professional_block(
     _scenario_ar   = signal.technicals.get("scenario_ar",   "") if hasattr(signal, "technicals") else ""
     # إصلاح #95 (توحيد القاعدة): SL% من السعر الحالي (نفس قاعدة Worst-Case
     # وR/R) بدل pro_entry — يمنع ظهور "Worst-Case% < SL%" بسبب اختلاف القاعدة
-    # إصلاح #260-B: SL cap 12% — لا يتجاوز 12% من سعر الدخول مهما كان ATR
-    _sl_cap = price * (1 - 0.12)                          # أدنى مسموح = -12%
-    if pro_sl < _sl_cap:                                   # SL أعمق من 12%؟
-        pro_sl = _sl_cap                                   # → نرفعه للـ cap
     sl_pct  = abs(price - pro_sl) / max(price, 1e-9) * 100
     tp_pct  = abs(pro_tp - pro_entry) / max(pro_entry, 1e-9) * 100
     hold    = 3 if adx > 40 else 5
@@ -814,23 +711,15 @@ def _build_professional_block(
     _cons_offset = (price - entry_agg) * 0.4  # 40% من المسافة
     entry_cons = entry_agg + _cons_offset
     entry_cons = min(entry_cons, price * 0.998)  # لا يتجاوز السعر الحالي
-    # إصلاح #567/#575 (M1): فارق Entry للأسعار الصغيرة
-    # المشكلة: min(price*0.998) كان يحد الفارق عند أسعار صغيرة
-    _min_gap = price * 0.008  # 0.8% حد أدنى
-    # ضمان الفارق المطلوب أولاً
-    entry_cons = max(entry_agg + _min_gap, entry_cons)
-    # لا يتجاوز السعر الحالي أبداً (يُقبل فارق أقل إذا السعر قريب من entry_agg)
-    if entry_cons >= price:
-        entry_cons = price * 0.999
+    # ضمان: Aggressive < Conservative
+    if entry_agg >= entry_cons:
+        entry_cons = entry_agg * 1.005
 
     # ── TP متدرج حسب نوع الصفقة ──────────────────────────────
     if _scenario == "counter_trend_bounce":
         # إصلاح #622/#729: TP من الحساب فقط — لا Fibonacci في counter-trend
-        # إصلاح #555/#562 (M4): TP عند ذروة البيع يجب أن يتجاوز SL
-        # TP1=12% (يساوي SL_cap) → R/R=1:1 كحد أدنى
-        # TP2=18% → R/R فعلي مع TP2 = 1:1.5
-        _tp1_pct = min(0.12, atr_dec * 1.5)   # رُفع من 6% → 12% لـ R/R=1:1
-        _tp2_pct = min(0.18, atr_dec * 2.5)   # رُفع من 9% → 18%
+        _tp1_pct = min(0.06, atr_dec * 1.2)   # max 6% للـ scalp
+        _tp2_pct = min(0.09, atr_dec * 2.0)   # max 9%
         tp1_v = price * (1 + _tp1_pct)
         tp2_v = price * (1 + _tp2_pct)
         # ضمان: TP2 > TP1 بفارق لا يقل عن 2%
@@ -878,17 +767,12 @@ def _build_professional_block(
     # Worst-Case
     # إصلاح #95: ضمان أن مستويات Worst-Case أعمق من (أو تساوي) SL المعروض،
     # ووصف wc_loss يعكس المستوى الأعمق (wc_bd2) لا pro_sl
-    # إصلاح #306/#347/#369 (I8): Worst-Case يعتمد على ATR الفعلي
-    # SL cap 12% جعل wc_loss ثابتاً دائماً — الإصلاح يستخدم ATR
-    _atr_abs = price * atr_pct / 100 if atr_pct > 0 else price * 0.05
     if pro_sl > 0 and pro_sl < price:
-        wc_bd1 = pro_sl                          # مستوى كسر SL
-        wc_bd2 = pro_sl - _atr_abs * 0.5         # بعد كسر SL بنصف ATR
-        wc_bd2 = max(wc_bd2, price * 0.80)       # حد أقصى 20% خسارة
+        wc_bd1 = min(price * 0.95, pro_sl)
+        wc_bd2 = min(price * 0.90, pro_sl * 0.95)
     else:
-        wc_bd1 = price * (1 - 0.05)
-        wc_bd2 = price * (1 - 0.05 - atr_pct/100 * 0.5)
-        wc_bd2 = max(wc_bd2, price * 0.80)
+        wc_bd1 = price * 0.95
+        wc_bd2 = price * 0.90
     wc_loss = abs(price - wc_bd2) / max(price, 1e-9) * 100
 
     sl_type_ar    = _get_sl_type(_scenario, rsi)
@@ -928,16 +812,7 @@ def _build_professional_block(
     smc_lines.append(f"• Volume Profile: {_get_vol_profile_ar(_vol_prof, _vol_ratio)}")
     smc_lines.append(f"• Bollinger Bands: {_get_bb_status_ar(_bb_pos_v)}")
     if _atr_val:
-        # إصلاح #546 (L2): تنسيق ATR ذكي للأسعار الصغيرة
-        if _atr_val >= 1:
-            _atr_str = f"${_atr_val:,.0f}"
-        elif _atr_val >= 0.01:
-            _atr_str = f"${_atr_val:.4f}"
-        elif _atr_val >= 0.0001:
-            _atr_str = f"${_atr_val:.6f}"
-        else:
-            _atr_str = f"${_atr_val:.8f}"
-        smc_lines.append(f"• ATR (تقلب): {_atr_str} يومياً ({atr_pct:.1f}%)")
+        smc_lines.append(f"• ATR (تقلب): ${_atr_val:,.0f} يومياً")
     parts.extend(smc_lines)
 
     # 3. Derivatives (إذا متاحة)
@@ -945,7 +820,7 @@ def _build_professional_block(
     if _fund_pct != 0:
         deriv_lines.append(f"• Funding Rate: {_fund_pct:+.4f}% {_fund_sig}")
     if _oi_chg != 0:
-        deriv_lines.append(f"• Open Interest: {_oi_chg:+.1f}% {_oi_sig}".replace("-0.0%", "0.0%"))
+        deriv_lines.append(f"• Open Interest: {_oi_chg:+.1f}% {_oi_sig}")
     # إصلاح #241-A: Whale/TVL غير ذي صلة للأصول المُرمَّزة غير الرقمية
     _is_perp_asset = tech.get("is_perp_asset", False)
     if _whale_sig and not _is_perp_asset:
@@ -968,62 +843,25 @@ def _build_professional_block(
     tp2_pct = abs(tp2_v - price) / max(price, 1e-9) * 100 if tp2_v else 0
     # إصلاح #8: تسمية دقيقة — "عند الدعم" فقط إذا entry_agg ≈ مستوى الدعم المعروض
     _agg_label = "عند الدعم" if (ns > 0 and abs(entry_agg - ns) / max(ns, 1e-9) < 0.005) else "سحب فني (Pullback)"
-    # إصلاح #542/#543/#547 (L1): منطق مالي — سوق هابط + WAIT → إخفاء Entry
-    # عرض مناطق دخول Long في سوق هابط مضلل ومخالف للمنطق المالي
-    # إصلاح #650/#660 (M2): توسيع L1 ليشمل التوزيع والتذبذب وليس الهبوط فقط
-    # "هابط" أو "توزيع" أو "تذبذب" = لا Entry Long مضلل
-    _regime_desc_lower = regime.description_ar if hasattr(regime, "description_ar") else ""
-    # إصلاح #715/#721 (N5): إضافة "تقلب" لتشمل HighVol
-    _is_not_bullish = any(x in _regime_desc_lower for x in ["هابط", "توزيع", "تذبذب", "تقلب"])
-    # إصلاح crash: _conf_score غير مُعرَّف هنا — نستخدم conf فقط
-    _is_bearish_wait = _is_not_bullish and conf < 0.65
-    if _is_bearish_wait:
-        # في سوق هابط: نعرض مناطق المراقبة لا الدخول الفعلي
-        # إصلاح #770/#776/#789 (N2): مقاومة المراقبة تأتي من فيبو (فوق السعر)
-        _nr_watch = fib.get("nearest_resistance", 0)
-        _ns_watch = fib.get("nearest_support", 0)
-        # إذا nearest_resistance أقل من السعر → استخدم entry_cons كـ fallback
-        if _nr_watch <= price:
-            _nr_watch = entry_cons if entry_cons > price else price * 1.02
-        # إذا nearest_support أعلى من السعر → استخدم entry_agg
-        if _ns_watch >= price:
-            _ns_watch = entry_agg
-        entry_lines = [
-            "",
-            "*📍 مستويات المراقبة*",
-            f"• مقاومة للمراقبة: {_fmt_price(_nr_watch)} — اختراق صاعد مؤكَّد",
-            f"• دعم رئيسي: {_fmt_price(_ns_watch)} — لا دخول قبل تأكيد الارتداد",
-        ]
-    else:
-        entry_lines = [
-            "",
-            "*📍 مناطق الدخول والخروج*",
-            f"• Entry 1 (Aggressive): {_fmt_price(entry_agg)} — {_agg_label}",
-            f"• Entry 2 (Conservative): {_fmt_price(entry_cons)} — بعد تأكيد الارتداد",
-        ]
-    # إصلاح #285 (H5): إخفاء TP عند conf < 65% (WAIT و LOW)
-    # الأهداف تظهر فقط عند إشارة حقيقية ≥ 65%
-    if _conf_score >= 65:
+    entry_lines = [
+        "",
+        "*📍 مناطق الدخول والخروج*",
+        f"• Entry 1 (Aggressive): {_fmt_price(entry_agg)} — {_agg_label}",
+        f"• Entry 2 (Conservative): {_fmt_price(entry_cons)} — بعد تأكيد الارتداد",
+    ]
+    if _conf_score >= 40:  # لا أهداف عند WAIT
         entry_lines.extend([
             f"• TP1: {_fmt_price(tp1_v)} (+{tp1_pct:.1f}%)",
             f"• TP2: {_fmt_price(tp2_v)} (+{tp2_pct:.1f}%)",
         ])
-    elif _conf_score >= 40:
-        entry_lines.append("• الأهداف: متاحة بعد تأكيد 2/4 مؤشرات")
         if tp3_v:
             tp3_pct = abs(tp3_v - entry_agg) / max(entry_agg, 1e-9) * 100
             entry_lines.append(f"• TP3 (اختياري): {_fmt_price(tp3_v)} (+{tp3_pct:.1f}%)")
     else:
         entry_lines.append("• الأهداف: متاحة بعد تأكيد 2/4 مؤشرات")
     entry_lines.extend([
-        # إصلاح L1: في سوق هابط + WAIT → SL لا معنى له كـ Long
-        (f"• مستوى الخطر: {_fmt_price(pro_sl)} (−{sl_pct:.1f}%)"
-         if _is_bearish_wait else
-         f"• وقف الخسارة: {_fmt_price(pro_sl)} ({sl_pct:.1f}%-)"),
-        # إصلاح #264/#268/#276: R/R لا معنى له عند WAIT — يُخفى
-        (f"• R/R الواقعي: 1:{rr_real}{_rr_adjusted_note}"
-         if conf >= 0.65
-         else "• R/R: غير محسوب — انتظر تأكيد الإشارة"),
+        f"• وقف الخسارة: {_fmt_price(pro_sl)} ({sl_pct:.1f}%-)",
+        f"• R/R الواقعي: 1:{rr_real}{_rr_adjusted_note}",
         f"• الحجم: {_pos_size_rule}",
     ])
     parts.extend(entry_lines)
@@ -1042,10 +880,7 @@ def _build_professional_block(
     # 6. إصلاح #204/#206: قسمان منفصلان بتسميات واضحة
     # 6-A. تأكيدات الدخول الحاسمة (تؤثر على حجم الصفقة عبر _confirmed/_flags_found)
     parts.extend(["", "*🔑 تأكيدات الدخول (تُحدِّد حجم الصفقة — الحد الأدنى: 2 من 4)*"])
-    # إصلاح #728/#736 (N4): في وضع المراقبة → "متاحة للمراقبة" لا "الإشارة نشطة"
-    if _confirmed and _is_bearish_wait:
-        parts.append(f"✅ {_flags_found}/4 — *تأكيدات للمراقبة* (لا دخول فعلي بعد)")
-    elif _confirmed:
+    if _confirmed:
         parts.append(f"✅ {_flags_found}/4 مؤكدة — الإشارة *نشطة*")
     else:
         parts.append(f"⚠️ {_flags_found}/4 — انتظر مؤشر إضافي")
@@ -1130,7 +965,7 @@ def _calc_atr(candles: list, period: int = 14) -> float:
             return 3.0
         atr   = sum(trs[-period:]) / period
         price = float(candles[-1].get("close", 0))
-        # BB1 (#1550/#1555/#1574): cap ATR عند 30% — منع قيم مشوهة من انهيار حاد
+        # BB1: cap ATR عند 30% لمنع قيم مشوهة من انهيار حاد
         return min((atr / price * 100) if price > 0 else 3.0, 30.0)
     except (ValueError, TypeError, ZeroDivisionError):
         return 3.0
@@ -1205,26 +1040,16 @@ def _build_scenarios_context(
     sup2 = ns - atr * 1.5
     sup3 = ns - atr * 3.0
     res1 = nr
-    # إصلاح #304 (H7): فرض res2 > res1 > price دائماً
-    res2 = f382 if f382 > res1 else nr * 1.04
-    res3 = f618 if f618 > res2 else res2 * 1.04
-    res3 = f786 if f786 > res2 else res3
-    # تأكيد الترتيب التصاعدي
-    res1 = max(res1, price * 1.01)
-    res2 = max(res2, res1 * 1.02)
-    res3 = max(res3, res2 * 1.02)
-    sup2 = min(sup2, sup1 * 0.98)
-    sup3 = min(sup3, sup2 * 0.97)
+    res2 = f382 if f382 > price else nr * 1.04
+    res3 = f618 if f618 > price else nr * 1.08
 
-    # إصلاح #318/#326/#329 (H3): RSI يُقرَّب قبل إرساله لـ Groq
-    rsi = round(rsi)
     rsi_note = ""
     if rsi < 20:
-        rsi_note = f"RSI={rsi} (تشبع بيعي تاريخي — يرفع احتمال الارتداد قبل استئناف الاتجاه)."
+        rsi_note = f"RSI={rsi:.0f} (تشبع بيعي تاريخي — يرفع احتمال الارتداد قبل استئناف الاتجاه)."
     elif rsi < 30:
-        rsi_note = f"RSI={rsi} (تشبع بيعي — احتمال ارتداد قصير)."
+        rsi_note = f"RSI={rsi:.0f} (تشبع بيعي — احتمال ارتداد قصير)."
     elif rsi > 70:
-        rsi_note = f"RSI={rsi} (تشبع شرائي — احتمال تصحيح)."
+        rsi_note = f"RSI={rsi:.0f} (تشبع شرائي — احتمال تصحيح)."
 
     if is_bear:
         scenarios = (
@@ -1388,41 +1213,17 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ النظام لم يُهيَّأ بعد")
         return
 
-    # تطوير U1: /onchain يقبل symbol لجميع العملات
-    _args_oc = context.args or []
-    _sym_oc  = _args_oc[0].upper().strip() if _args_oc else "BTC"
-    # تنظيف الاسم
-    for _sfx in ("-USDT-SWAP","-USDT","USDT","SWAP","PERP"):
-        if _sym_oc.endswith(_sfx) and len(_sym_oc) > len(_sfx):
-            _sym_oc = _sym_oc[:-len(_sfx)]
-            break
-    _sym_oc = normalize_symbol_alias(_sym_oc.replace("-","").replace("/",""))  # X4
-    _is_btc = (_sym_oc == "BTC")
-
-    msg = await update.message.reply_text(
-        f"🔗 جاري جلب بيانات On-Chain لـ {_sym_oc}...")
+    msg = await update.message.reply_text("🔗 جاري جلب بيانات On-Chain...")
     try:
-        # U2: جلب البيانات حسب العملة
-        if _is_btc:
-            data, fear, funding, oi, whale, btc_adv = await asyncio.gather(
-                engine.data_layer.get_onchain(),
-                engine.data_layer.get_fear_greed(),
-                engine.data_layer.get_funding_rate("BTC"),
-                engine.data_layer.get_open_interest("BTC"),
-                engine.data_layer.get_whale_ratio("BTC"),
-                engine.data_layer.get_btc_onchain_advanced(),
-                return_exceptions=True
-            )
-        else:
-            data, fear, funding, oi, whale = await asyncio.gather(
-                engine.data_layer.get_onchain(),
-                engine.data_layer.get_fear_greed(),
-                engine.data_layer.get_funding_rate(_sym_oc),
-                engine.data_layer.get_open_interest(_sym_oc),
-                engine.data_layer.get_whale_ratio(_sym_oc),
-                return_exceptions=True
-            )
-            btc_adv = {"available": False}
+        data, fear, funding, oi, whale, btc_adv = await asyncio.gather(
+            engine.data_layer.get_onchain(),
+            engine.data_layer.get_fear_greed(),
+            engine.data_layer.get_funding_rate("BTC"),
+            engine.data_layer.get_open_interest("BTC"),
+            engine.data_layer.get_whale_ratio("BTC"),
+            engine.data_layer.get_btc_onchain_advanced(),
+            return_exceptions=True
+        )
         btc_adv = btc_adv if isinstance(btc_adv, dict) else {"available": False}
         funding = funding if isinstance(funding, dict) else {}
         oi      = oi      if isinstance(oi,      dict) else {}
@@ -1447,23 +1248,22 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
             fear_emoji = "🤑"
 
         lines = [
-            f"🔗 *تحليل On-Chain — {_sym_oc} | رائد*",
+            "🔗 *تحليل On-Chain — رائد*",
             "━━━━━━━━━━━━━━━━━━",
             f"📊 إجمالي TVL: ${tvl/1e9:.2f}B",
             f"{fear_emoji} Fear & Greed: {fear_val} — {fear.get('label_ar', 'محايد')}",
             f"📈 تغيير TVL 24h: {tvl_change:+.2f}%",
         ]
 
-        # U3: بيانات شبكة Bitcoin (للـ BTC فقط)
-        if _is_btc:
-            btc_hashrate = data.get("btc_hashrate", 0)
-            btc_tx       = data.get("btc_tx_count_24h", 0)
-            if btc_hashrate > 0 or btc_tx > 0:
-                lines += ["", "⛏️ *شبكة Bitcoin*"]
-                if btc_hashrate > 0:
-                    lines.append(f"• Hashrate: {btc_hashrate/1e9:.1f} EH/s")
-                if btc_tx > 0:
-                    lines.append(f"• معاملات 24h: {btc_tx:,}")
+        # بيانات شبكة Bitcoin
+        btc_hashrate = data.get("btc_hashrate", 0)
+        btc_tx       = data.get("btc_tx_count_24h", 0)
+        if btc_hashrate > 0 or btc_tx > 0:
+            lines += ["", "⛏️ *شبكة Bitcoin*"]
+            if btc_hashrate > 0:
+                lines.append(f"• Hashrate: {btc_hashrate/1e9:.1f} EH/s")
+            if btc_tx > 0:
+                lines.append(f"• معاملات 24h: {btc_tx:,}")
 
         if top_p:
             lines += ["", "🏆 *أكبر البروتوكولات*"]
@@ -1481,24 +1281,22 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _whale_sig = (whale or {}).get("signal", "")
         _whale_r   = float((whale or {}).get("ratio", 0) or 0)
 
-        # U4: قسم المشتقات للعملة المحددة
         if _fund_pct or _oi_chg or _whale_sig:
-            lines += ["", f"📐 *مشتقات {_sym_oc}*"]
+            lines += ["", "📐 *مشتقات BTC*"]
             if _fund_pct:
                 if _fund_pct < -0.02:
                     _fsig = "🟢 سالب جداً — ضغط Shorts (فرصة Long)"
                 elif _fund_pct < -0.005:
                     _fsig = "🟢 سالب — فرصة Long"
                 elif _fund_pct > 0.02:
-                    # V2 (#1299): تنبيه صريح عند Funding مرتفع جداً
-                    _fsig = "🔴 مرتفع جداً — ⚠️ خطر تصفية Longs"
+                    _fsig = "🔴 مرتفع جداً — ضغط Longs"
                 elif _fund_pct > 0.005:
                     _fsig = "🟡 إيجابي — محايد"
                 else:
                     _fsig = "⚪ محايد"
                 lines.append(f"• Funding Rate: {_fund_pct:+.4f}% {_fsig}")
             if _oi_chg:
-                lines.append(f"• Open Interest: {_oi_chg:+.1f}% {_oi_sig}".replace("-0.0%", "0.0%"))
+                lines.append(f"• Open Interest: {_oi_chg:+.1f}% {_oi_sig}")
             if _whale_sig:
                 _wr_txt = f" ({_whale_r:.2f})" if _whale_r > 0 else ""
                 lines.append(f"• Whale Ratio{_wr_txt}: {_whale_sig}")
@@ -1524,9 +1322,6 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _reco_parts.append("Greed مرتفع → حذر من الانعكاس")
         if _fund_pct < -0.01:
             _reco_parts.append("Funding سالب يدعم سيناريو الارتداد")
-        # V_interp (#1342): تنبيه Funding مرتفع جداً في التفسير
-        if _fund_pct > 0.02:
-            _reco_parts.append("⚠️ Funding مرتفع جداً — خطر تصفية Longs")
         if _whale_r and _whale_r < 0.6:
             _reco_parts.append("الحيتان تتراكم")
         if tvl_change < -3:
@@ -1605,24 +1400,12 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     args    = context.args or ["BTC"]
-    raw_arg = normalize_symbol_alias(args[0].upper())  # X2: تطبيع المرادفات
-
-    # إصلاح #272/#278/#279/#281 (G1): كشف نوع السوق من args[1..] مباشرةً
-    # يمنع سؤال Spot/Futures عندما يكتب المستخدم: /signal ETH فيوتشر
-    _FUTURES_KW = {"فيوتشر","فيوتشرز","futures","future","فوري","perp","swap","perpetual"}
-    _SPOT_KW    = {"سبوت","spot","عادي","نقدي","فوري_سبوت"}
-    _extra_args = [a.lower() for a in args[1:]]
-    _kw_mkttype = None
-    # إصلاح #287/#322 (H1): فحص جزئي — "الفيوتشر" يحتوي "فيوتشر"
-    if any(k in arg for arg in _extra_args for k in _FUTURES_KW):
-        _kw_mkttype = "futures"
-    elif any(k in arg for arg in _extra_args for k in _SPOT_KW):
-        _kw_mkttype = "spot"
+    raw_arg = args[0].upper()
 
     # تطوير #221: سؤال نوع السوق (Spot/Futures)
     # إصلاح #237-A+#248: الأصول المُرمَّزة → Futures تلقائياً
     # ملاحظة: tier2 يُعرَّف لاحقاً — نستخدم user_id مباشرة هنا
-    _mkttype = context.user_data.pop("_mkttype", None) or _kw_mkttype
+    _mkttype = context.user_data.pop("_mkttype", None)
     if _mkttype is None:
         _tier_early = _sm.get_tier(user_id)
         if _tier_early in ("diamond","admin"):
@@ -1665,10 +1448,13 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "HBAR","EGLD","ONE","ZIL","ICX","WAVES","NEO","QTUM",
         "KAVA","BAND","RSR","NMR","RLC","ANKR","SKL","CKB",
     }
-    if tier2 in ("gold","diamond","admin") and symbol.upper() in _ALWAYS_ALLOWED:
-        pass  # مسموح
-    elif _is_perp_sig and tier2 in ("diamond","admin"):
-        pass  # تطوير #209: أأصل مُرمَّزة مسموحة لماسي+
+    # إصلاح #1683: diamond/admin يصل لأي عملة بدون قيود
+    if tier2 in ("diamond", "admin"):
+        pass  # ماسي+ = وصول كامل لجميع العملات
+    elif tier2 in ("gold",) and symbol.upper() in _ALWAYS_ALLOWED:
+        pass  # ذهبي: القائمة الموسّعة مسموحة
+    elif _is_perp_sig and tier2 in ("gold",):
+        pass  # ذهبي: أصول مُرمَّزة مسموحة
     elif not is_symbol_allowed(symbol, tier2):
         await _get_message(update, context).reply_text(
             (
@@ -1707,30 +1493,14 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             news_an = {}
 
-        # إصلاح #265: تخفيض الحد 50→30 للعملات الجديدة + تنبيه عند 30-49
-        if len(candles) < 30:
-            # X9: رسالة موحَّدة مع /analyze — تُفرِّق بين "رمز غير موجود" و"بيانات غير كافية مؤقتاً"
-            if len(candles) == 0:
-                await msg.edit_text(
-                    f"⚠️ لم أجد بيانات لـ *{symbol}*\n\n"
-                    f"• تأكد من صحة الرمز (مثال: BTC, ETH, SOL)\n"
-                    f"• العملة قد تكون جديدة أو غير مدعومة\n"
-                    f"• جرّب: /chart {symbol} للتحليل البصري",
-                    parse_mode="Markdown")
-            else:
-                await msg.edit_text(
-                    f"⚠️ بيانات {symbol} غير كافية حالياً (تحتاج 30 شمعة على الأقل)\n"
-                    f"أعد المحاولة بعد دقيقة")
+        if len(candles) < 50:
+            await msg.edit_text(
+                f"⚠️ بيانات {symbol} غير كافية حالياً\n"
+                f"أعد المحاولة بعد دقيقة")
             return
-        _limited_data = len(candles) < 50  # تنبيه بيانات محدودة
 
         fear_val = int(fear.get("value") or 50)
         regime   = engine.regime_detector.detect(candles, btc_dominance=btc_dom, fear_greed=fear_val, symbol=symbol)
-        # إصلاح #265: تنبيه بيانات محدودة
-        if locals().get("_limited_data"):
-            await msg.edit_text(
-                f"📡 جاري تحليل {symbol} (⚠️ بيانات محدودة < 50 يوم)...\n"
-                "⏳ قد يستغرق 20-30 ثانية")
 
         sentiment = 0.0
         if news_an:
@@ -1774,10 +1544,9 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _pve50_chk = float(regime.metrics.get("price_vs_ema50", 0) or 0)
         _data_corrupted = (atr_pct > 25 or rsi < 5 or _pve50_chk < -50)
         if _data_corrupted:
-            # تحذير مالي: منع رافعة عالية + تنبيه المستخدم
             if hasattr(signal, "suggested_leverage"):
                 signal.suggested_leverage = 1
-            signal.confidence = min(signal.confidence, 0.49)  # → [LOW] بحد أقصى
+            signal.confidence = min(signal.confidence, 0.49)
             # إصلاح #479: BB من 4H إذا متاح
             if len(_sig_4h) >= 20:
                 _c4h = [float(c.get("close",0)) for c in _sig_4h]
@@ -1841,7 +1610,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as _fe:
             logger.debug(f"futures display: {_fe}")
 
-        # BB1c (#1550/#1575): تحذير بيانات مشوهة عند انهيار حاد
+        # BB1c: تحذير بيانات مشوهة عند انهيار حاد
         if _data_corrupted:
             warning = (
                 "\n\n⚠️ *تحذير مالي: بيانات غير موثوقة*\n"
@@ -1972,36 +1741,18 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     args   = context.args or ["BTC"]
-    # إصلاح T1 (#1086/#1098/#1099): تنظيف شامل لـ symbol
-    # يتعامل مع: BTC-usdt-SWAP / BTCUSDTSWAP / BTC-USDT / BTCUSDT / BTC
-    raw_sym = args[0].upper().strip()
-    for _sfx in ("-USDT-SWAP", "-USDT-PERP", "USDTSWAP", "USDTPERP",
-                 "-SWAP", "-PERP", "SWAP", "PERP",
-                 "-USDT", "-BUSD", "-USDC", "USDT", "BUSD", "USDC"):
+    # تطبيع symbol على مستوى النظام: BTCUSDT → BTC
+    raw_sym = args[0].upper().strip().replace("/", "").replace("-", "")
+    for _sfx in ("USDT","BUSD","USDC"):
         if raw_sym.endswith(_sfx) and len(raw_sym) > len(_sfx):
             raw_sym = raw_sym[:-len(_sfx)]
             break
-    symbol = normalize_symbol_alias(raw_sym.replace("-", "").replace("/", ""))  # X3
+    symbol = raw_sym
     msg = await _get_message(update, context).reply_text(f"🔬 جاري تحليل السيولة لـ {symbol}...")
 
     try:
-        # إصلاح S2: تحديد نوع السوق للسيولة
-        # SWAP في الاسم الأصلي أو أصل مُرمَّز → Futures
-        # إصلاح S2: الأصل النظيف (symbol) كُسِّر من raw_sym بالفعل
-        # is_futures = SWAP/PERP في الاسم الأصلي أو أصل مُرمَّز
-        # إصلاح T2: كشف Futures من الاسم الأصلي أو symbol المُنظَّف
-        _orig_arg = (args[0].upper() if args else "")
-        _TOKENIZED = {"SPCX", "COIN", "AAPL", "NVDA", "TSLA", "MSTR",
-                      "GOOGL", "OPENAI", "MSFT", "AMZN", "META", "XAUUSDT",
-                      "XAUUSD", "XAU", "GOLD"}
-        _liq_is_futures = (
-            "SWAP" in _orig_arg or
-            "PERP" in _orig_arg or
-            symbol in _TOKENIZED
-        )
         profile, walls, funding, oi, whale = await asyncio.gather(
-            engine.microstructure.analyze(symbol, order_size_usd=1000,
-                                          is_futures=_liq_is_futures),
+            engine.microstructure.analyze(symbol, order_size_usd=1000),
             engine.microstructure.detect_walls(symbol),
             engine.data_layer.get_funding_rate(symbol),
             engine.data_layer.get_open_interest(symbol),
@@ -2015,12 +1766,7 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # تمرير walls لـ format_ar مباشرة
         walls_safe = walls if not isinstance(walls, Exception) else None
-        # إصلاح S3: إضافة نوع السوق في Header /liquidity
-        _liq_type_label = "📈 Futures/SWAP" if _liq_is_futures else "⚡ Spot"
-        text = _clean_md(
-            f"🏪 نوع السوق: {_liq_type_label}\n" +
-            engine.microstructure.format_ar(profile, walls=walls_safe)
-        )
+        text = _clean_md(engine.microstructure.format_ar(profile, walls=walls_safe))
 
         # إصلاح #14: قسم المشتقات (Funding/OI/Whale) — كان مفقوداً تماماً
         funding = funding if isinstance(funding, dict) else {}
@@ -2046,7 +1792,7 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _fsig = "⚪ محايد"
             deriv_lines.append(f"• Funding Rate: {_fund_pct:+.4f}% {_fsig}")
         if _oi_chg:
-            deriv_lines.append(f"• Open Interest: {_oi_chg:+.1f}% {_oi_sig}".replace("-0.0%", "0.0%"))
+            deriv_lines.append(f"• Open Interest: {_oi_chg:+.1f}% {_oi_sig}")
         if _whale_sig:
             _wr_txt = f" ({_whale_r:.2f})" if _whale_r > 0 else ""
             deriv_lines.append(f"• Whale Ratio (Long/Short){_wr_txt}: {_whale_sig}")
@@ -2144,23 +1890,11 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     args   = context.args or []
-    raw_arg = normalize_symbol_alias(args[0].upper())  # X2: تطبيع المرادفات
-
-    # إصلاح G1: كشف نوع السوق من args[1..] في /analyze أيضاً
-    _FUTURES_KW_AN = {"فيوتشر","فيوتشرز","futures","future","فوري","perp","swap","perpetual"}
-    _SPOT_KW_AN    = {"سبوت","spot","عادي","نقدي"}
-    _args_an = context.args or []
-    _extra_an = [a.lower() for a in _args_an[1:]]
-    _kw_mkttype_an = None
-    # إصلاح #287/#322 (H1): فحص جزئي — "الفيوتشر" يحتوي "فيوتشر"
-    if any(k in arg for arg in _extra_an for k in _FUTURES_KW_AN):
-        _kw_mkttype_an = "futures"
-    elif any(k in arg for arg in _extra_an for k in _SPOT_KW_AN):
-        _kw_mkttype_an = "spot"
+    raw_arg = args[0].upper()
 
     # تطوير #221: سؤال نوع السوق (Spot/Futures)
     # إصلاح #237-A: الأصول المُرمَّزة → Futures تلقائياً بدون سؤال
-    _mkttype_an = context.user_data.pop("_mkttype", None) or _kw_mkttype_an
+    _mkttype_an = context.user_data.pop("_mkttype", None)
     if _mkttype_an is None:
         tier_an_pre = _sm.get_tier(user_id)
         _pre_asset_an = False
@@ -2194,10 +1928,13 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # فحص الباقة للعملة المطلوبة
     _LARGE_CAPS = {"XLM","ICP","FIL","VET","EOS","XTZ","ALGO","HBAR","EGLD","WAVES","NEO","QTUM"}
-    if tier_an in ("gold","diamond","admin") and symbol.upper() in _LARGE_CAPS:
-        pass  # إصلاح #1020: عملات كبيرة مسموحة للذهبي+
-    elif _is_perp_an and tier_an in ("diamond","admin"):
-        pass  # تطوير #209: أأصل مُرمَّزة مسموحة لماسي+
+    # إصلاح #1683: diamond/admin وصول كامل لجميع العملات
+    if tier_an in ("diamond", "admin"):
+        pass  # ماسي+ = بدون قيود
+    elif tier_an in ("gold",) and symbol.upper() in _LARGE_CAPS:
+        pass  # ذهبي: عملات كبيرة مسموحة
+    elif _is_perp_an and tier_an in ("gold",):
+        pass  # ذهبي: أصول مُرمَّزة مسموحة
     elif not is_symbol_allowed(symbol, tier_an):
         await _get_message(update, context).reply_text(
             (
@@ -2316,22 +2053,13 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.warning(f"regime detect: {e}")
 
-        # إصلاح #317 (H4): EMA50 من regime_obj (EMA حقيقي) لا SMA
-        # يوحّد مصدر EMA بين Header وقسم المؤشرات
+        # EMA check
         if len(candles) >= 20:
             try:
                 closes = [float(c.get("close", 0)) for c in candles if c.get("close")]
                 ema20  = sum(closes[-20:]) / 20
                 ema50  = sum(closes[-50:]) / 50 if len(closes) >= 50 else ema20
-                # استخدم price_vs_ema50 من regime إذا متاح (EMA حقيقي)
-                if "regime_obj" in dir() and hasattr(regime_obj, "metrics"):
-                    _pve50 = regime_obj.metrics.get("price_vs_ema50", None)
-                    if _pve50 is not None:
-                        ema_bearish = _pve50 < 0  # سالب = السعر تحت EMA50
-                    else:
-                        ema_bearish = price < ema20 and price < ema50
-                else:
-                    ema_bearish = price < ema20 and price < ema50
+                ema_bearish = price < ema20 and price < ema50
             except Exception:
                 pass
 
@@ -2341,19 +2069,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                  else "محايد")
 
         # candles_summary كـ JSON احترافي لـ Groq
-        # إصلاح #328 (H2): تمرير السعر الحالي لـ build_candles_summary
-        # يمنع تناقض السعر بين Header ونص Groq
-        candles_summary = engine.data_layer.build_candles_summary(candles, symbol, current_price=price)
-        # إصلاح X7 (#1398): توحيد above_ema50 مع Header الموثوق (ema_bearish)
-        # لمنع تناقض "EMA50: ✅ فوق" في Header مقابل "تحت EMA50" في نص Groq
-        if candles_summary:
-            try:
-                import json as _json_x7
-                _cs_dict = _json_x7.loads(candles_summary)
-                _cs_dict["above_ema50"] = not ema_bearish
-                candles_summary = _json_x7.dumps(_cs_dict, ensure_ascii=False)
-            except Exception:
-                pass
+        candles_summary = engine.data_layer.build_candles_summary(candles, symbol)
         if not candles_summary:
             # fallback نصي
             try:
@@ -2410,8 +2126,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 symbol=symbol, price=price, price_change_24h=change_24h,
                 volume_24h=volume_24h, market_cap=market_cap, rsi=rsi,
                 fear_greed=fear_val, regime_desc=regime_desc,
-                candles_summary=_full_context,
-                ema_bearish=ema_bearish)  # إصلاح #344/#368 (I3): EMA موحَّد
+                candles_summary=_full_context)
             if not analysis or len(analysis.strip()) < 20:
                 raise ValueError("تحليل فارغ")
         except Exception as _ae:
@@ -2434,25 +2149,11 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _atr_a = _calc_atr(candles)
         # إصلاح #34: onchain_data خاص بالعملة بدل {} الفارغة
         _onchain_a = await engine.data_layer.get_signal_enrichment(symbol, {})
-        # إصلاح #912 (G3): جلب الأخبار وتحليلها في /analyze كما في /signal
-        # يضمن أن news_sentiment حقيقي لا 0.0 افتراضي
-        _news_raw_an = []
-        _news_sentiment_an = float(getattr(engine, "_last_news_sentiment", 0) or 0)
-        try:
-            _news_raw_an = await engine.data_layer.get_news(currencies=symbol)
-            if _news_raw_an:
-                _news_an_result = await engine.news_engine.analyze(_news_raw_an, [symbol])
-                if _news_an_result and isinstance(_news_an_result, dict):
-                    _raw_sent_an = _news_an_result.get("sentiment_score")
-                    if _raw_sent_an is not None:
-                        _news_sentiment_an = float(_raw_sent_an)
-        except Exception:
-            pass
         try:
             _sig_a = engine.signal_layer.generate(
                 symbol=symbol, candles=candles,
                 onchain_data=_onchain_a,
-                news_sentiment=_news_sentiment_an,
+                news_sentiment=float(getattr(engine, "_last_news_sentiment", 0) or 0),
                 backtest_win_rate=0.55,
                 macro_data={"fear_greed": fear_val},
                 regime=engine.regime_detector.detect(
@@ -2506,17 +2207,10 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "whale_data": _whale_data, "onchain_data": _onchain_an,
                 "atr_value": round(_calc_atr(candles) * price / 100, 2),
             }
-        # إصلاح #386/#462/#489 (K1): توحيد market_phase مع /signal
-        # "regime_obj" in dir() يفحص globals لا locals → دائماً False
-        _mp_phase = "Markdown" if is_bearish else "Markup"  # fallback
-        try:
-            if regime_obj is not None:
-                _mp_phase = getattr(regime_obj, "market_phase", _mp_phase) or _mp_phase
-        except Exception:
-            pass
         class _AnalyzeRegime:
             description_ar = regime_desc
-            market_phase   = _mp_phase
+            market_phase   = getattr(regime_obj, "market_phase", "") if "regime_obj" in dir() else (
+                "Markdown" if is_bearish else "Markup")
             class regime:
                 value = "bear_trend" if is_bearish else "bull_trend"
         _reg_a = _AnalyzeRegime()
@@ -2607,30 +2301,14 @@ async def cmd_chart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # إصلاح P1 (#967): إذا /chart جاء مع صورة في نفس الرسالة → حللها مباشرة
-    symbol_arg = normalize_symbol_alias((context.args or [""])[0].upper()) if context.args else ""  # X5
-    _msg_cmd = _get_message(update, context)
-    _has_photo = bool(_msg_cmd.photo)
-    _has_doc   = bool(_msg_cmd.document)
-
-    if _has_photo or _has_doc:
-        # الصورة في نفس رسالة /chart → نُعالجها مباشرة
-        logger.info(f"cmd_chart_cmd: صورة في نفس الرسالة — معالجة مباشرة")
-        await cmd_chart(update, context)
-        return
-
-    hint = f" لـ {symbol_arg}" if symbol_arg else ""
-    if symbol_arg:
-        context.user_data["_chart_symbol"] = symbol_arg
-    await _msg_cmd.reply_text(
-        f"📊 *تحليل الشارت البصري{hint}*\n"
+    await _get_message(update, context).reply_text(
+        "⚙️ *تحليل الشارت البصري — قيد الصيانة*\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
-        "📸 *أرسل صورة الشارت الآن*\n"
-        "وسأحللها فوراً بالذكاء الاصطناعي\n\n"
-        "💡 *طريقة الإرسال:*\n"
-        "• اضغط 📎 واختر صورة من الجهاز\n"
-        "• أرسلها مباشرة في المحادثة\n"
-        "• أو أرسل الصورة مع كتابة /chart في الـ caption",
+        "🔄 *بدائل متاحة الآن:*\n"
+        "• /analyze — تحليل عميق شامل (ذهبي+)\n"
+        "• /signal  — إشارة + مستويات دخول\n"
+        "• /quicksignal — تحليل سريع مجاني\n\n"
+        "⏳ سيعود تحليل الشارت البصري قريباً",
         parse_mode="Markdown")
 
 
@@ -2652,50 +2330,18 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await _get_message(update, context).reply_text("🔍 جاري تحليل الشارت...")
 
     try:
-        # إصلاح O1: تحقق شامل من جميع أنواع إرسال الصور
-        _msg = _get_message(update, context)
-        photo = _msg.photo
-        _doc  = _msg.document
-        # تشخيص شامل
-        logger.info(
-            f"cmd_chart: photo={bool(photo)}, photo_len={len(photo) if photo else 0}, "
-            f"doc={bool(_doc)}, doc_mime={getattr(_doc,'mime_type','') if _doc else ''}, "
-            f"msg_type={type(_msg).__name__}, "
-            f"has_sticker={bool(getattr(_msg,'sticker',None))}, "
-            f"has_animation={bool(getattr(_msg,'animation',None))}"
-        )
-        # إصلاح P1: fallback شامل لجميع أنواع الصور
-        _file_obj = None
+        photo = _get_message(update, context).photo
         if photo:
-            _file_obj = await photo[-1].get_file()
-        elif _doc:
-            _file_obj = await _doc.get_file()
+            file = await photo[-1].get_file()
+        elif _get_message(update, context).document:
+            file = await _get_message(update, context).document.get_file()
         else:
-            _reply = getattr(_msg, "reply_to_message", None)
-            if _reply and getattr(_reply, "photo", None):
-                _file_obj = await _reply.photo[-1].get_file()
-                logger.info("cmd_chart: صورة من reply_to_message")
-            elif _reply and getattr(_reply, "document", None):
-                _file_obj = await _reply.document.get_file()
-
-        if _file_obj is None:
-            logger.warning(f"cmd_chart: لا صورة — photo={bool(photo)}, doc={bool(_doc)}")
             await msg.edit_text(
-                "⚠️ لم أتمكن من قراءة الصورة.\n\n"
-                "💡 *جرب:*\n"
-                "• أرسل الصورة مع كتابة /chart في caption\n"
-                "• أو اضغط 📎 واختر 'صورة' (ليس ملف)",
-                parse_mode="Markdown")
+                "⚠️ يُرجى إرسال صورة الشارت.\n"
+                "اكتب /chart لمعرفة طريقة الاستخدام")
             return
-        file = _file_obj
 
         image_bytes = await file.download_as_bytearray()
-        # إصلاح #845: تحقق من حجم الصورة + log للتشخيص
-        _img_size_kb = len(image_bytes) / 1024
-        logger.info(f"cmd_chart: صورة {_img_size_kb:.0f}KB مستلمة")
-        if _img_size_kb > 5000:  # 5MB حد أقصى
-            await msg.edit_text("⚠️ الصورة كبيرة جداً (> 5MB). يُرجى إرسال صورة أصغر.")
-            return
         caption = _get_message(update, context).caption or ""
         symbol  = ""
         for word in caption.split():
@@ -2713,47 +2359,22 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "COIN-M", "DELIVERY", "QUARTERLY", "FUTURES/PERP",
         )
         _caption_upper = caption.upper()
-        _caption_ar    = caption  # النص العربي بدون upper
-        _futures_keywords_ar = ("العقود الدائمة", "العقود الآجلة", "فيوتشر", 
-                                  "عقد دائم", "سوق مغلق", "تسليم")
-        _chart_is_futures = (any(kw in _caption_upper for kw in _futures_keywords)
-                              or any(kw in _caption_ar for kw in _futures_keywords_ar))
+        _chart_is_futures = any(kw in _caption_upper for kw in _futures_keywords)
         if not _chart_is_futures and symbol:
             _chart_is_futures = any(kw in symbol.upper()
-                                     for kw in ("PERP","SWAP","FUT","SPCX","TSLA","AAPL","NVDA","COIN"))
-
-        # إصلاح R1 (#1024): تحديد نوع السوق من الصورة بسؤال مباشر قبل التحليل الكامل
-        # هذا يتجاوز خطأ Groq الذي يكتب "Spot" رغم وجود "العقود الدائمة"
-        if not _chart_is_futures:
-            try:
-                _detected_type = await engine.news_engine.detect_market_type_from_image(
-                    bytes(image_bytes))
-                if _detected_type == "futures":
-                    _chart_is_futures = True
-                    logger.info("R1: نوع السوق = Futures (من detect_market_type)")
-            except Exception as _det_e:
-                logger.warning(f"R1 detect error: {_det_e}")
+                                     for kw in ("PERP","SWAP","FUT"))
 
         analysis = await engine.news_engine.analyze_chart_image(
             image_data=bytes(image_bytes), symbol=symbol)
 
         # فحص نص التحليل — القسم "0-نوع السوق" يُصرِّح بالنوع صراحةً
-        # إصلاح Q1: الاكتشاف من نص Groq — لا يُلغي اكتشاف caption/symbol
-        if analysis:
+        if not _chart_is_futures and analysis:
             _analysis_upper = analysis.upper()
-            _analysis_ar    = analysis  # النص العربي
-            _futures_in_analysis = any(kw in _analysis_upper
-                                       for kw in ("FUTURES/PERP", "FUTURES", "PERP",
-                                                   "SWAP", "PERPETUAL", "MARK PRICE",
-                                                   "FUNDING RATE", "OVERNIGHT",
-                                                   "TRAD-FI", "TRADFI", "LINKED STOCK"))
-            _futures_in_analysis_ar = any(kw in _analysis_ar
-                                          for kw in ("العقود الدائمة", "العقود الآجلة",
-                                                      "فيوتشر", "عقد دائم", "عقد مستمر",
-                                                      "FUTURES/PERP"))
-            # Futures يُثبَّت إذا وُجد في أي مصدر — لا يُلغى
-            if _futures_in_analysis or _futures_in_analysis_ar:
-                _chart_is_futures = True
+            _chart_is_futures = any(kw in _analysis_upper
+                                     for kw in ("FUTURES/PERP", "FUTURES", "PERP",
+                                                 "SWAP", "PERPETUAL", "MARK PRICE",
+                                                 "FUNDING RATE", "OVERNIGHT",
+                                                 "فيوتشر", "عقد دائم", "عقد مستمر"))
 
         _mkt_label = "Futures/Perp" if _chart_is_futures else "Spot"
         sym_label = f" — {symbol}" if symbol else ""
@@ -2781,14 +2402,6 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
         # إصلاح #236: ربط /chart ↔ /signal للتكامل التحليلي
         _signal_hint = f"\n💡 للتحليل الشامل متعدد المصادر: /signal {symbol}" if symbol else ""
-        # إصلاح #845: تحقق من نتيجة analysis قبل العرض
-        if not analysis or len(analysis.strip()) < 30 or analysis.startswith("❌"):
-            logger.error(f"cmd_chart: تحليل فاشل أو فارغ: {analysis[:100] if analysis else 'فارغ'}")
-            await msg.edit_text(
-                f"⚠️ لم يتمكن النموذج من تحليل الصورة.\n"
-                f"السبب: {analysis or 'لا استجابة من النموذج'}\n\n"
-                f"💡 جرب إرسال صورة أوضح أو أصغر حجماً.")
-            return
         full = _clean_md(
             "\n".join(header_lines) + "\n\n" +
             f"{analysis}\n\n"
@@ -2802,13 +2415,15 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.edit_text(full, parse_mode="Markdown")
 
     except Exception as e:
-        logger.error(f"cmd_chart exception: {type(e).__name__}: {e}")
+        logger.error(f"cmd_chart: {e}")
         await msg.edit_text(
-            f"⚠️ خطأ في تحليل الشارت\n"
-            f"التفاصيل: {type(e).__name__}\n\n"
-            f"💡 جرب:\n"
-            f"• إرسال صورة أصغر\n"
-            f"• أو استخدم /analyze للتحليل النصي")
+            "⚙️ *تحليل الشارت البصري — قيد الصيانة*\n\n"
+            "🔄 *بدائل متاحة الآن:*\n"
+            "• /analyze — تحليل عميق شامل\n"
+            "• /signal  — إشارة + مستويات دخول\n"
+            "• /quicksignal — تحليل سريع",
+            parse_mode=ParseMode.MARKDOWN
+        )
 
 
 # ════════════════════════════════════════════════════════════════
@@ -2825,7 +2440,7 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     args      = context.args or []
-    raw_arg   = normalize_symbol_alias(args[0].upper()) if args else "BTC"  # X2
+    raw_arg   = args[0].upper() if args else "BTC"
     user_id_q = update.effective_user.id if update.effective_user else 0
     tier_q    = _sm.get_tier(user_id_q)
 
@@ -2922,13 +2537,9 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         change_24h = float(price_d.get("change_24h") or price_d.get("price_change_percentage_24h") or 0)
 
         if price <= 0:
-            # X10: رسالة موحَّدة مع /analyze
             await msg.edit_text(
-                f"⚠️ لم أجد سعراً لـ *{display_symbol}*\n\n"
-                f"• تأكد من صحة الرمز (مثال: BTC, ETH, SOL)\n"
-                f"• العملة قد تكون جديدة أو غير مدعومة\n"
-                f"• جرّب: /chart {display_symbol} للتحليل البصري",
-                parse_mode="Markdown")
+                f"❌ لم أجد سعراً لـ {display_symbol}.\n"
+                f"تحقق من الرمز وأعد المحاولة")
             return
 
         rsi = _calc_rsi(candles)
@@ -3149,36 +2760,6 @@ async def cmd_upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ════════════════════════════════════════════════════════════════
 # تسجيل الـ handlers
 # ════════════════════════════════════════════════════════════════
-async def cmd_weekly_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """W1 (#1350): /weekly_report — تقرير أسبوعي فوري بطلب المستخدم"""
-    engine = _eng(context)
-    if not engine:
-        await _get_message(update, context).reply_text("⚠️ النظام لم يُهيَّأ بعد")
-        return
-    msg = await _get_message(update, context).reply_text("📊 جاري إعداد التقرير الأسبوعي...")
-    try:
-        report = await engine._generate_weekly_report()
-        await msg.edit_text(report, parse_mode="Markdown")
-    except Exception as e:
-        logger.error(f"cmd_weekly_report: {e}")
-        await msg.edit_text(f"⚠️ خطأ في إعداد التقرير: {type(e).__name__}")
-
-
-async def cmd_monthly_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """X1 (#1355): /monthly_report — تقرير شهري فوري بطلب المستخدم"""
-    engine = _eng(context)
-    if not engine:
-        await _get_message(update, context).reply_text("⚠️ النظام لم يُهيَّأ بعد")
-        return
-    msg = await _get_message(update, context).reply_text("📊 جاري إعداد التقرير الشهري...")
-    try:
-        report = await engine._generate_monthly_report()
-        await msg.edit_text(report, parse_mode="Markdown")
-    except Exception as e:
-        logger.error(f"cmd_monthly_report: {e}")
-        await msg.edit_text(f"⚠️ خطأ في إعداد التقرير: {type(e).__name__}")
-
-
 def register(app):
     logger.info("analysis handlers: جاري التسجيل...")
     app.add_handler(CommandHandler("news",         cmd_news))
@@ -3193,8 +2774,6 @@ def register(app):
     app.add_handler(CommandHandler("quicksignal",  cmd_quicksignal))
     app.add_handler(CommandHandler("upgrade",      cmd_upgrade))
     app.add_handler(CommandHandler("chart",        cmd_chart_cmd))
-    app.add_handler(CommandHandler("weekly_report", cmd_weekly_report))
-    app.add_handler(CommandHandler("monthly_report", cmd_monthly_report))
     app.add_handler(MessageHandler(
         filters.PHOTO | filters.Document.IMAGE,
         cmd_chart))
