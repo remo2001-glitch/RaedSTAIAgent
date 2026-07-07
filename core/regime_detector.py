@@ -139,7 +139,13 @@ class RegimeDetector:
             # إصلاح AA3 (#1480): BEAR_TREND → دائماً احترس بغض النظر عن ADX
             if fear_greed < 20 or adx > 30:
                 action = "avoid"
-                _action_basis = f" (ADX={adx:.0f}، Fear={fear_greed}<20)"
+                # CC1 (#1685/#1699): نص دقيق يُوضّح الشرط الفعلي المُفعَّل
+                if fear_greed < 20 and adx > 30:
+                    _action_basis = f" (ADX={adx:.0f}≥30، Fear={fear_greed}<20)"
+                elif adx > 30:
+                    _action_basis = f" (ADX={adx:.0f}≥30)"
+                else:
+                    _action_basis = f" (Fear={fear_greed}<20)"
             else:
                 action = "reduce_size"
                 _action_basis = f" (سوق هابط)"
