@@ -1033,7 +1033,9 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 atr_v    = _calc_atr(candles) / 100 if len(candles) > 14 else 0.03
                 closes_w = [float(c.get("close", 0)) for c in candles if c.get("close")]
                 ema20_w  = sum(closes_w[-20:]) / 20 if len(closes_w) >= 20 else price
-                ema50_w  = sum(closes_w[-50:]) / 50 if len(closes_w) >= 50 else price
+                _ema50_w_raw = sum(closes_w[-50:]) / 50 if len(closes_w) >= 50 else price
+                # EE4 (#2038): cap ema50 بـ price × 3 لمنع قيم تاريخية مشوّهة (SPCX)
+                ema50_w = _ema50_w_raw if _ema50_w_raw <= price_w * 3.0 else price_w
                 rsi_w    = _calc_rsi(candles) if len(candles) >= 15 else 50.0
 
                 # Fibonacci سريع

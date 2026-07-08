@@ -852,7 +852,12 @@ def _build_professional_block(
     smc_lines.append(f"• Volume Profile: {_get_vol_profile_ar(_vol_prof, _vol_ratio)}")
     smc_lines.append(f"• Bollinger Bands: {_get_bb_status_ar(_bb_pos_v)}")
     if _atr_val:
-        smc_lines.append(f"• ATR (تقلب): ${_atr_val:,.0f} يومياً")
+        # EE5 (#1990/#2027): format ذكي للـ ATR — للأسعار الصغيرة (< $1) نستخدم منازل عشرية
+        _atr_fmt = (f"${_atr_val:.6f}" if _atr_val < 0.01
+                    else f"${_atr_val:.4f}" if _atr_val < 0.1
+                    else f"${_atr_val:.2f}" if _atr_val < 10
+                    else f"${_atr_val:,.0f}")
+        smc_lines.append(f"• ATR (تقلب): {_atr_fmt} يومياً")
     parts.extend(smc_lines)
 
     # 3. Derivatives (إذا متاحة)
@@ -1356,9 +1361,14 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # تفسير وتوصية إجمالية مختصرة بناءً على البيانات المجمَّعة
         _reco_parts = []
-        if fear_val <= 25:
+        # EE3 (#2044): تفسير Fear & Greed بناءً على القيمة الفعلية (AA2)
+        if fear_val < 20:
             _reco_parts.append("Fear شديد → فرصة تجميع تدريجي عند التأكيد")
-        elif fear_val >= 75:
+        elif fear_val < 40:
+            _reco_parts.append(f"خوف ({fear_val}) → ترقّب فرصة تجميع")
+        elif fear_val >= 80:
+            _reco_parts.append("Greed شديد → حذر من انعكاس وشيك")
+        elif fear_val >= 60:
             _reco_parts.append("Greed مرتفع → حذر من الانعكاس")
         if _fund_pct < -0.01:
             _reco_parts.append("Funding سالب يدعم سيناريو الارتداد")
@@ -2082,16 +2092,26 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         rsi = _calc_rsi(candles)
 
-        # DD1/BB1b (#1891/#1905): فحص جودة البيانات في /analyze
+        # DD1/BB1b/EE2 (#1891/#1905/#1922): فحص جودة البيانات في /analyze
         _atr_an     = _calc_atr(candles)
         _pve50_an   = 0.0
         if len(candles) >= 50:
             try:
                 _cls_an = [float(c.get("close", 0)) for c in candles if c.get("close")]
-                _e50_an = sum(_cls_an[-50:]) / 50 if len(_cls_an) >= 50 else _cls_an[-1]
+                _e50_an_raw = sum(_cls_an[-50:]) / 50 if len(_cls_an) >= 50 else _cls_an[-1]
+                # EE2: cap ema50 بـ price × 3 لمنع قيم تاريخية مشوّهة
+                _e50_an = _e50_an_raw if _e50_an_raw <= price * 3.0 else price
                 _pve50_an = (price - _e50_an) / max(_e50_an, 0.0001) * 100 if _e50_an > 0 else 0.0
             except Exception: pass
         _data_corrupted_an = (_atr_an > 25 or rsi < 5 or _pve50_an < -50)
+        # EE2 (#1922): تقييد conf ورافعة في /analyze عند بيانات مشوهة
+        if _data_corrupted_an:
+            # نحتاج تقييد الـ signal الذي سيُبنى لاحقاً
+            _analyze_conf_cap = 0.49  # → [LOW] أقصاه
+            _analyze_lev_cap  = 1     # → 1x دائماً
+        else:
+            _analyze_conf_cap = 1.0
+            _analyze_lev_cap  = None
 
         # حساب regime + EMA (مصدر واحد للحقيقة)
         regime_desc = "⚪ جاري تحديث بيانات السوق"
@@ -2111,7 +2131,10 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 closes = [float(c.get("close", 0)) for c in candles if c.get("close")]
                 ema20  = sum(closes[-20:]) / 20
-                ema50  = sum(closes[-50:]) / 50 if len(closes) >= 50 else ema20
+                _ema50_raw = sum(closes[-50:]) / 50 if len(closes) >= 50 else ema20
+                # EE1 (#1956/#2025): cap ema50 بـ price × 3 لمنع قيم تاريخية مشوّهة
+                # إذا ema50 > price × 3 → يعني البيانات تاريخية قديمة → نستخدم ema20
+                ema50 = _ema50_raw if _ema50_raw <= price * 3.0 else ema20
                 ema_bearish = price < ema20 and price < ema50
             except Exception:
                 pass
@@ -2277,6 +2300,11 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             class regime:
                 value = "bear_trend" if is_bearish else "bull_trend"
         _reg_a = _AnalyzeRegime()
+        # EE2b: تطبيق cap على conf في /analyze عند بيانات مشوهة
+        if _data_corrupted_an:
+            _sig_a.confidence = min(getattr(_sig_a, "confidence", 0.49), _analyze_conf_cap)
+            if hasattr(_sig_a, "suggested_leverage"):
+                _sig_a.suggested_leverage = _analyze_lev_cap or 1
         pro_block_a = _build_professional_block(
             symbol, price, _sig_a, _reg_a, candles, rsi, _atr_a, fib_a,
             tech_extra={"is_perp_asset": _is_perp_an} if _is_perp_an else {})
@@ -2652,7 +2680,9 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ema5    = sum(closes[-5:])  / 5  if len(closes) >= 5  else closes[-1]
                 ema10   = sum(closes[-10:]) / 10 if len(closes) >= 10 else closes[-1]
                 ema20   = sum(closes[-20:]) / 20
-                ema50   = sum(closes[-50:]) / 50 if len(closes) >= 50 else ema20
+                _ema50_raw_q = sum(closes[-50:]) / 50 if len(closes) >= 50 else ema20
+                # EE1: cap ema50 بـ price × 3 لمنع قيم تاريخية مشوّهة
+                ema50 = _ema50_raw_q if _ema50_raw_q <= price * 3.0 else ema20
                 # هابط حقيقي: السعر تحت معظم EMAs
                 ema_below_count = sum([price < ema5, price < ema10, price < ema20, price < ema50])
                 ema_bearish = ema_below_count >= 3  # تحت 3 من 4 EMAs = هابط
