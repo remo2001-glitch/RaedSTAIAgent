@@ -472,8 +472,11 @@ def _build_professional_block(
         # M#117: شرط RSI بناءً على القيمة الحالية
         # إصلاح #470/#481: الشرط الأول يستخدم أقرب مستوى حقيقي
         _near_res_c = fib.get("nearest_resistance", 0) if isinstance(fib, dict) else 0
-        _ema20_val  = sum([float(c.get("close",0)) for c in candles[-20:]]) / 20 if len(candles) >= 20 else price * 1.03
-        _close_target = _near_res_c if (_near_res_c and price < _near_res_c < price * 1.15) else _ema20_val
+        _ema20_raw  = sum([float(c.get("close",0)) for c in candles[-20:]]) / 20 if len(candles) >= 20 else price * 1.03
+        # DD2 (#1901/#1909): عند بيانات مشوهة → cap ema20 بـ price × 1.3
+        _ema20_val  = min(_ema20_raw, price * 1.3) if _ema20_raw > price * 1.3 else _ema20_raw
+        # DD2: توسيع نطاق القبول من 15% → 50% لاستيعاب Fibonacci المُقيَّد
+        _close_target = _near_res_c if (_near_res_c and price < _near_res_c < price * 1.50) else _ema20_val
 
         if rsi < 40:
             _rsi_cond = f"1. RSI يتجاوز 30 صعوداً + إغلاق فوق {_fmt_price(_close_target)}"
@@ -2079,6 +2082,17 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         rsi = _calc_rsi(candles)
 
+        # DD1/BB1b (#1891/#1905): فحص جودة البيانات في /analyze
+        _atr_an     = _calc_atr(candles)
+        _pve50_an   = 0.0
+        if len(candles) >= 50:
+            try:
+                _cls_an = [float(c.get("close", 0)) for c in candles if c.get("close")]
+                _e50_an = sum(_cls_an[-50:]) / 50 if len(_cls_an) >= 50 else _cls_an[-1]
+                _pve50_an = (price - _e50_an) / max(_e50_an, 0.0001) * 100 if _e50_an > 0 else 0.0
+            except Exception: pass
+        _data_corrupted_an = (_atr_an > 25 or rsi < 5 or _pve50_an < -50)
+
         # حساب regime + EMA (مصدر واحد للحقيقة)
         regime_desc = "⚪ جاري تحديث بيانات السوق"
         is_bearish  = False
@@ -2164,11 +2178,16 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # M2b: تمرير market_phase الصحيح من regime_obj
             _mp_for_groq = getattr(regime_obj, "market_phase", "") if "regime_obj" in dir() else ""
             _mp_ar_for_groq = _get_market_phase_ar(_mp_for_groq) if _mp_for_groq else ""
+            # DD1b: تقييد confidence عند بيانات مشوهة
+            if _data_corrupted_an:
+                _full_context_an = _full_context + " [تحذير: بيانات مشوهة — اذكر ذلك في التحليل]"
+            else:
+                _full_context_an = _full_context
             analysis = await engine.news_engine.analyze_symbol(
                 symbol=symbol, price=price, price_change_24h=change_24h,
                 volume_24h=volume_24h, market_cap=market_cap, rsi=rsi,
                 fear_greed=fear_val, regime_desc=regime_desc,
-                candles_summary=_full_context,
+                candles_summary=_full_context_an,
                 ema_bearish=ema_bearish,
                 market_phase=_mp_ar_for_groq)
             if not analysis or len(analysis.strip()) < 20:
@@ -2300,6 +2319,14 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parts.append(f"📌 {symbol} — أصل مُرمَّز (Perpetual) على OKX")
         # إصلاح #250-A: رابط /chart في /analyze كما في /signal
         parts.append(f"📊 للتحليل البصري: /chart {symbol}")
+        # DD1c (#1891/#1905): تحذير بيانات مشوهة في /analyze
+        if _data_corrupted_an:
+            parts += [
+                "",
+                "⚠️ *تحذير مالي: بيانات غير موثوقة*",
+                f"• ATR={_atr_an:.1f}% | RSI={rsi:.0f} | EMA50={_pve50_an:.0f}%",
+                "• *لا تعتمد على هذا التحليل للتداول الفعلي*"
+            ]
         parts += ["", "⚠️ هذا التحليل استرشادي — القرار للمستخدم"]
         full = _clean_md("\n".join(parts))
 
@@ -2374,11 +2401,13 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await _get_message(update, context).reply_text("🔍 جاري تحليل الشارت...")
 
     try:
-        photo = _get_message(update, context).photo
+        # DD4 (#1879): استخدام update.message مباشرة للصورة (لا _get_message)
+        _photo_msg = update.message or update.effective_message
+        photo = _photo_msg.photo if _photo_msg else None
         if photo:
             file = await photo[-1].get_file()
-        elif _get_message(update, context).document:
-            file = await _get_message(update, context).document.get_file()
+        elif _photo_msg and _photo_msg.document:
+            file = await _photo_msg.document.get_file()
         else:
             await msg.edit_text(
                 "⚠️ يُرجى إرسال صورة الشارت.\n"
@@ -2386,7 +2415,7 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         image_bytes = await file.download_as_bytearray()
-        caption = _get_message(update, context).caption or ""
+        caption = (_photo_msg.caption or "") if _photo_msg else ""
         symbol  = ""
         for word in caption.split():
             w = word.strip("/").upper()
