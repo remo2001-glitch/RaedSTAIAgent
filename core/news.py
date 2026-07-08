@@ -907,12 +907,30 @@ class NewsEngine:
                     text = _strip_header_duplicates(text)
                     # إصلاح #274: تصحيح "ل " المنقوصة ← "لـ {symbol} "
                     import re as _re
-                    # تصحيح "السوق الحالي ل بالاتجاه" → "السوق الحالي لـ {symbol} بالاتجاه"
                     if f" ل ب" in text or "الحالي ل ب" in text:
                         text = text.replace(
                             "السوق الحالي ل ب",
                             f"السوق الحالي لـ {symbol} ب"
                         )
+                    # EE6 (#1945/#1933/#2007): استبدال Market Phase برمجياً
+                    _mp_kwarg_fix = kwargs.get("market_phase", "")
+                    if _mp_kwarg_fix:
+                        # استبدل أي phase مختلف يُذكره Groq بـ phase الصحيح
+                        _phase_map = {
+                            "صعود": ["صعود (Markup)", "Markup", "مرحلة صعود"],
+                            "هبوط": ["هبوط (Markdown)", "Markdown", "مرحلة هبوط"],
+                            "تراكم": ["تراكم (Accumulation)", "Accumulation"],
+                            "توزيع": ["توزيع (Distribution)", "Distribution"],
+                            "تعزيز": ["تعزيز (Consolidation)", "Consolidation"],
+                        }
+                        for _correct_phase, _wrong_variants in _phase_map.items():
+                            if _correct_phase not in _mp_kwarg_fix:
+                                continue
+                            for _wrong in _phase_map:
+                                if _wrong != _correct_phase:
+                                    for _variant in _phase_map[_wrong]:
+                                        if _variant in text:
+                                            text = text.replace(_variant, _mp_kwarg_fix)
                     return text
         except Exception as _ae:
             logger.error(f"analyze_symbol ({symbol}): {_ae}")
