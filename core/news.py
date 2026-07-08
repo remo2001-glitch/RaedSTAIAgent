@@ -836,6 +836,12 @@ class NewsEngine:
         _rsi_int     = int(round(rsi))  # لا منازل عشرية في النص
         _is_perp_asset = any(x in symbol.upper() for x in ["SPCX","TSLA","AAPL","NVDA","MSFT","AMZN","GOOGL","META"])
         _asset_type  = "الأصل المُرمَّز" if _is_perp_asset else "العملة"
+        # M2 (#1760/#1771/#1792/#1805): تمرير Market Phase الصحيح لـ Groq
+        _mp_kwarg = kwargs.get("market_phase", "")
+        _mp_ar_g  = _mp_kwarg if _mp_kwarg else (
+            "هبوط" if "bear" in regime_desc.lower() or "هابط" in regime_desc else
+            "صعود" if "bull" in regime_desc.lower() or "صاعد" in regime_desc else "تعزيز")
+
         prompt = (
             f"أنت محلل فني محايد متخصص في الكريبتو."
             f" البيانات: {_asset_type} {symbol} | السعر: ${price:,.4g}"
@@ -843,6 +849,7 @@ class NewsEngine:
             f" | RSI: {_rsi_int} | Fear & Greed: {fear_greed}"
             f" | السوق: {regime_desc} | EMA50: {_ema_status}."
             f"{_cs}"
+            f" [داخلي: السعر {_ema_status} — Market Phase الحالي هو '{_mp_ar_g}' — لا تذكر phase مختلف]"
             f" [داخلي فقط: السعر {_ema_status} — عند ذكر EMA50 في التحليل استخدم 'السعر {_ema_status}' وليس 'EMA50 {_ema_status}']"
             " المطلوب: اكتب تحليلاً نصياً احترافياً باللغة العربية بدون markdown."
             " مهم: اكتب دائماً EMA5 و EMA20 و EMA50 بأحرف إنجليزية كبيرة."
