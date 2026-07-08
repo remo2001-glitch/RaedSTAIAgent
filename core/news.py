@@ -849,7 +849,7 @@ class NewsEngine:
             f" | RSI: {_rsi_int} | Fear & Greed: {fear_greed}"
             f" | السوق: {regime_desc} | EMA50: {_ema_status}."
             f"{_cs}"
-            f" [داخلي: السعر {_ema_status} — Market Phase الحالي هو '{_mp_ar_g}' — لا تذكر phase مختلف]"
+            f" [داخلي إلزامي: Market Phase = '{_mp_ar_g}' — يجب أن يُطابق هذا وصفك للسوق تماماً — لا تقل أي phase آخر]"
             f" [داخلي فقط: السعر {_ema_status} — عند ذكر EMA50 في التحليل استخدم 'السعر {_ema_status}' وليس 'EMA50 {_ema_status}']"
             " المطلوب: اكتب تحليلاً نصياً احترافياً باللغة العربية بدون markdown."
             " مهم: اكتب دائماً EMA5 و EMA20 و EMA50 بأحرف إنجليزية كبيرة."
