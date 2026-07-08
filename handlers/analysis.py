@@ -237,10 +237,11 @@ async def callback_market_type(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 
-def _calc_fibonacci(candles: list, lookback: int = 60) -> dict:
+def _calc_fibonacci(candles: list, lookback: int = 60, price_cap_mult: float = 3.0) -> dict:
     """
     إصلاح #326: Fibonacci dynamic يضمن أن السعر بين swing_low و swing_high.
-    يجرب نوافذ أصغر حتى يجد swing مناسباً.
+    إصلاح M1 (#1787/#1801): cap swing_high بـ price_now × 3 لمنع القيم التاريخية المشوّهة.
+    عند انهيار حاد (OPENAI/ANTHROPIC): swing_high تاريخي = $1,820 غير مقبول.
     """
     if not candles or len(candles) < 20:
         return {}
@@ -248,13 +249,15 @@ def _calc_fibonacci(candles: list, lookback: int = 60) -> dict:
         price_now = float(candles[-1].get("close", 0))
         swing_high = swing_low = 0
 
-        # جرب نوافذ متصاعدة حتى يكون السعر بينهما
-        for lb in [21, 30, 45, lookback, len(candles)]:
+        # M1: نبحث في نوافذ محدودة أولاً (تجنب البيانات التاريخية المشوّهة)
+        for lb in [21, 30, 45, min(lookback, 90)]:
             recent = candles[-min(lb, len(candles)):]
             highs  = [float(c.get("high",  c.get("close", 0))) for c in recent]
             lows   = [float(c.get("low",   c.get("close", 0))) for c in recent]
             sh, sl = max(highs), min(lows)
-            if sl < price_now < sh:
+            # M1: cap swing_high بـ price_now × price_cap_mult
+            sh = min(sh, price_now * price_cap_mult)
+            if sl < price_now < sh and sh > sl:
                 swing_high, swing_low = sh, sl
                 break
 
@@ -1581,6 +1584,8 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if hasattr(signal, "suggested_leverage"):
                 signal.suggested_leverage = 1
             signal.confidence = min(signal.confidence, 0.49)
+            # M1b: إعادة حساب Fibonacci بـ cap أشد عند بيانات مشوهة (price × 1.5)
+            fib = _calc_fibonacci(candles, lookback=30, price_cap_mult=1.5)
             # إصلاح #479: BB من 4H إذا متاح
             if len(_sig_4h) >= 20:
                 _c4h = [float(c.get("close",0)) for c in _sig_4h]
@@ -2156,11 +2161,16 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _full_context = f"{candles_summary}\n{_scenarios_ctx}".strip() if candles_summary else _scenarios_ctx
 
         try:
+            # M2b: تمرير market_phase الصحيح من regime_obj
+            _mp_for_groq = getattr(regime_obj, "market_phase", "") if "regime_obj" in dir() else ""
+            _mp_ar_for_groq = _get_market_phase_ar(_mp_for_groq) if _mp_for_groq else ""
             analysis = await engine.news_engine.analyze_symbol(
                 symbol=symbol, price=price, price_change_24h=change_24h,
                 volume_24h=volume_24h, market_cap=market_cap, rsi=rsi,
                 fear_greed=fear_val, regime_desc=regime_desc,
-                candles_summary=_full_context)
+                candles_summary=_full_context,
+                ema_bearish=ema_bearish,
+                market_phase=_mp_ar_for_groq)
             if not analysis or len(analysis.strip()) < 20:
                 raise ValueError("تحليل فارغ")
         except Exception as _ae:
@@ -2578,6 +2588,17 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         rsi = _calc_rsi(candles)
 
+        # M3/BB1b (#1782/#1799): فحص جودة البيانات في /quicksignal
+        _atr_q     = _calc_atr(candles)
+        _pve50_q   = 0.0
+        if len(candles) >= 50:
+            try:
+                _cls_q  = [float(c.get("close", 0)) for c in candles if c.get("close")]
+                _e50_q  = sum(_cls_q[-50:]) / 50 if len(_cls_q) >= 50 else _cls_q[-1]
+                _pve50_q = (price - _e50_q) / max(_e50_q, 0.0001) * 100 if _e50_q > 0 and "price" in dir() else 0.0
+            except Exception: pass
+        _data_corrupted_q = (_atr_q > 25 or rsi < 5 or _pve50_q < -50)
+
         # حساب regime أولاً — يؤثر على التوصية
         regime_desc = "⚪ جاري تحديث بيانات السوق"
         regime_obj  = None
@@ -2723,6 +2744,13 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _addon_q = await build_pair_addon_lines(resolution, engine.data_layer)
         if _addon_q:
             lines = lines[:-1] + _addon_q + ["", lines[-1]]
+
+        # M3b: تحذير بيانات مشوّهة في /quicksignal
+        if _data_corrupted_q:
+            lines.append(
+                f"\n⚠️ *تحذير: بيانات غير موثوقة*\n"
+                f"• ATR={_atr_q:.1f}% | RSI={rsi:.0f} — السعر انهار حديثاً"
+            )
 
         await msg.edit_text(
             _clean_md("\n".join(lines)), parse_mode="Markdown")

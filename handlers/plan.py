@@ -473,7 +473,10 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             ohlcv_all = await asyncio.wait_for(
                 asyncio.gather(
-                    *[engine.data_layer.get_ohlcv(sym, "1d", 200) for sym in symbols],
+                    *[engine.data_layer.get_ohlcv_perp(sym, 200)
+               if sym.upper() in {"SPCX","COIN","AAPL","NVDA","TSLA","MSFT","AMZN","GOOGL","META","MSTR","OPENAI","ANTHROPIC","AMD","OKB"}
+               else engine.data_layer.get_ohlcv(sym, "1d", 200)
+               for sym in symbols],
                     return_exceptions=True,
                 ), timeout=90.0
             )
@@ -530,7 +533,10 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 ohlcv_all = await asyncio.wait_for(
                     asyncio.gather(
-                        *[engine.data_layer.get_ohlcv(sym, "1d", 200) for sym in symbols],
+                        *[engine.data_layer.get_ohlcv_perp(sym, 200)
+               if sym.upper() in {"SPCX","COIN","AAPL","NVDA","TSLA","MSFT","AMZN","GOOGL","META","MSTR","OPENAI","ANTHROPIC","AMD","OKB"}
+               else engine.data_layer.get_ohlcv(sym, "1d", 200)
+               for sym in symbols],
                         return_exceptions=True,
                     ), timeout=60.0
                 )
@@ -544,7 +550,10 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             _prices_all = await asyncio.wait_for(
                 asyncio.gather(
-                    *[engine.data_layer.get_price(sym) for sym in symbols],
+                    *[engine.data_layer.get_price_perp(sym)
+               if sym.upper() in {"SPCX","COIN","AAPL","NVDA","TSLA","MSFT","AMZN","GOOGL","META","MSTR","OPENAI","ANTHROPIC","AMD","OKB"}
+               else engine.data_layer.get_price(sym)
+               for sym in symbols],
                     return_exceptions=True,
                 ), timeout=30.0
             )
@@ -927,7 +936,11 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
             engine.data_layer.get_fear_greed(),
             engine.data_layer.get_onchain(),
             engine.data_layer.get_ohlcv("BTC", "1d", 200),
-            *[engine.data_layer.get_ohlcv(sym, "1d", 100) for sym in symbols],
+            *[engine.data_layer.get_ohlcv_perp(sym, 100)
+               if sym.upper() in {"SPCX","COIN","AAPL","NVDA","TSLA","MSFT","AMZN",
+                                   "GOOGL","META","MSTR","OPENAI","ANTHROPIC","AMD","OKB"}
+               else engine.data_layer.get_ohlcv(sym, "1d", 100)
+               for sym in symbols],
             engine.data_layer.get_news(currencies=",".join(symbols), limit=10),
             return_exceptions=True,
         )
@@ -967,7 +980,10 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # ── 3. أسعار لجميع العملات — متوازية ─────────────────
         price_results = await asyncio.gather(
-            *[engine.data_layer.get_price(sym) for sym in symbols],
+            *[engine.data_layer.get_price_perp(sym)
+               if sym.upper() in {"SPCX","COIN","AAPL","NVDA","TSLA","MSFT","AMZN","GOOGL","META","MSTR","OPENAI","ANTHROPIC","AMD","OKB"}
+               else engine.data_layer.get_price(sym)
+               for sym in symbols],
             return_exceptions=True,
         )
 
