@@ -1738,10 +1738,16 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # BB1c: تحذير بيانات مشوهة عند انهيار حاد
         if _data_corrupted:
+            # P1 (#2260): EMA50 الخام (قبل cap) في تحذير /signal
+            _pve50_sig_display = (
+                (price - _e50_sig_raw) / max(_e50_sig_raw, 0.0001) * 100
+                if "_e50_sig_raw" in dir() and _e50_sig_raw > 0
+                else _pve50_chk
+            )
             warning = (
                 "\n\n⚠️ *تحذير مالي: بيانات غير موثوقة*\n"
                 f"• السعر انهار بشكل حاد — المؤشرات التقنية مشوهة\n"
-                f"• ATR={atr_pct:.1f}% | RSI={rsi:.0f} | EMA50={_pve50_chk:.0f}%\n"
+                f"• ATR={atr_pct:.1f}% | RSI={rsi:.0f} | EMA50={_pve50_sig_display:.0f}%\n"
                 "• *لا تعتمد على هذا التحليل للتداول الفعلي*"
             )
         full_text = "\n\n".join(parts) + warning
@@ -1857,6 +1863,74 @@ async def cmd_backtest(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ════════════════════════════════════════════════════════════════
+# /risk — تقييم مخاطر المحفظة
+# ════════════════════════════════════════════════════════════════
+async def cmd_risk(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """F5: تقييم مخاطر المحفظة بناءً على السوق الحالي."""
+    engine = _eng(context)
+    if not engine:
+        await _get_message(update, context).reply_text("⚠️ النظام لم يُهيَّأ بعد")
+        return
+
+    msg = await _get_message(update, context).reply_text("🛡️ جاري تقييم مخاطر السوق...")
+    try:
+        # جلب بيانات السوق
+        fear_data  = await engine.data_layer.get_fear_greed()
+        btc_data   = await engine.data_layer.get_price("BTC")
+        fear_val   = int((fear_data or {}).get("value", 50))
+        btc_price  = float((btc_data or {}).get("price", 0))
+        btc_change = float((btc_data or {}).get("change_24h", 0))
+
+        # حساب مستوى المخاطر الكلي
+        _risk_score = 50  # ابتداءً محايد
+        _risk_factors = []
+
+        if fear_val < 20:
+            _risk_score -= 20
+            _risk_factors.append("• 🔴 Fear & Greed منخفض جداً → خطر استمرار الهبوط")
+        elif fear_val < 35:
+            _risk_score -= 10
+            _risk_factors.append("• 🟠 Fear & Greed في منطقة خوف")
+        elif fear_val > 75:
+            _risk_score -= 15
+            _risk_factors.append("• 🟠 Greed مرتفع → خطر تصحيح")
+
+        if btc_change < -5:
+            _risk_score -= 15
+            _risk_factors.append(f"• 🔴 BTC انخفض {btc_change:.1f}% → ضغط بيعي")
+        elif btc_change > 5:
+            _risk_score += 10
+            _risk_factors.append(f"• 🟢 BTC ارتفع {btc_change:.1f}% → زخم إيجابي")
+
+        # تصنيف المخاطر
+        _risk_score = max(0, min(100, _risk_score))
+        _risk_level = (
+            "🔴 مرتفع جداً — قلل التعرض إلى 20% أو أقل"   if _risk_score < 25 else
+            "🟠 مرتفع — تداول بحجم مصغَّر (30-50%)"          if _risk_score < 45 else
+            "🟡 متوسط — حجم طبيعي مع وقف خسارة مُحكم"       if _risk_score < 65 else
+            "🟢 منخفض — السوق مناسب للتداول الطبيعي"
+        )
+        _bars = int(_risk_score / 10)
+        _bar  = "█" * _bars + "░" * (10 - _bars)
+
+        text = (
+            "🛡️ *تقييم مخاطر السوق — رائد*\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            f"📊 *مستوى الأمان:* {_bar} {_risk_score}%\n"
+            f"⚠️ *تقييم المخاطر:* {_risk_level}\n\n"
+            "📈 *عوامل المخاطر الحالية:*\n"
+            + ("\n".join(_risk_factors) if _risk_factors else "• ✅ لا مخاطر بارزة") +
+            f"\n\n💰 *BTC:* ${btc_price:,.0f} ({btc_change:+.1f}%)"
+            f"\n😱 *Fear & Greed:* {fear_val}"
+            "\n\n⚠️ هذا التقييم استرشادي — القرار للمستخدم"
+        )
+        await msg.edit_text(_clean_md(text), parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"cmd_risk: {e}")
+        await msg.edit_text("❌ خطأ في تقييم المخاطر. حاول لاحقاً")
+
+
+# ════════════════════════════════════════════════════════════════
 # /liquidity
 # ════════════════════════════════════════════════════════════════
 @require_tier("liquidity")
@@ -1926,8 +2000,19 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if deriv_lines:
             text += "\n\n📐 *مشتقات*\n" + "\n".join(deriv_lines)
 
-        # تفسير الاختلال + توصية مختصرة
+        # F3: Order Flow Score + توصية محسّنة
         _imb = getattr(profile, "imbalance", 0.5)
+
+        # Order Flow Score: 0-100 (50=محايد، >60=صعودي، <40=هبوطي)
+        _ofs = int(_imb * 100)
+        _ofs_bars = int(_ofs / 10)
+        _ofs_bar  = "█" * _ofs_bars + "░" * (10 - _ofs_bars)
+        _ofs_label = (
+            "🟢 تدفق شرائي قوي" if _ofs > 65 else
+            "🔴 تدفق بيعي قوي"  if _ofs < 35 else
+            "⚪ تدفق محايد"
+        )
+
         _reco = []
         if _imb < 0.40:
             _reco.append("ضغط بيع قوي في الـ Order Book — توخَّ الحذر من شراء فوري")
@@ -1937,6 +2022,12 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _reco.append("Funding سالب يدعم سيناريو ارتداد Long")
         elif _fund_pct > 0.02:
             _reco.append("Funding مرتفع — خطر تصفية Longs مفرطة")
+
+        # F3: إضافة Order Flow في النص
+        text += (
+            f"\n\n📊 *Order Flow Score*"
+            f"\n{_ofs_bar} {_ofs}% — {_ofs_label}"
+        )
         if _reco:
             text += f"\n\n💡 *التفسير*: {' · '.join(_reco)}"
 
