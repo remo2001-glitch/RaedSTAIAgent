@@ -104,11 +104,16 @@ class RegimeDetector:
         atr    = self._atr(highs, lows, closes, 14)
         adx    = self._adx(highs, lows, closes, 14)
         ema20  = self._ema(closes, 20)
-        ema50  = self._ema(closes, 50)
+        _ema50_rd_raw = self._ema(closes, 50)
+        # GG3b: cap EMA50 بـ price × 3 لمنع قيم تاريخية مشوّهة في regime_detector
+        _price_rd = closes[-1] if closes[-1] > 0 else 1
+        ema50  = _ema50_rd_raw if _ema50_rd_raw <= _price_rd * 3.0 else _price_rd
         ema200 = self._ema(closes, 200) if len(closes) >= 200 else ema50
         rsi    = self._rsi(closes, 14)
         vol_ma = self._sma(volumes, 20)
-        atr_pct = (atr / closes[-1] * 100) if closes[-1] > 0 else 0
+        _atr_pct_raw = (atr / closes[-1] * 100) if closes[-1] > 0 else 0
+        # GG3: cap ATR عند 30% في regime_detector أيضاً (مثل analysis.py)
+        atr_pct = min(_atr_pct_raw, 30.0)
 
         price = closes[-1]
 
