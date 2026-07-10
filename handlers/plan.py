@@ -43,15 +43,26 @@ def _eng(context): return context.bot_data.get("raed_engine")
 # #226/#227/#231/#232/#233 — helper موحَّد للرسائل في plan.py
 # ════════════════════════════════════════════════════════════════
 def _get_message_p(update, context=None):
-    """يُعيد Message الصحيح سواء كان update مباشراً أو callback."""
+    """يُعيد Message الصحيح سواء كان update مباشراً أو callback.
+    FF1 (#2084/#2085): لا يُعيد None أبداً — fallback لـ effective_message.
+    """
+    # أولاً: الرسالة الأصلية من الأمر المباشر
+    if getattr(update, "message", None) is not None:
+        return update.message
+    # ثانياً: من callback_query (عند الضغط على زر)
+    if getattr(update, "callback_query", None) is not None:
+        cq_msg = getattr(update.callback_query, "message", None)
+        if cq_msg is not None:
+            return cq_msg
+    # ثالثاً: _cb_message المحفوظ (الحل القديم)
     if context is not None:
         cb_msg = context.user_data.get("_cb_message")
         if cb_msg is not None:
             return cb_msg
-    if getattr(update, "message", None) is not None:
-        return update.message
-    if getattr(update, "callback_query", None) is not None:
-        return update.callback_query.message
+    # رابعاً: effective_message كـ fallback أخير
+    eff = getattr(update, "effective_message", None)
+    if eff is not None:
+        return eff
     return None
 
 
@@ -393,7 +404,11 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("⚡ Spot (كل المستخدمين)", callback_data=f"planmkt_month_spot_{_args_str}"),
              InlineKeyboardButton("📈 Futures + أسهم (ماسي+)", callback_data=f"planmkt_month_futures_{_args_str}")],
         ])
-        await _get_message_p(update, context).reply_text(
+        # FF2 (#2084): None check قبل reply_text
+        _msg_pm = _get_message_p(update, context)
+        if _msg_pm is None:
+            return  # لا يمكن الرد — تجاهل بأمان
+        await _msg_pm.reply_text(
             "📅 *الخطة الشهرية — اختر نوع السوق:*\n"
             "_(Spot لجميع الأصول — Futures + الأسهم المُرمَّزة للماسي+)_",
             parse_mode="Markdown", reply_markup=kb_pm)
@@ -882,7 +897,11 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("⚡ Spot (كل المستخدمين)", callback_data=f"planmkt_week_spot_{_args_str}"),
              InlineKeyboardButton("📈 Futures + أسهم (ماسي+)", callback_data=f"planmkt_week_futures_{_args_str}")],
         ])
-        await _get_message_p(update, context).reply_text(
+        # FF2 (#2085): None check قبل reply_text
+        _msg_pw = _get_message_p(update, context)
+        if _msg_pw is None:
+            return
+        await _msg_pw.reply_text(
             "📅 *الخطة الأسبوعية — اختر نوع السوق:*\n"
             "_(Spot لجميع الأصول — Futures + الأسهم المُرمَّزة للماسي+)_",
             parse_mode="Markdown", reply_markup=kb_pw)

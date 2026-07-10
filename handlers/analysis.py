@@ -1592,7 +1592,15 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # BB1b (#1550/#1553/#1574/#1575): فحص جودة البيانات — انهيار حاد
         _pve50_chk = float(regime.metrics.get("price_vs_ema50", 0) or 0)
-        _data_corrupted = (atr_pct > 25 or rsi < 5 or _pve50_chk < -50)
+        # FF3b: كشف فساد EMA50 من حساب مستقل في /signal
+        _ema50_sig_corrupted = False
+        if candles and len(candles) >= 50:
+            try:
+                _cls_sig = [float(c.get("close", 0)) for c in candles if c.get("close")]
+                _e50_sig_raw = sum(_cls_sig[-50:]) / 50 if len(_cls_sig) >= 50 else price
+                _ema50_sig_corrupted = (_e50_sig_raw > price * 3.0)
+            except Exception: pass
+        _data_corrupted = (atr_pct > 25 or rsi < 5 or _pve50_chk < -50 or _ema50_sig_corrupted)
         if _data_corrupted:
             if hasattr(signal, "suggested_leverage"):
                 signal.suggested_leverage = 1
@@ -2102,8 +2110,11 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # EE2: cap ema50 بـ price × 3 لمنع قيم تاريخية مشوّهة
                 _e50_an = _e50_an_raw if _e50_an_raw <= price * 3.0 else price
                 _pve50_an = (price - _e50_an) / max(_e50_an, 0.0001) * 100 if _e50_an > 0 else 0.0
-            except Exception: pass
-        _data_corrupted_an = (_atr_an > 25 or rsi < 5 or _pve50_an < -50)
+                # FF3 (#2082): كشف الفساد من EMA50_raw (قبل cap)
+                _ema50_corrupted = (_e50_an_raw > price * 3.0)
+            except Exception:
+                _ema50_corrupted = False
+        _data_corrupted_an = (_atr_an > 25 or rsi < 5 or _pve50_an < -50 or _ema50_corrupted)
         # EE2 (#1922): تقييد conf ورافعة في /analyze عند بيانات مشوهة
         if _data_corrupted_an:
             # نحتاج تقييد الـ signal الذي سيُبنى لاحقاً
