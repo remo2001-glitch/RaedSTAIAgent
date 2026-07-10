@@ -926,6 +926,11 @@ class NewsEngine:
                             _mp_kwarg_fix = "تعزيز"
                         elif "تقلب" in regime_desc or "volatil" in regime_desc.lower():
                             _mp_kwarg_fix = "هبوط"
+                    # GG2 (#1937/#2010/#2107): إصلاح Groq يحذف RSI من الجمل
+                    import re as _re_gg2
+                    text = _re_gg2.sub(r"و يبلغ ([0-9]+)", r"و RSI يبلغ \1", text)
+                    text = _re_gg2.sub(r"، يبلغ ([0-9]+)", r"، حيث RSI يبلغ \1", text)
+
                     if _mp_kwarg_fix:
                         # استبدل أي phase مختلف يُذكره Groq بـ phase الصحيح
                         _phase_map = {
