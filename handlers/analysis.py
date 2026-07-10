@@ -2312,6 +2312,16 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             class regime:
                 value = "bear_trend" if is_bearish else "bull_trend"
         _reg_a = _AnalyzeRegime()
+        # GG1 (#1945/#1933/#2007/#2080/#2100): تمرير Market Phase الصحيح لـ _build_professional_block
+        _mp_for_block = _mp_ar_for_groq if _mp_ar_for_groq else ""
+        if _mp_for_block and hasattr(_reg_a, "market_phase"):
+            # تحويل الـ ar إلى النوع الإنجليزي المفهوم
+            _mp_en_map = {"هبوط": "Markdown", "صعود": "Markup",
+                          "تراكم": "Accumulation", "توزيع": "Distribution", "تعزيز": "Consolidation"}
+            for _ar_key, _en_val in _mp_en_map.items():
+                if _ar_key in _mp_for_block:
+                    _reg_a.market_phase = _en_val
+                    break
         # EE2b: تطبيق cap على conf في /analyze عند بيانات مشوهة
         if _data_corrupted_an:
             _sig_a.confidence = min(getattr(_sig_a, "confidence", 0.49), _analyze_conf_cap)
@@ -2666,7 +2676,15 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _e50_q  = sum(_cls_q[-50:]) / 50 if len(_cls_q) >= 50 else _cls_q[-1]
                 _pve50_q = (price - _e50_q) / max(_e50_q, 0.0001) * 100 if _e50_q > 0 and "price" in dir() else 0.0
             except Exception: pass
-        _data_corrupted_q = (_atr_q > 25 or rsi < 5 or _pve50_q < -50)
+        # GG4b: كشف فساد EMA50 الخام في /quicksignal
+        _ema50_q_corrupted = False
+        if len(candles) >= 50:
+            try:
+                _cls_q2 = [float(c.get("close", 0)) for c in candles if c.get("close")]
+                _e50_q_raw = sum(_cls_q2[-50:]) / 50 if len(_cls_q2) >= 50 else price
+                _ema50_q_corrupted = (_e50_q_raw > price * 3.0)
+            except Exception: pass
+        _data_corrupted_q = (_atr_q > 25 or rsi < 5 or _pve50_q < -50 or _ema50_q_corrupted)
 
         # حساب regime أولاً — يؤثر على التوصية
         regime_desc = "⚪ جاري تحديث بيانات السوق"
