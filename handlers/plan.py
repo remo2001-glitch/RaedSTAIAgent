@@ -1017,10 +1017,22 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _buy_signals = []  # إصلاح #382: تجميع إشارات الشراء
         for i, sym in enumerate(symbols):
             candles = ohlcv_sym[i]
+            # GG4 (#1478): retry فوري عند بيانات غير كافية بدلاً من التخطي
             if len(candles) < 20:
-                lines.append(f"⚠️ {sym}: بيانات غير كافية")
-                lines.append("")
-                continue
+                try:
+                    _retry_c = await asyncio.wait_for(
+                        engine.data_layer.get_ohlcv(sym, "1d", 50),
+                        timeout=10.0)
+                    if isinstance(_retry_c, list) and len(_retry_c) >= 20:
+                        candles = _retry_c
+                    else:
+                        lines.append(f"⚠️ {sym}: بيانات غير كافية")
+                        lines.append("")
+                        continue
+                except Exception:
+                    lines.append(f"⚠️ {sym}: بيانات غير كافية")
+                    lines.append("")
+                    continue
             try:
                 # إصلاح #34: whale_ratio/funding خاص بكل عملة بدل TVL عالمي ثابت
                 _onchain_e = await engine.data_layer.get_signal_enrichment(sym, onchain)

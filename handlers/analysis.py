@@ -2144,9 +2144,10 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ema20  = sum(closes[-20:]) / 20
                 _ema50_raw = sum(closes[-50:]) / 50 if len(closes) >= 50 else ema20
                 # EE1 (#1956/#2025): cap ema50 بـ price × 3 لمنع قيم تاريخية مشوّهة
-                # إذا ema50 > price × 3 → يعني البيانات تاريخية قديمة → نستخدم ema20
                 ema50 = _ema50_raw if _ema50_raw <= price * 3.0 else ema20
-                ema_bearish = price < ema20 and price < ema50
+                # GG2: توحيد منطق ema_bearish — السعر تحت EMA20 أو EMA50 (ليس كليهما)
+                # هذا يتوافق مع Header الذي يُظهر "تحت" عند السعر < EMA50 فقط
+                ema_bearish = price < ema50
             except Exception:
                 pass
 
