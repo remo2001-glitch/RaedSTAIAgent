@@ -737,12 +737,24 @@ class NewsEngine:
             else source
         )
 
+        # F2: Sentiment Score Bar مرئي
+        _conf_news = analysis.get("confidence", 0)
+        _bars_news = int(_conf_news * 10)
+        _sentiment_bar = "█" * _bars_news + "░" * (10 - _bars_news)
+        # توصية تداول بناءً على المشاعر
+        _news_advice = (
+            "💡 *توصية:* مراقبة فرص الشراء — الأخبار إيجابية"
+            if "إيجابي" in sent_label else
+            "⚠️ *توصية:* تقليل التعرض — أخبار سلبية قد تضغط على الأسعار"
+            if "سلبي" in sent_label else
+            "💡 *توصية:* أخبار محايدة — تابع المؤشرات التقنية"
+        )
         lines = [
             "📰 *تقرير الأخبار — رائد*",
             "━━━━━━━━━━━━━━━━━━",
             f"المشاعر: {sent_label}",
             f"التأثير: {impact_ar}",
-            f"الثقة:   {analysis.get('confidence', 0):.0%}",
+            f"الثقة:   {_sentiment_bar} {_conf_news:.0%}",
             "",
             "📋 *الملخص*",
             analysis.get("summary_ar", ""),
@@ -797,15 +809,14 @@ class NewsEngine:
                 _prefix = "🔴 " if any(k in title.lower() for k in _neg_kw) else "• "
                 lines.append(f"{_prefix}{title}")
 
-        # توصية تداول بناءً على مشاعر الأخبار (M#59)
+        # F2b: توصية رائد المحسّنة مع Sentiment Bar
         s_val = float(analysis.get("sentiment_score", 0) or 0)
-        if s_val > 0.3:
-            lines += ["", "💡 *توصية رائد:* مراقبة فرص الشراء — الأخبار إيجابية"]
-        elif s_val < -0.3:
-            lines += ["", "💡 *توصية رائد:* انتظار — أخبار سلبية تستدعي الحذر"]
-        else:
-            lines += ["", "💡 *توصية رائد:* انتظار وترقب — السوق محايد"]
-        lines += ["", f"🔍 المصدر: {source_label} | رائد التداول الذكي"]
+        lines += ["", _news_advice]
+        # تنبيه التعارض: أخبار إيجابية لكن السوق هابط
+        _fear_val = analysis.get("fear_greed", 50) if isinstance(analysis.get("fear_greed"), int) else 50
+        if s_val > 0.3 and _fear_val < 30:
+            lines += [f"⚠️ *تنبيه:* مشاعر الأخبار إيجابية لكن السوق 🔴 اتجاه هابط (Fear & Greed: {_fear_val}) — لا تعتمد على الأخبار وحدها لاتخاذ القرار"]
+        lines += ["", f"🔍 المصدر: {source_label} | 🤖 رائد التداول الذكي"]
         # ملاحظة: عناوين الأخبار بالإنجليزية من المصادر الدولية
         # ستُترجم تلقائياً بعد تفعيل Groq API في ملخص التحليل
         return "\n".join(lines)
