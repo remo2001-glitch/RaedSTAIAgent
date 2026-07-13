@@ -1519,7 +1519,7 @@ async def cmd_regime(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text(text, parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         logger.error(f"cmd_regime: {e}")
-        await msg.edit_text(f"❌ خطأ في تحليل السوق. حاول لاحقاً")
+        await msg.edit_text("❌ خطأ في تحليل السوق\n• تحقق من الاتصال بالإنترنت\n• حاول مرة أخرى بعد دقيقة")
 
 
 # ════════════════════════════════════════════════════════════════
@@ -1716,6 +1716,22 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # إظهار تقييم المخاطر فقط عند الموافقة (لا عند الرفض مع وجود pro block)
         show_risk  = risk.decision.value == "approve" or not pro_block
         # إصلاح #477: تقليل التكرار — pro_block يحتوي معظم المعلومات
+        # FA: BTC Correlation — تأثير BTC على الأصول الأخرى
+        _btc_corr_txt = ""
+        if symbol not in ("BTC", "BITCOIN") and atr_pct < 20:
+            try:
+                _btc_d = await engine.data_layer.get_price("BTC")
+                _btc_chg = float((_btc_d or {}).get("change_24h", 0) or 0)
+                _price_chg = float((await engine.data_layer.get_price(symbol) or {}).get("change_24h", 0) or 0)
+                _corr_diff = _price_chg - _btc_chg
+                if abs(_btc_chg) > 2:
+                    if _corr_diff > 3:
+                        _btc_corr_txt = f"\n• 🟢 {symbol} يتفوق على BTC بـ {_corr_diff:+.1f}% — قوة نسبية"
+                    elif _corr_diff < -3:
+                        _btc_corr_txt = f"\n• 🔴 {symbol} أضعف من BTC بـ {_corr_diff:+.1f}% — ضعف نسبي"
+            except Exception:
+                pass
+
         # EMA_sig (#2260/#2320): استبدال EMA50 بالقيمة الخام للأصول المنهارة
         _regime_fmt = engine.regime_detector.format_ar(regime)
         if _ema50_sig_corrupted and "_e50_sig_raw" in dir() and _e50_sig_raw > 0:
@@ -1778,6 +1794,9 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"• ATR={atr_pct:.1f}% | RSI={rsi:.0f} | EMA50={_pve50_sig_display:.0f}%\n"
                 "• *لا تعتمد على هذا التحليل للتداول الفعلي*"
             )
+        # FA: إضافة BTC correlation إذا وُجد
+        if _btc_corr_txt:
+            parts.append(_clean_md(_btc_corr_txt.strip()))
         full_text = "\n\n".join(parts) + warning
         # تطوير #188 (Phase 2): إلحاق فقرة الزوج الإضافية إن وُجدت
         _pair_addon = await build_pair_addon_lines(resolution, engine.data_layer)
@@ -2662,14 +2681,24 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # تطوير #222 (محسَّن): اكتشاف نوع السوق من:
         # (1) caption النصي أولاً
         # (2) نص التحليل الذي يُنتجه الـVision model (يتضمن الآن قسم "0-نوع السوق")
+        # F9b: كلمات Futures الحقيقية
         _futures_keywords = (
             "PERP", "SWAP", "FUTURES", "PERPETUAL", "USDT-SWAP",
             "MARK PRICE", "FUNDING RATE", "OVERNIGHT", "-PERP", "USDT-M",
             "COIN-M", "DELIVERY", "QUARTERLY", "FUTURES/PERP",
+            "عقود دائمة", "عقود آجلة", "عقد مستمر", "فيوتشر",
         )
+        # F9b: مصطلحات Spot صريحة — إذا ظهرت تلغي أي 10x/5x/3x
+        # ملاحظة: OKX يعرض "10x" بجانب "التداول الفوري" كتنويه فقط وليس Futures
+        _spot_override_kw = ("التداول الفوري", "SPOT TRADING", "SPOT MARKET")
         _caption_upper = caption.upper()
-        _chart_is_futures = any(kw in _caption_upper for kw in _futures_keywords)
-        if not _chart_is_futures and symbol:
+        _is_spot_explicit = any(kw in caption or kw in _caption_upper
+                                for kw in _spot_override_kw)
+        _chart_is_futures = (
+            not _is_spot_explicit and
+            any(kw in _caption_upper for kw in _futures_keywords)
+        )
+        if not _chart_is_futures and not _is_spot_explicit and symbol:
             _chart_is_futures = any(kw in symbol.upper()
                                      for kw in ("PERP","SWAP","FUT"))
 
@@ -3005,6 +3034,10 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
         if bear_buy_warning:
             lines.append(bear_buy_warning)
+        # FC: إضافة ATR و Fib في /quicksignal
+        _atr_qs = _calc_atr(candles) if candles else 0.0
+        if _atr_qs > 0:
+            lines.append(f"📊 ATR: {_atr_qs:.1f}% يومياً | ADX: {_adx_q:.0f}")
         lines += [
             "",
             "💡 للتحليل العميق الكامل: /analyze (ذهبي+)",
