@@ -1494,10 +1494,28 @@ async def cmd_regime(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"أعد المحاولة بعد دقيقة")
             return
 
+        fear_val_r = int(fear.get("value") or 50)
         result = engine.regime_detector.detect(
-            candles, btc_dominance=btc_dom,
-            fear_greed=int(fear.get("value") or 50))
+            candles, btc_dominance=btc_dom, fear_greed=fear_val_r)
         text = _clean_md(engine.regime_detector.format_ar(result))
+
+        # F8: توصيات أوضح بناءً على regime
+        _regime_action = getattr(result, "action", "")
+        _regime_desc   = getattr(result, "description_ar", "")
+        _regime_tips = {
+            "trade_normal":    "✅ السوق مناسب للتداول — يمكن الدخول بحجم طبيعي",
+            "reduce_size":     "⚠️ قلل حجم الصفقات إلى 50% — السوق غير مستقر",
+            "wait":            "⏳ انتظر — لا توجد إشارة واضحة الآن",
+            "avoid":           "🚫 تجنب الدخول — ADX مرتفع جداً أو تقلب شديد",
+            "bounce_entry_confirmed": "🎯 فرصة ارتداد محتملة — راقب التأكيدات",
+        }
+        _tip = _regime_tips.get(_regime_action, "")
+        if _tip:
+            text += f"\n\n💡 *توصية رائد:* {_tip}"
+        # إضافة مرجع السوق الكلي
+        text += (
+            f"\n\n📡 *المصدر:* OKX + BGeometrics | 🤖 رائد التداول الذكي"
+        )
         await msg.edit_text(text, parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         logger.error(f"cmd_regime: {e}")
@@ -1698,10 +1716,20 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # إظهار تقييم المخاطر فقط عند الموافقة (لا عند الرفض مع وجود pro block)
         show_risk  = risk.decision.value == "approve" or not pro_block
         # إصلاح #477: تقليل التكرار — pro_block يحتوي معظم المعلومات
+        # EMA_sig (#2260/#2320): استبدال EMA50 بالقيمة الخام للأصول المنهارة
+        _regime_fmt = engine.regime_detector.format_ar(regime)
+        if _ema50_sig_corrupted and "_e50_sig_raw" in dir() and _e50_sig_raw > 0:
+            import re as _re_ema
+            _pve50_raw_sig = (price - _e50_sig_raw) / max(_e50_sig_raw, 0.0001) * 100
+            _regime_fmt = _re_ema.sub(
+                r"السعر vs EMA50: [+\-]?\d+\.?\d*%",
+                f"السعر vs EMA50: {_pve50_raw_sig:+.1f}%",
+                _regime_fmt
+            )
         parts = [
             _clean_md(engine.signal_layer.format_ar(signal)),
             # regime وstrategy مدمجان في pro_block — نُضيف حالة السوق فقط
-            _clean_md(engine.regime_detector.format_ar(regime)),
+            _clean_md(_regime_fmt),
         ]
         if show_risk:
             parts.append(_risk_text)
@@ -3083,6 +3111,7 @@ def register(app):
     app.add_handler(CommandHandler("quicksignal",  cmd_quicksignal))
     app.add_handler(CommandHandler("upgrade",      cmd_upgrade))
     app.add_handler(CommandHandler("chart",        cmd_chart_cmd))
+    app.add_handler(CommandHandler("risk",         cmd_risk))   # R1: تسجيل /risk
     app.add_handler(MessageHandler(
         filters.PHOTO | filters.Document.IMAGE,
         cmd_chart))
