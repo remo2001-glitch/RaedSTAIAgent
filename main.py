@@ -133,6 +133,7 @@ def _build_commands_text(user_id: int, tier: str, tier_name: str) -> str:
         deep = [
             "/analyze — تحليل عميق بالذكاء الاصطناعي",
             "/liquidity — تحليل السيولة المتقدم",
+            "/risk — تقييم مخاطر السوق",
             "/onchain — تحليل On-Chain",
             "/planweek — خطة أسبوعية",
             "/planmonth — خطة شهرية",
@@ -355,6 +356,7 @@ async def post_init(app: Application):
         BotCommand("onchain",      "تحليل On-Chain"),
         BotCommand("liquidity",    "تحليل السيولة"),
         BotCommand("backtest",     "اختبار تاريخي"),
+        BotCommand("risk",         "تقييم مخاطر السوق"),  # R1
         BotCommand("analyze",      "تحليل عميق"),
         BotCommand("planmonth",    "خطة شهرية"),
         BotCommand("planweek",     "خطة أسبوعية"),
@@ -362,7 +364,7 @@ async def post_init(app: Application):
         BotCommand("autotrade",    "تداول تلقائي on/off"),
         BotCommand("execute",      "تنفيذ فوري"),
         BotCommand("stats",        "إحصائيات فورية"),
-        BotCommand("risk",         "حالة المخاطر"),
+
         BotCommand("events",       "الأحداث القادمة"),
         BotCommand("drift",        "حالة النموذج"),
         BotCommand("killswitch",   "Kill Switch"),
