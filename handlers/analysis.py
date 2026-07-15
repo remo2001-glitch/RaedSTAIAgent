@@ -1591,6 +1591,18 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _use_futures = (_mkttype == "futures")
     _mkt_arg_sig = "futures" if _use_futures else "spot"  # إصلاح #258
 
+    # TK2: التحقق من توفر الأصل في Spot قبل التحليل
+    if not _use_futures:
+        try:
+            _spot_check = await engine.data_layer.check_spot_available(raw_arg)
+            if not _spot_check.get("available", True) and _spot_check.get("message"):
+                await _get_message(update, context).reply_text(
+                    _spot_check["message"], parse_mode="Markdown"
+                )
+                return
+        except Exception:
+            pass  # عند الخطأ → تابع التحليل
+
     # تطوير #188 (Phase 2) + إصلاح #248: tier2 يُعرَّف هنا (موحَّد)
     user_id2   = update.effective_user.id
     tier2      = _sm.get_tier(user_id2)
@@ -2219,6 +2231,18 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _use_futures_an = (_mkttype_an == "futures")
     _mkt_arg_an = "futures" if _use_futures_an else "spot"  # إصلاح #258
 
+    # TK4: التحقق من توفر الأصل في Spot قبل التحليل العميق
+    if not _use_futures_an:
+        try:
+            _spot_chk_an = await engine.data_layer.check_spot_available(raw_arg)
+            if not _spot_chk_an.get("available", True) and _spot_chk_an.get("message"):
+                await _get_message(update, context).reply_text(
+                    _spot_chk_an["message"], parse_mode="Markdown"
+                )
+                return
+        except Exception:
+            pass
+
     # تطوير #188 (Phase 2): دعم أزواج BTC/ETH — فقرة إضافية في نهاية
     # التقرير إن كانت الباقة ماسي+ والزوج متوفر (build_pair_addon_lines)
     tier_an    = _sm.get_tier(user_id)
@@ -2844,6 +2868,18 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
     _use_futures_qs = (_mkttype_qs == "futures")
     _mkt_arg_qs = "futures" if _use_futures_qs else "spot"  # إصلاح #258
+
+    # TK3: التحقق من توفر الأصل في Spot قبل التحليل الأولي
+    if not _use_futures_qs:
+        try:
+            _spot_chk_qs = await engine.data_layer.check_spot_available(qs_sym)
+            if not _spot_chk_qs.get("available", True) and _spot_chk_qs.get("message"):
+                await _get_message(update, context).reply_text(
+                    _spot_chk_qs["message"], parse_mode="Markdown"
+                )
+                return
+        except Exception:
+            pass
 
     msg    = await _get_message(update, context).reply_text(
         f"🔍 جاري التحليل الأولي لـ {raw_arg}...")

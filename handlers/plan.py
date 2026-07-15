@@ -578,6 +578,14 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # إصلاح #280/#287: معالجة أوسع — microstructure اختيارية
         candidates = []
         for i, sym in enumerate(symbols):
+            # TK5: تحقق من توفر الأصل في Spot (إذا Spot plan)
+            if not _use_futures_pw:
+                try:
+                    _sp_chk = await engine.data_layer.check_spot_available(sym)
+                    if not _sp_chk.get("available", True):
+                        continue  # تجاهل الأصل غير المتاح في Spot
+                except Exception:
+                    pass
             candles = ohlcv_all[i] if isinstance(ohlcv_all[i], list) else []
             # إصلاح #307: إذا فشل OHLCV → retry بـ 50 شمعة
             if len(candles) < 30:
@@ -1016,6 +1024,14 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         _buy_signals = []  # إصلاح #382: تجميع إشارات الشراء
         for i, sym in enumerate(symbols):
+            # TK6: تحقق من توفر الأصل في Spot (إذا Spot plan_month)
+            if not _use_futures_pm:
+                try:
+                    _sp_chk_pm = await engine.data_layer.check_spot_available(sym)
+                    if not _sp_chk_pm.get("available", True):
+                        continue  # تجاهل الأصل غير المتاح في Spot
+                except Exception:
+                    pass
             candles = ohlcv_sym[i]
             # GG4 (#1478): retry فوري عند بيانات غير كافية بدلاً من التخطي
             if len(candles) < 20:
