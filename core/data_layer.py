@@ -1524,7 +1524,9 @@ class DataLayer:
         return {"outflow_30d": 0.0, "signal": "محايد", "available": False}
 
     def build_candles_summary(self, candles: list, symbol: str = "", current_price: float = 0.0) -> str:
-        """يبني ملخص شموع احترافي لـ Groq — يشمل EMA + RSI + MACD + حجم."""
+        """يبني ملخص شموع احترافي لـ Groq — يشمل EMA + RSI + MACD + حجم.
+        إصلاح #328 (H2): current_price يُستخدم بدلاً من candles[-1] إذا مُعطى.
+        """
         if not candles or len(candles) < 5:
             return ""
         try:
@@ -1532,7 +1534,7 @@ class DataLayer:
             volumes = [float(c.get("volume", 0) or 0) for c in candles if c.get("volume")]
             if len(closes) < 5: return ""
 
-            # H2: current_price يُستخدم إذا مُعطى
+            # إصلاح #328 (H2): استخدام current_price الحالي إذا مُعطى
             last = current_price if current_price > 0 else closes[-1]
             # EMAs
             ema5  = sum(closes[-5:])  / 5  if len(closes) >= 5  else last
@@ -1805,6 +1807,51 @@ class DataLayer:
     # ═══════════════════════════════════════════════════════════
     # 6. Fear & Greed — يُعيد دائماً Dict مع قيم افتراضية
     # ═══════════════════════════════════════════════════════════
+
+    async def check_spot_available(self, symbol: str) -> dict:
+        """
+        TK1: التحقق من توفر أصل مُرمَّز في سوق Spot على OKX.
+        يُستدعى قبل أي تحليل Spot للأصول المُرمَّزة.
+        يُعيد: {"available": bool, "spot_price": float, "message": str}
+        """
+        sym = symbol.upper()
+        # تحقق من Cache أولاً (30 دقيقة)
+        _cache_key = f"spot_available:{sym}"
+        if cached := _cached(_cache_key, "spot_available"):
+            return cached
+
+        try:
+            # محاولة جلب سعر Spot من OKX
+            inst_id = f"{sym}-USDT"
+            data = await _fetch(
+                f"https://www.okx.com/api/v5/market/ticker?instId={inst_id}&instType=SPOT",
+                timeout=5
+            )
+            if data and data.get("code") == "0" and data.get("data"):
+                d = data["data"][0]
+                spot_price = float(d.get("last", 0) or 0)
+                if spot_price > 0:
+                    result = {
+                        "available": True,
+                        "spot_price": spot_price,
+                        "message": f"✅ {sym} متاح في Spot على OKX بسعر ${spot_price:,.4f}"
+                    }
+                    _store(_cache_key, result, ttl=1800)  # 30 دقيقة
+                    return result
+
+            # غير متاح في Spot
+            result = {
+                "available": False,
+                "spot_price": 0.0,
+                "message": f"⚠️ *{sym}* غير متاح في السوق الفوري (Spot) على OKX حالياً\nمتاح في Futures فقط"
+            }
+            _store(_cache_key, result, ttl=900)  # 15 دقيقة
+            return result
+
+        except Exception as e:
+            logger.debug(f"check_spot_available({sym}): {e}")
+            return {"available": True, "spot_price": 0.0, "message": ""}  # افتراض متاح عند الخطأ
+
     async def get_fear_greed(self) -> Dict:
         _DEFAULT = {"value": 50, "label": "Neutral", "label_ar": "محايد"}
         if cached := _cached("fear_greed", "fear"):
@@ -1906,10 +1953,8 @@ def _filter_recent_news(items: list, max_hours: int = 48) -> list:
 
 
 def _fear_ar(value: int) -> str:
-    # إصلاح AA2 (#1491): حدود Fear & Greed حسب المعيار الحقيقي (CoinMarketCap)
-    # 0-19: خوف شديد، 20-39: خوف، 40-59: محايد، 60-79: جشع، 80-100: جشع شديد
-    if value >= 80: return "جشع شديد"
-    if value >= 60: return "جشع"
-    if value >= 40: return "محايد"
-    if value >= 20: return "خوف"
+    if value >= 75: return "جشع شديد"
+    if value >= 55: return "جشع"
+    if value >= 45: return "محايد"
+    if value >= 25: return "خوف"
     return "خوف شديد"
