@@ -24,6 +24,100 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# ══════════════════════════════════════════════════════════════════
+# DL2/DL3: StockSymbolResolver — تعيين موحّد للأسهم المُرمَّزة
+# ══════════════════════════════════════════════════════════════════
+
+# قاموس الأسهم المُرمَّزة: رمز المستخدم → {okx_spot, okx_futures, yahoo, base}
+_TOKENIZED_STOCK_MAP = {
+    # الأسهم الأمريكية الكبرى
+    "AAPL":  {"okx_spot": "XAAPL",  "okx_futures": "AAPL",  "yahoo": "AAPL",  "base": "AAPL"},
+    "XAAPL": {"okx_spot": "XAAPL",  "okx_futures": "AAPL",  "yahoo": "AAPL",  "base": "AAPL"},
+    "AMZN":  {"okx_spot": "XAMZN",  "okx_futures": "AMZN",  "yahoo": "AMZN",  "base": "AMZN"},
+    "XAMZN": {"okx_spot": "XAMZN",  "okx_futures": "AMZN",  "yahoo": "AMZN",  "base": "AMZN"},
+    "TSLA":  {"okx_spot": "XTSLA",  "okx_futures": "TSLA",  "yahoo": "TSLA",  "base": "TSLA"},
+    "XTSLA": {"okx_spot": "XTSLA",  "okx_futures": "TSLA",  "yahoo": "TSLA",  "base": "TSLA"},
+    "GOOGL": {"okx_spot": "XGOOGL", "okx_futures": "GOOGL", "yahoo": "GOOGL", "base": "GOOGL"},
+    "XGOOGL":{"okx_spot": "XGOOGL", "okx_futures": "GOOGL", "yahoo": "GOOGL", "base": "GOOGL"},
+    "MSFT":  {"okx_spot": "XMSFT",  "okx_futures": "MSFT",  "yahoo": "MSFT",  "base": "MSFT"},
+    "XMSFT": {"okx_spot": "XMSFT",  "okx_futures": "MSFT",  "yahoo": "MSFT",  "base": "MSFT"},
+    "META":  {"okx_spot": "XMETA",  "okx_futures": "META",  "yahoo": "META",  "base": "META"},
+    "XMETA": {"okx_spot": "XMETA",  "okx_futures": "META",  "yahoo": "META",  "base": "META"},
+    "NVDA":  {"okx_spot": "XNVDA",  "okx_futures": "NVDA",  "yahoo": "NVDA",  "base": "NVDA"},
+    "XNVDA": {"okx_spot": "XNVDA",  "okx_futures": "NVDA",  "yahoo": "NVDA",  "base": "NVDA"},
+    "AMD":   {"okx_spot": "XAMD",   "okx_futures": "AMD",   "yahoo": "AMD",   "base": "AMD"},
+    "XAMD":  {"okx_spot": "XAMD",   "okx_futures": "AMD",   "yahoo": "AMD",   "base": "AMD"},
+    "NFLX":  {"okx_spot": "XNFLX",  "okx_futures": "NFLX",  "yahoo": "NFLX",  "base": "NFLX"},
+    "XNFLX": {"okx_spot": "XNFLX",  "okx_futures": "NFLX",  "yahoo": "NFLX",  "base": "NFLX"},
+    "COIN":  {"okx_spot": "XCOIN",  "okx_futures": "COIN",  "yahoo": "COIN",  "base": "COIN"},
+    "XCOIN": {"okx_spot": "XCOIN",  "okx_futures": "COIN",  "yahoo": "COIN",  "base": "COIN"},
+    "HOOD":  {"okx_spot": "XHOOD",  "okx_futures": "HOOD",  "yahoo": "HOOD",  "base": "HOOD"},
+    "XHOOD": {"okx_spot": "XHOOD",  "okx_futures": "HOOD",  "yahoo": "HOOD",  "base": "HOOD"},
+    "MSTR":  {"okx_spot": "XMSTR",  "okx_futures": "MSTR",  "yahoo": "MSTR",  "base": "MSTR"},
+    "XMSTR": {"okx_spot": "XMSTR",  "okx_futures": "MSTR",  "yahoo": "MSTR",  "base": "MSTR"},
+    "SPCX":  {"okx_spot": "XSPCX",  "okx_futures": "SPCX",  "yahoo": None,    "base": "SPCX"},
+    "XSPCX": {"okx_spot": "XSPCX",  "okx_futures": "SPCX",  "yahoo": None,    "base": "SPCX"},
+    # أسهم إضافية
+    "BABA":  {"okx_spot": "XBABA",  "okx_futures": "BABA",  "yahoo": "BABA",  "base": "BABA"},
+    "XBABA": {"okx_spot": "XBABA",  "okx_futures": "BABA",  "yahoo": "BABA",  "base": "BABA"},
+    "NIO":   {"okx_spot": "XNIO",   "okx_futures": "NIO",   "yahoo": "NIO",   "base": "NIO"},
+    "XNIO":  {"okx_spot": "XNIO",   "okx_futures": "NIO",   "yahoo": "NIO",   "base": "NIO"},
+    "PLTR":  {"okx_spot": "XPLTR",  "okx_futures": "PLTR",  "yahoo": "PLTR",  "base": "PLTR"},
+    "XPLTR": {"okx_spot": "XPLTR",  "okx_futures": "PLTR",  "yahoo": "PLTR",  "base": "PLTR"},
+    "V":     {"okx_spot": "XV",     "okx_futures": "V",     "yahoo": "V",     "base": "V"},
+    "XV":    {"okx_spot": "XV",     "okx_futures": "V",     "yahoo": "V",     "base": "V"},
+    "MA":    {"okx_spot": "XMA",    "okx_futures": "MA",    "yahoo": "MA",    "base": "MA"},
+    "XMA":   {"okx_spot": "XMA",    "okx_futures": "MA",    "yahoo": "MA",    "base": "MA"},
+    "JPM":   {"okx_spot": "XJPM",   "okx_futures": "JPM",   "yahoo": "JPM",   "base": "JPM"},
+    "XJPM":  {"okx_spot": "XJPM",   "okx_futures": "JPM",   "yahoo": "JPM",   "base": "JPM"},
+    "WMT":   {"okx_spot": "XWMT",   "okx_futures": "WMT",   "yahoo": "WMT",   "base": "WMT"},
+    "XWMT":  {"okx_spot": "XWMT",   "okx_futures": "WMT",   "yahoo": "WMT",   "base": "WMT"},
+    "PYPL":  {"okx_spot": "XPYPL",  "okx_futures": "PYPL",  "yahoo": "PYPL",  "base": "PYPL"},
+    "XPYPL": {"okx_spot": "XPYPL",  "okx_futures": "PYPL",  "yahoo": "PYPL",  "base": "PYPL"},
+    "INTC":  {"okx_spot": "XINTC",  "okx_futures": "INTC",  "yahoo": "INTC",  "base": "INTC"},
+    "XINTC": {"okx_spot": "XINTC",  "okx_futures": "INTC",  "yahoo": "INTC",  "base": "INTC"},
+    "DIS":   {"okx_spot": "XDIS",   "okx_futures": "DIS",   "yahoo": "DIS",   "base": "DIS"},
+    "XDIS":  {"okx_spot": "XDIS",   "okx_futures": "DIS",   "yahoo": "DIS",   "base": "DIS"},
+}
+
+
+def resolve_stock_symbol(symbol: str, market: str = "futures") -> dict:
+    """
+    DL2: حل رمز السهم المُرمَّز بناءً على نوع السوق.
+    market: "spot" → يُعيد okx_spot | "futures" → يُعيد okx_futures
+    يُعيد: {"base": str, "okx_symbol": str, "yahoo": str|None, "is_stock": bool}
+    """
+    sym = symbol.upper()
+    if sym in _TOKENIZED_STOCK_MAP:
+        entry = _TOKENIZED_STOCK_MAP[sym]
+        okx_sym = entry["okx_spot"] if market == "spot" else entry["okx_futures"]
+        return {
+            "base":       entry["base"],
+            "okx_symbol": okx_sym,
+            "yahoo":      entry.get("yahoo"),
+            "is_stock":   True,
+            "market":     market,
+        }
+    # ليس في القاموس — حاول اكتشافه تلقائياً
+    if sym.startswith("X") and len(sym) > 2:
+        base = sym[1:]
+        return {
+            "base":       base,
+            "okx_symbol": sym if market == "spot" else base,
+            "yahoo":      base,
+            "is_stock":   True,
+            "market":     market,
+        }
+    return {
+        "base":       sym,
+        "okx_symbol": sym,
+        "yahoo":      None,
+        "is_stock":   False,
+        "market":     market,
+    }
+
+
+
 # ─── TTL كاش ──────────────────────────────────────────────────
 CACHE_TTL = {
     "price":   60,    # 60 ثانية — مناسب لـ 100+ مستخدم (كان 30)
@@ -770,6 +864,14 @@ class DataLayer:
             return cg_candles
 
         logger.error(f"get_ohlcv فشل لـ {symbol} — يُعيد []")
+        # DL1b: Yahoo Finance كـ fallback للأسهم المُرمَّزة
+        _stock_info = resolve_stock_symbol(symbol)
+        if _stock_info.get("is_stock") and _stock_info.get("yahoo"):
+            yahoo_candles = await self._ohlcv_yahoo(symbol, days=max(days, 90))
+            if yahoo_candles and len(yahoo_candles) >= 30:
+                logger.info(f"DL1b: {symbol} ← Yahoo Finance ({len(yahoo_candles)} شمعة)")
+                return yahoo_candles
+
         return []   # دائماً List, أبداً None
 
     async def _ohlcv_binance(self, symbol: str, interval: str,
@@ -1879,6 +1981,66 @@ class DataLayer:
         except Exception as e:
             logger.debug(f"check_spot_available({sym}): {e}")
             return {"available": True, "spot_price": 0.0, "spot_symbol": sym, "message": ""}
+
+
+    async def _ohlcv_yahoo(self, symbol: str, days: int = 90) -> list:
+        """
+        DL1: Yahoo Finance كمصدر OHLCV للأسهم المُرمَّزة.
+        يُستخدم عند نقص البيانات التاريخية في OKX (أسهم جديدة).
+        """
+        try:
+            import urllib.request, json, time
+            # تحويل الرمز للصيغة المناسبة لـ Yahoo
+            _info = resolve_stock_symbol(symbol, "spot")
+            yahoo_sym = _info.get("yahoo") or _info.get("base", symbol)
+            if not yahoo_sym:
+                return []
+
+            end_ts   = int(time.time())
+            start_ts = end_ts - (days * 86400)
+            url = (
+                f"https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_sym}"
+                f"?interval=1d&period1={start_ts}&period2={end_ts}"
+            )
+            headers = {"User-Agent": "Mozilla/5.0"}
+            req  = urllib.request.Request(url, headers=headers)
+            resp = urllib.request.urlopen(req, timeout=8)
+            data = json.loads(resp.read())
+
+            result_data = data.get("chart", {}).get("result", [])
+            if not result_data:
+                return []
+
+            timestamps = result_data[0].get("timestamp", [])
+            quotes     = result_data[0].get("indicators", {}).get("quote", [{}])[0]
+            opens      = quotes.get("open",   [])
+            highs      = quotes.get("high",   [])
+            lows       = quotes.get("low",    [])
+            closes     = quotes.get("close",  [])
+            volumes    = quotes.get("volume", [])
+
+            candles = []
+            for i, ts in enumerate(timestamps):
+                try:
+                    c = closes[i]
+                    if c is None or c <= 0:
+                        continue
+                    candles.append({
+                        "open":   float(opens[i]   or c),
+                        "high":   float(highs[i]   or c),
+                        "low":    float(lows[i]    or c),
+                        "close":  float(c),
+                        "volume": float(volumes[i] or 0),
+                        "ts":     ts,
+                    })
+                except (TypeError, IndexError):
+                    continue
+            logger.info(f"Yahoo Finance: {yahoo_sym} → {len(candles)} شمعة")
+            return candles
+
+        except Exception as e:
+            logger.debug(f"_ohlcv_yahoo({symbol}): {e}")
+            return []
 
     async def get_fear_greed(self) -> Dict:
         _DEFAULT = {"value": 50, "label": "Neutral", "label_ar": "محايد"}
