@@ -1601,17 +1601,26 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode="Markdown"
                 )
                 return
-            # TK1b: استخدام الرمز الفعلي في OKX (قد يكون XSPCX بدلاً من SPCX)
+            # TK1b_fix: استخدام الرمز الفعلي مع الحفاظ على base لـ resolve_symbol
             _spot_sym_actual = _spot_check.get("spot_symbol", raw_arg)
             if _spot_sym_actual != raw_arg.upper():
-                raw_arg = _spot_sym_actual  # تحديث الرمز للتحليل
+                # احتفظ بالرمز الأساسي (SPCX) لـ resolve_symbol
+                # وابدأ البيانات من OKX بـ XSPCX
+                from data_layer import resolve_stock_symbol as _rss
+                _stock_res = _rss(_spot_sym_actual, "spot")
+                _resolve_sym = _stock_res.get("base", raw_arg)  # SPCX للـ resolve
+                raw_arg = _spot_sym_actual  # XSPCX للبيانات
+            else:
+                _resolve_sym = raw_arg
         except Exception:
             pass  # عند الخطأ → تابع التحليل
 
     # تطوير #188 (Phase 2) + إصلاح #248: tier2 يُعرَّف هنا (موحَّد)
     user_id2   = update.effective_user.id
     tier2      = _sm.get_tier(user_id2)
-    resolution = await resolve_symbol(raw_arg, tier2, engine.data_layer)
+    # TK1b_fix: استخدام الرمز الأساسي لـ resolve_symbol (لا XSPCX)
+    _sym_for_resolve = locals().get("_resolve_sym", raw_arg)
+    resolution = await resolve_symbol(_sym_for_resolve, tier2, engine.data_layer)
     symbol     = resolution.base
 
     # تطوير #209: اكتشاف تلقائي للأصول المُرمَّزة (ماسي+ فقط)
@@ -2246,17 +2255,24 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode="Markdown"
                 )
                 return
-            # TK1b: استخدام الرمز الفعلي في OKX
+            # TK1b_fix: استخدام base لـ resolve_symbol وOKX sym للبيانات
             _an_sym_actual = _spot_chk_an.get("spot_symbol", raw_arg)
             if _an_sym_actual != raw_arg.upper():
+                from data_layer import resolve_stock_symbol as _rss_an
+                _stock_res_an = _rss_an(_an_sym_actual, "spot")
+                _resolve_sym = _stock_res_an.get("base", raw_arg)
                 raw_arg = _an_sym_actual
+            else:
+                _resolve_sym = raw_arg
         except Exception:
             pass
 
     # تطوير #188 (Phase 2): دعم أزواج BTC/ETH — فقرة إضافية في نهاية
     # التقرير إن كانت الباقة ماسي+ والزوج متوفر (build_pair_addon_lines)
     tier_an    = _sm.get_tier(user_id)
-    resolution = await resolve_symbol(raw_arg, tier_an, engine.data_layer)
+    # TK1b_fix: استخدام الرمز الأساسي لـ resolve_symbol
+    _sym_for_resolve_an = locals().get("_resolve_sym", raw_arg)
+    resolution = await resolve_symbol(_sym_for_resolve_an, tier_an, engine.data_layer)
     symbol     = resolution.base
 
     # تطوير #209: اكتشاف تلقائي للأسهم المُرمَّزة (ماسي+ فقط)
