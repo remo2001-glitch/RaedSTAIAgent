@@ -1591,15 +1591,20 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _use_futures = (_mkttype == "futures")
     _mkt_arg_sig = "futures" if _use_futures else "spot"  # إصلاح #258
 
-    # TK2: التحقق من توفر الأصل في Spot قبل التحليل
+    # TK2/TK1b: التحقق من توفر الأصل في Spot مع دعم X-prefix تلقائي
     if not _use_futures:
         try:
             _spot_check = await engine.data_layer.check_spot_available(raw_arg)
-            if not _spot_check.get("available", True) and _spot_check.get("message"):
+            if not _spot_check.get("available", True):
                 await _get_message(update, context).reply_text(
-                    _spot_check["message"], parse_mode="Markdown"
+                    _spot_check.get("message", f"⚠️ {raw_arg} غير متاح في Spot"),
+                    parse_mode="Markdown"
                 )
                 return
+            # TK1b: استخدام الرمز الفعلي في OKX (قد يكون XSPCX بدلاً من SPCX)
+            _spot_sym_actual = _spot_check.get("spot_symbol", raw_arg)
+            if _spot_sym_actual != raw_arg.upper():
+                raw_arg = _spot_sym_actual  # تحديث الرمز للتحليل
         except Exception:
             pass  # عند الخطأ → تابع التحليل
 
@@ -2231,15 +2236,20 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _use_futures_an = (_mkttype_an == "futures")
     _mkt_arg_an = "futures" if _use_futures_an else "spot"  # إصلاح #258
 
-    # TK4: التحقق من توفر الأصل في Spot قبل التحليل العميق
+    # TK4/TK1b: التحقق من توفر الأصل في Spot مع X-prefix تلقائي
     if not _use_futures_an:
         try:
             _spot_chk_an = await engine.data_layer.check_spot_available(raw_arg)
-            if not _spot_chk_an.get("available", True) and _spot_chk_an.get("message"):
+            if not _spot_chk_an.get("available", True):
                 await _get_message(update, context).reply_text(
-                    _spot_chk_an["message"], parse_mode="Markdown"
+                    _spot_chk_an.get("message", f"⚠️ {raw_arg} غير متاح في Spot"),
+                    parse_mode="Markdown"
                 )
                 return
+            # TK1b: استخدام الرمز الفعلي في OKX
+            _an_sym_actual = _spot_chk_an.get("spot_symbol", raw_arg)
+            if _an_sym_actual != raw_arg.upper():
+                raw_arg = _an_sym_actual
         except Exception:
             pass
 
@@ -2583,6 +2593,25 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             class regime:
                 value = "bear_trend" if is_bearish else "bull_trend"
         _reg_a = _AnalyzeRegime()
+        # FA_an: BTC Correlation في /analyze
+        _btc_corr_an = ""
+        if symbol not in ("BTC", "BITCOIN") and _atr_a < 20:
+            try:
+                _btc_d_an   = await engine.data_layer.get_price("BTC")
+                _btc_chg_an = float((_btc_d_an or {}).get("change_24h", 0) or 0)
+                _sym_d_an   = await engine.data_layer.get_price(symbol)
+                _sym_chg_an = float((_sym_d_an or {}).get("change_24h", 0) or 0)
+                _corr_diff_an = _sym_chg_an - _btc_chg_an
+                if abs(_btc_chg_an) > 0.5 or abs(_corr_diff_an) > 2:
+                    if _corr_diff_an > 2:
+                        _btc_corr_an = f"\n• 🟢 {symbol} يتفوق على BTC بـ {_corr_diff_an:+.1f}% — قوة نسبية"
+                    elif _corr_diff_an < -2:
+                        _btc_corr_an = f"\n• 🔴 {symbol} أضعف من BTC بـ {_corr_diff_an:+.1f}% — ضعف نسبي"
+                    else:
+                        _btc_corr_an = f"\n• ⚪ {symbol} يتحرك مع السوق (BTC: {_btc_chg_an:+.1f}%)"
+            except Exception:
+                pass
+
         # GG1 (#1945/#1933/#2007/#2080/#2100): تمرير Market Phase الصحيح لـ _build_professional_block
         _mp_for_block = _mp_ar_for_groq if _mp_ar_for_groq else ""
         if _mp_for_block and hasattr(_reg_a, "market_phase"):
@@ -2638,6 +2667,9 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # إصلاح #250-B: "📌 أصل مُرمَّز" في /analyze كما في /signal
         if _is_perp_an:
             parts.append(f"📌 {symbol} — أصل مُرمَّز (Perpetual) على OKX")
+        # FA_an: إضافة BTC correlation في /analyze
+        if _btc_corr_an:
+            parts.append(_clean_md(_btc_corr_an.strip()))
         # إصلاح #250-A: رابط /chart في /analyze كما في /signal
         parts.append(f"📊 للتحليل البصري: /chart {symbol}")
         # DD1c (#1891/#1905): تحذير بيانات مشوهة في /analyze
@@ -2869,15 +2901,20 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _use_futures_qs = (_mkttype_qs == "futures")
     _mkt_arg_qs = "futures" if _use_futures_qs else "spot"  # إصلاح #258
 
-    # TK3: التحقق من توفر الأصل في Spot قبل التحليل الأولي
+    # TK3/TK1b: التحقق من توفر الأصل في Spot مع X-prefix تلقائي
     if not _use_futures_qs:
         try:
             _spot_chk_qs = await engine.data_layer.check_spot_available(qs_sym)
-            if not _spot_chk_qs.get("available", True) and _spot_chk_qs.get("message"):
+            if not _spot_chk_qs.get("available", True):
                 await _get_message(update, context).reply_text(
-                    _spot_chk_qs["message"], parse_mode="Markdown"
+                    _spot_chk_qs.get("message", f"⚠️ {qs_sym} غير متاح في Spot"),
+                    parse_mode="Markdown"
                 )
                 return
+            # TK1b: استخدام الرمز الفعلي
+            _qs_sym_actual = _spot_chk_qs.get("spot_symbol", qs_sym)
+            if _qs_sym_actual != qs_sym.upper():
+                qs_sym = _qs_sym_actual
         except Exception:
             pass
 
