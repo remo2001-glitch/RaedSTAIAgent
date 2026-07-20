@@ -1810,9 +1810,10 @@ class DataLayer:
 
     async def check_spot_available(self, symbol: str) -> dict:
         """
-        TK1: التحقق من توفر أصل مُرمَّز في سوق Spot على OKX.
-        يُستدعى قبل أي تحليل Spot للأصول المُرمَّزة.
-        يُعيد: {"available": bool, "spot_price": float, "message": str}
+        TK1/TK1b: التحقق من توفر أصل مُرمَّز في سوق Spot على OKX.
+        TK1b: يجرب XSYMBOL-USDT تلقائياً إذا فشل SYMBOL-USDT
+        (جميع الأسهم المُرمَّزة في OKX تبدأ بـ X: XAMZN, XSPCX, XAAPL...)
+        يُعيد: {"available": bool, "spot_price": float, "spot_symbol": str, "message": str}
         """
         sym = symbol.upper()
         # تحقق من Cache أولاً (30 دقيقة)
@@ -1820,37 +1821,64 @@ class DataLayer:
         if cached := _cached(_cache_key, "spot_available"):
             return cached
 
-        try:
-            # محاولة جلب سعر Spot من OKX
-            inst_id = f"{sym}-USDT"
-            data = await _fetch(
-                f"https://www.okx.com/api/v5/market/ticker?instId={inst_id}&instType=SPOT",
-                timeout=5
-            )
-            if data and data.get("code") == "0" and data.get("data"):
-                d = data["data"][0]
-                spot_price = float(d.get("last", 0) or 0)
-                if spot_price > 0:
-                    result = {
-                        "available": True,
-                        "spot_price": spot_price,
-                        "message": f"✅ {sym} متاح في Spot على OKX بسعر ${spot_price:,.4f}"
-                    }
-                    _store(_cache_key, result, ttl=1800)  # 30 دقيقة
-                    return result
+        async def _try_spot(inst_id: str) -> float:
+            try:
+                data = await _fetch(
+                    f"https://www.okx.com/api/v5/market/ticker?instId={inst_id}&instType=SPOT",
+                    timeout=5
+                )
+                if data and data.get("code") == "0" and data.get("data"):
+                    return float(data["data"][0].get("last", 0) or 0)
+            except Exception:
+                pass
+            return 0.0
 
-            # غير متاح في Spot
+        try:
+            # المحاولة 1: SYMBOL-USDT (مثل SPCX-USDT)
+            spot_price = await _try_spot(f"{sym}-USDT")
+            spot_sym = sym
+
+            # TK1b: المحاولة 2: XSYMBOL-USDT (مثل XSPCX-USDT)
+            if spot_price <= 0 and not sym.startswith("X"):
+                x_sym = f"X{sym}"
+                spot_price = await _try_spot(f"{x_sym}-USDT")
+                if spot_price > 0:
+                    spot_sym = x_sym
+
+            # TK1b: المحاولة 3: إذا المستخدم كتب XSYMBOL → جرب بدون X أيضاً
+            if spot_price <= 0 and sym.startswith("X") and len(sym) > 2:
+                bare_sym = sym[1:]  # XSPCX → SPCX
+                spot_price = await _try_spot(f"{bare_sym}-USDT")
+                if spot_price > 0:
+                    spot_sym = bare_sym
+
+            if spot_price > 0:
+                result = {
+                    "available":    True,
+                    "spot_price":   spot_price,
+                    "spot_symbol":  spot_sym,  # الرمز الفعلي في OKX (قد يختلف عن المدخل)
+                    "message":      f"✅ {spot_sym} متاح في Spot على OKX"
+                }
+                _store(_cache_key, result, ttl=1800)
+                return result
+
+            # غير متاح في Spot بعد كل المحاولات
             result = {
-                "available": False,
-                "spot_price": 0.0,
-                "message": f"⚠️ *{sym}* غير متاح في السوق الفوري (Spot) على OKX حالياً\nمتاح في Futures فقط"
+                "available":   False,
+                "spot_price":  0.0,
+                "spot_symbol": sym,
+                "message": (
+                    f"⚠️ *{sym}* غير متاح في السوق الفوري (Spot) على OKX حالياً\n"
+                    f"• الأسهم المُرمَّزة في OKX تبدأ بـ X (مثل X{sym})\n"
+                    f"• أو جرّب في Futures"
+                )
             }
-            _store(_cache_key, result, ttl=900)  # 15 دقيقة
+            _store(_cache_key, result, ttl=900)
             return result
 
         except Exception as e:
             logger.debug(f"check_spot_available({sym}): {e}")
-            return {"available": True, "spot_price": 0.0, "message": ""}  # افتراض متاح عند الخطأ
+            return {"available": True, "spot_price": 0.0, "spot_symbol": sym, "message": ""}
 
     async def get_fear_greed(self) -> Dict:
         _DEFAULT = {"value": 50, "label": "Neutral", "label_ar": "محايد"}
