@@ -1704,11 +1704,27 @@ class DataLayer:
 
 
     async def _hist_okx(self, symbol: str, days: int, quote: str = "USDT") -> list:
-        """OKX Klines — OHLCV تاريخي للعملات الصغيرة.
-        إصلاح/تطوير #188: quote اختياري (USDT افتراضياً = بدون تغيير)."""
+        """OKX Klines — OHLCV تاريخي للعملات والأسهم المُرمَّزة.
+        OKX agent-skills: Spot=XSYMBOL-USDT | SWAP=SYMBOL-USDT-SWAP
+        DL1c_fix: يجرب XSYMBOL-USDT تلقائياً للأسهم المُرمَّزة."""
         try:
-            inst_id = f"{symbol.upper()}-{quote.upper()}"
-            limit   = min(days, 300)
+            sym_upper = symbol.upper()
+            inst_id   = f"{sym_upper}-{quote.upper()}"
+            limit     = min(days, 300)
+
+            # DL1c_fix: إذا بدأ الرمز بـ X → جرب مباشرة كـ Spot
+            if sym_upper.startswith("X") and len(sym_upper) > 2:
+                data_x = await _fetch(
+                    self.session,
+                    f"https://www.okx.com/api/v5/market/history-candles?instId={inst_id}&bar=1D&limit={limit}",
+                    headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+                    retries=2,
+                )
+                if data_x and isinstance(data_x, dict) and data_x.get("data"):
+                    candles_x = _parse_okx_candles(data_x["data"])
+                    if len(candles_x) >= 5:
+                        return candles_x
+
             data = await _fetch(
                 self.session,
                 f"https://www.okx.com/api/v5/market/history-candles?instId={inst_id}&bar=1D&limit={limit}",
