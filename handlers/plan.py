@@ -108,17 +108,22 @@ async def _resolve_custom_symbols(raw_symbols, tier, data_layer):
     """تطوير #188 (Phase 2): يُطبِّق resolve_symbol على كل رمز مُدخَل من
     المستخدم في /weekly و/monthly. التحليل دائماً مقابل USDT
     (res.base) — مع PairResolution لكل رمز لإلحاق فقرة/سطر BTC/ETH
-    الإضافي عبر build_pair_addon_inline داخل سطر العملة."""
-    resolved, resolutions = [], []
+    الإضافي عبر build_pair_addon_inline داخل سطر العملة.
+    PLAN_NAME_fix: يُعيد الرموز الأصلية (XGOOGL) للعرض مع base للتحليل."""
+    resolved, resolutions, display_syms = [], [], []
     for raw in raw_symbols:
+        raw_orig = raw.upper()  # حفظ الرمز الأصلي
         raw = normalize_symbol_alias(raw)  # X6: تطبيع المرادفات
         try:
             res = await resolve_symbol(raw, tier, data_layer)
         except Exception:
             res = PairResolution(base=raw)
-        resolved.append(res.base)
+        # PLAN_NAME_fix: للأصول X-prefix، أبقِ الرمز الأصلي للعرض
+        display_sym = raw_orig if (raw_orig.startswith("X") and len(raw_orig) > 2) else res.base
+        resolved.append(res.base)      # للتحليل (GOOGL)
         resolutions.append(res)
-    return resolved, resolutions
+        display_syms.append(display_sym)  # للعرض (XGOOGL)
+    return resolved, resolutions, display_syms
 
 
 def _clean(text: str) -> str:
@@ -433,9 +438,10 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _raw_syms  = [a.upper() for a in args[:7]]  # إصلاح #833: حد 7 عملات
         # تطوير #188 (Phase 2): دعم أزواج BTC/ETH (ماسي+ فقط)
         _tier_pm   = _sm.get_tier(update.effective_user.id)
-        symbols, _resols_pm = await _resolve_custom_symbols(
+        symbols, _resols_pm, _display_syms_pm = await _resolve_custom_symbols(
             _raw_syms, _tier_pm, engine.data_layer)
         _pair_resolutions = dict(zip(symbols, _resols_pm))
+        _display_map_pm = dict(zip(symbols, _display_syms_pm))
         sym_str    = ", ".join(symbols)
         plan_label = f"خطة مخصصة لـ {sym_str}"
 
@@ -714,7 +720,9 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # M#99: نوع الصفقة planmonth — لا نُكرر "⚪ انتظار" مع dir_ar
             _d4 = (cand or {}).get("direction","neutral")
             _t4 = "📈 Spot/Long" if _d4=="long" else "📉 Short" if _d4=="short" else ""
-            line = f"💎 *{sym_p}* — {price_str}"
+            # PLAN_NAME_fix: استخدام الرمز الأصلي للعرض (XGOOGL وليس GOOGL)
+            _disp_sym_pm = _display_map_pm.get(sym_p, sym_p) if "_display_map_pm" in dir() else sym_p
+            line = f"💎 *{_disp_sym_pm}* — {price_str}"
             if cand:
                 line += f" | {dir_ar} | ثقة: {conf:.0%}{conf_warn}"
                 if _t4:
@@ -926,9 +934,10 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _raw_syms2 = [a.upper() for a in args[:7]]
         # تطوير #188 (Phase 2): دعم أزواج BTC/ETH (ماسي+ فقط)
         _tier_pw   = _sm.get_tier(update.effective_user.id)
-        symbols, _resols_pw = await _resolve_custom_symbols(
+        symbols, _resols_pw, _display_syms_pw = await _resolve_custom_symbols(
             _raw_syms2, _tier_pw, engine.data_layer)
         _pair_resolutions = dict(zip(symbols, _resols_pw))
+        _display_map_pw = dict(zip(symbols, _display_syms_pw))
         sym_str2 = ", ".join(symbols)
         plan_label = f"خطة مخصصة لـ {sym_str2}"
     else:
@@ -1159,11 +1168,11 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                      if rsi_w > rsi_t else
                                      f"  • RSI يرتفع فوق {rsi_t} (حالياً {rsi_w:.0f})")
                         # إصلاح #428 (J2): إضافة نسبة البُعد عن EMA50
-                _ema50_dist = abs(price - ema50_w) / max(ema50_w, 1) * 100
-                _ema_cond = (f"  • ✅ السعر فوق EMA50 ({_fmt_price(ema50_w)}) — مُستوفى"
-                             if price > ema50_w else
-                             f"  • إغلاق فوق EMA50 ({_fmt_price(ema50_w)} — بُعد {_ema50_dist:.1f}%)")
-                entry_lines = [
+                        _ema50_dist = abs(price - ema50_w) / max(ema50_w, 1) * 100
+                        _ema_cond = (f"  • ✅ السعر فوق EMA50 ({_fmt_price(ema50_w)}) — مُستوفى"
+                                     if price > ema50_w else
+                                     f"  • إغلاق فوق EMA50 ({_fmt_price(ema50_w)} — بُعد {_ema50_dist:.1f}%)")
+                        entry_lines = [
                             f"  ⏳ شروط الدخول:",
                             _rsi_cond,
                             _ema_cond,
@@ -1180,8 +1189,10 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # تطوير #188 (Phase 2): فقرة الزوج المُكثَّفة إن وُجدت
                 _res_w = _pair_resolutions.get(sym)
                 _pair_inline = await build_pair_addon_inline(_res_w, engine.data_layer) if _res_w else ""
+                # PLAN_NAME_fix: استخدام الرمز الأصلي (XGOOGL وليس GOOGL)
+                _disp_sym_pw = _display_map_pw.get(sym, sym) if "_display_map_pw" in dir() else sym
                 lines += [
-                    f"💎 *{sym}*{price_str}{_pair_inline}",
+                    f"💎 *{_disp_sym_pw}*{price_str}{_pair_inline}",
                     f"  الإشارة: {dir_ar} | الثقة: {signal.confidence:.0%}{conf_warning}",
                     f"  الاستراتيجية: {strat_name}",
                 ] + entry_lines + [""]

@@ -1907,7 +1907,8 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _mkt_label_display = "Spot" if not _use_futures else "Perpetual"
             full_text += f"\n\n📌 *{_display_symbol}* — أصل مُرمَّز ({_mkt_label_display}) على OKX"
         # إصلاح #236: ربط /signal ↔ /chart للتكامل التحليلي
-        full_text += f"\n📊 للتحليل البصري: /chart {symbol}"
+        # CHART_SIG_fix: استخدام _display_symbol (XSPY وليس SPY)
+        full_text += f"\n📊 للتحليل البصري: /chart {_display_symbol}"
         await msg.edit_text(full_text, parse_mode=ParseMode.MARKDOWN)
 
     except Exception as e:
@@ -2944,6 +2945,7 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     args      = context.args or []
     raw_arg   = args[0].upper() if args else "BTC"
+    qs_sym    = raw_arg  # QS_fix: تعريف qs_sym = raw_arg
     user_id_q = update.effective_user.id if update.effective_user else 0
     tier_q    = _sm.get_tier(user_id_q)
 
