@@ -578,8 +578,8 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # إصلاح #280/#287: معالجة أوسع — microstructure اختيارية
         candidates = []
         for i, sym in enumerate(symbols):
-            # TK5: تحقق من توفر الأصل في Spot (إذا Spot plan)
-            if not _use_futures_pw:
+            # TK5_fix: تحقق من توفر الأصل في Spot في plan_month
+            if not _use_futures_pm:  # إصلاح: كان _use_futures_pw خطأ
                 try:
                     _sp_chk = await engine.data_layer.check_spot_available(sym)
                     if not _sp_chk.get("available", True):
@@ -1024,11 +1024,11 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         _buy_signals = []  # إصلاح #382: تجميع إشارات الشراء
         for i, sym in enumerate(symbols):
-            # TK6: تحقق من توفر الأصل في Spot (إذا Spot plan_month)
-            if not _use_futures_pm:
+            # TK6_fix: تحقق من توفر الأصل في Spot في plan_week
+            if not _use_futures_pw:  # إصلاح: كان _use_futures_pm خطأ
                 try:
-                    _sp_chk_pm = await engine.data_layer.check_spot_available(sym)
-                    if not _sp_chk_pm.get("available", True):
+                    _sp_chk_pw = await engine.data_layer.check_spot_available(sym)
+                    if not _sp_chk_pw.get("available", True):
                         continue  # تجاهل الأصل غير المتاح في Spot
                 except Exception:
                     pass

@@ -1560,6 +1560,8 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     args    = context.args or ["BTC"]
     raw_arg = args[0].upper()
+    # TK_name_fix: حفظ الرمز الأصلي للعرض (XSPCX وليس SPCX)
+    _display_symbol = raw_arg  # يُستخدم في العرض للمستخدم
 
     # SYM_WARN (#2570/#2572): تحذير تضارب الرموز
     if raw_arg in _AMBIGUOUS_SYMBOLS:
@@ -1655,13 +1657,23 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "HBAR","EGLD","ONE","ZIL","ICX","WAVES","NEO","QTUM",
         "KAVA","BAND","RSR","NMR","RLC","ANKR","SKL","CKB",
     }
+    # TK_tier_fix: قواعد الوصول للأسهم المُرمَّزة
+    # Futures: جميع الباقات | Spot: ذهبي+ فقط
+    if _is_perp_sig and _use_futures:
+        pass  # الأسهم المُرمَّزة Futures → جميع الباقات بدون قيود
+    elif _is_perp_sig and not _use_futures:
+        # Spot للأسهم المُرمَّزة → ذهبي+ فقط
+        if tier2 not in ("gold", "diamond", "admin"):
+            await _get_message(update, context).reply_text(
+                f"🔒 *تحليل {_display_symbol} الفوري — ذهبي وأعلى*\n\n"
+                f"التداول الفوري للأسهم المُرمَّزة يتطلب باقة ذهبي أو أعلى.\n"
+                f"⬆️ للترقية: /upgrade",
+                parse_mode="Markdown"); return
     # إصلاح #1683: diamond/admin يصل لأي عملة بدون قيود
-    if tier2 in ("diamond", "admin"):
+    elif tier2 in ("diamond", "admin"):
         pass  # ماسي+ = وصول كامل لجميع العملات
     elif tier2 in ("gold",) and symbol.upper() in _ALWAYS_ALLOWED:
         pass  # ذهبي: القائمة الموسّعة مسموحة
-    elif _is_perp_sig and tier2 in ("gold",):
-        pass  # ذهبي: أصول مُرمَّزة مسموحة
     elif not is_symbol_allowed(symbol, tier2):
         await _get_message(update, context).reply_text(
             (
@@ -1673,7 +1685,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ), parse_mode="Markdown"); return
 
     msg = await _get_message(update, context).reply_text(
-        f"📡 جاري تحليل {symbol} عبر 5 مصادر...\n"
+        f"📡 جاري تحليل {_display_symbol} عبر 5 مصادر...\n"
         "⏳ قد يستغرق 20-30 ثانية — يُرجى الانتظار"
     )
 
@@ -1736,6 +1748,9 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             macro_data={"fear_greed": fear_val},
             regime=regime,
         )
+        # TK_name_fix: تعديل symbol المعروض للمستخدم (XSPCX بدلاً من SPCX)
+        if hasattr(signal, "symbol") and _display_symbol != symbol:
+            signal.symbol = _display_symbol
         strategy, params = engine.strategy_router.select(regime, signal)
         atr_pct = _calc_atr(candles)
         price   = float(candles[-1]["close"]) if candles else 0.0
@@ -1890,7 +1905,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if _is_perp_sig:
             # TK_label_fix: اعرض نوع السوق الصحيح
             _mkt_label_display = "Spot" if not _use_futures else "Perpetual"
-            full_text += f"\n\n📌 *{symbol}* — أصل مُرمَّز ({_mkt_label_display}) على OKX"
+            full_text += f"\n\n📌 *{_display_symbol}* — أصل مُرمَّز ({_mkt_label_display}) على OKX"
         # إصلاح #236: ربط /signal ↔ /chart للتكامل التحليلي
         full_text += f"\n📊 للتحليل البصري: /chart {symbol}"
         await msg.edit_text(full_text, parse_mode=ParseMode.MARKDOWN)
@@ -2241,6 +2256,8 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     args   = context.args or []
     raw_arg = args[0].upper()
+    # TK_name_fix: حفظ الرمز الأصلي للعرض
+    _display_symbol_an = raw_arg
 
     # تطوير #221: سؤال نوع السوق (Spot/Futures)
     # إصلاح #237-A: الأصول المُرمَّزة → Futures تلقائياً بدون سؤال
@@ -2680,7 +2697,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         fib_lines_a = _fmt_fib_lines(fib_a, price)
 
         parts = [
-            f"🧠 *تحليل {symbol} — رائد*",
+            f"🧠 *تحليل {_display_symbol_an} — رائد*",
             "━━━━━━━━━━━━━━━━━━",
             f"💰 السعر: {_fmt_price(price)} ({change_sign}{change_24h:.2f}%)",
             f"📊 RSI: {rsi_lbl} | Fear & Greed: {fear_val}",
@@ -2715,12 +2732,12 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if _is_perp_an:
             # TK_label_fix: اعرض نوع السوق الصحيح
             _mkt_label_an_display = "Spot" if not _use_futures_an else "Perpetual"
-            parts.append(f"📌 {symbol} — أصل مُرمَّز ({_mkt_label_an_display}) على OKX")
+            parts.append(f"📌 {_display_symbol_an} — أصل مُرمَّز ({_mkt_label_an_display}) على OKX")
         # FA_an: إضافة BTC correlation في /analyze
         if _btc_corr_an:
             parts.append(_clean_md(_btc_corr_an.strip()))
         # إصلاح #250-A: رابط /chart في /analyze كما في /signal
-        parts.append(f"📊 للتحليل البصري: /chart {symbol}")
+        parts.append(f"📊 للتحليل البصري: /chart {_display_symbol_an}")
         # DD1c (#1891/#1905): تحذير بيانات مشوهة في /analyze
         if _data_corrupted_an:
             parts += [
@@ -2941,8 +2958,10 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _pre_is_asset = await engine.data_layer.is_tokenized_stock(raw_arg.replace("BTC","").replace("ETH","") or raw_arg)
             except Exception:
                 _pre_is_asset = False
-        if _pre_is_asset:
-            _mkttype_qs = "futures"  # Futures تلقائياً للأصول المُرمَّزة
+        # TK_ROOT_fix: X-prefix = Spot مُرمَّز → لا نُجبر Futures
+        _is_x_qs = raw_arg.upper().startswith("X") and len(raw_arg) > 2
+        if _pre_is_asset and not _is_x_qs:
+            _mkttype_qs = "futures"  # Futures تلقائياً للأصول بدون X
         else:
             sent_qs = await _ask_market_type(update, context, "quicksignal", raw_arg, tier_q)
             if sent_qs:
