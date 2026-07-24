@@ -1596,7 +1596,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # TK2_fix: الأصول التي تبدأ بـ X (XSPCX, XAMZN...) أصول OKX Spot مؤكدة
         # /quicksignal يُثبت أنها متاحة — تجاوز check_spot مباشرة
         if raw_arg.upper().startswith("X") and len(raw_arg) > 2:
-            from data_layer import resolve_stock_symbol as _rss
+            from core.data_layer import resolve_stock_symbol as _rss
             _stock_res = _rss(raw_arg, "spot")
             _resolve_sym = _stock_res.get("base", raw_arg[1:])  # XSPCX → SPCX
         else:
@@ -1610,7 +1610,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
                 _spot_sym_actual = _spot_check.get("spot_symbol", raw_arg)
                 if _spot_sym_actual != raw_arg.upper():
-                    from data_layer import resolve_stock_symbol as _rss
+                    from core.data_layer import resolve_stock_symbol as _rss
                     _stock_res = _rss(_spot_sym_actual, "spot")
                     _resolve_sym = _stock_res.get("base", raw_arg)
                     raw_arg = _spot_sym_actual
@@ -2253,7 +2253,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _use_futures_an:
         if raw_arg.upper().startswith("X") and len(raw_arg) > 2:
             # TK4_fix: XSPCX/XAMZN أصول Spot مؤكدة — تجاوز check
-            from data_layer import resolve_stock_symbol as _rss_an
+            from core.data_layer import resolve_stock_symbol as _rss_an
             _stock_res_an = _rss_an(raw_arg, "spot")
             _resolve_sym = _stock_res_an.get("base", raw_arg[1:])  # XSPCX → SPCX
         else:
@@ -2267,7 +2267,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
                 _an_sym_actual = _spot_chk_an.get("spot_symbol", raw_arg)
                 if _an_sym_actual != raw_arg.upper():
-                    from data_layer import resolve_stock_symbol as _rss_an
+                    from core.data_layer import resolve_stock_symbol as _rss_an
                     _stock_res_an = _rss_an(_an_sym_actual, "spot")
                     _resolve_sym = _stock_res_an.get("base", raw_arg)
                     raw_arg = _an_sym_actual
