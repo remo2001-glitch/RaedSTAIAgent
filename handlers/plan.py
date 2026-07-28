@@ -939,7 +939,9 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _pair_resolutions = dict(zip(symbols, _resols_pw))
         _display_map_pw = dict(zip(symbols, _display_syms_pw))
         sym_str2 = ", ".join(symbols)
-        plan_label = f"خطة مخصصة لـ {sym_str2}"
+        # PLAN_HDR_fix: استخدام display names (XGOOGL وليس GOOGL)
+        _display_sym_str2 = ", ".join(_display_syms_pw) if _display_syms_pw else sym_str2
+        plan_label = f"خطة مخصصة لـ {_display_sym_str2}"
     else:
         # إصلاح P3: Futures/Spot تحدد قائمة العملات
         if _use_futures_pw:

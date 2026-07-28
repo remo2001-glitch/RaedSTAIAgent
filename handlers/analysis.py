@@ -1771,13 +1771,23 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # BB1b (#1550/#1553/#1574/#1575): فحص جودة البيانات — انهيار حاد
         _pve50_chk = float(regime.metrics.get("price_vs_ema50", 0) or 0)
-        # FF3b: كشف فساد EMA50 من حساب مستقل في /signal
+        # FF3b/EMA_spot_fix: كشف فساد EMA50 من حساب مستقل في /signal
         _ema50_sig_corrupted = False
+        _e50_sig_raw = 0.0
         if candles and len(candles) >= 50:
             try:
                 _cls_sig = [float(c.get("close", 0)) for c in candles if c.get("close")]
                 _e50_sig_raw = sum(_cls_sig[-50:]) / 50 if len(_cls_sig) >= 50 else price
                 _ema50_sig_corrupted = (_e50_sig_raw > price * 3.0)
+            except Exception: pass
+        elif candles and len(candles) >= 10:
+            # EMA_spot_fix: بيانات محدودة (X-prefix Spot جديد) → احسب EMA من ما لديك
+            try:
+                _cls_sig = [float(c.get("close", 0)) for c in candles if c.get("close")]
+                _e50_sig_raw = sum(_cls_sig) / len(_cls_sig) if _cls_sig else price
+                _pve50_approx = (price - _e50_sig_raw) / max(_e50_sig_raw, 0.0001) * 100
+                if abs(_pve50_approx) > 1:  # إذا الفرق واضح → استخدمه
+                    _ema50_sig_corrupted = True
             except Exception: pass
         _data_corrupted = (atr_pct > 25 or rsi < 5 or _pve50_chk < -50 or _ema50_sig_corrupted)
         if _data_corrupted:
@@ -1823,11 +1833,15 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # FA: عتبة diff من 3% → 2% + شرط BTC 0.5%
                 if abs(_btc_chg) > 0.5 or abs(_corr_diff) > 2:
                     if _corr_diff > 2:
-                        _btc_corr_txt = f"\n• 🟢 {symbol} يتفوق على BTC بـ {_corr_diff:+.1f}% — قوة نسبية"
+                        # FA_bug_fix: مسافة قبل الرمز لمنع التصاق الحروف العربية
+                        _sym_disp = f" {symbol}"  # مسافة واقية
+                        _btc_corr_txt = f"\n• 🟢{_sym_disp} يتفوق على BTC بـ {_corr_diff:+.1f}% — قوة نسبية"
                     elif _corr_diff < -2:
-                        _btc_corr_txt = f"\n• 🔴 {symbol} أضعف من BTC بـ {_corr_diff:+.1f}% — ضعف نسبي"
+                        _sym_disp = f" {symbol}"
+                        _btc_corr_txt = f"\n• 🔴{_sym_disp} أضعف من BTC بـ {_corr_diff:+.1f}% — ضعف نسبي"
                     else:
-                        _btc_corr_txt = f"\n• ⚪ {symbol} يتحرك مع السوق (BTC: {_btc_chg:+.1f}%)"
+                        _sym_disp = f" {symbol}"
+                        _btc_corr_txt = f"\n• ⚪{_sym_disp} يتحرك مع السوق (BTC: {_btc_chg:+.1f}%)"
             except Exception:
                 pass
 
@@ -1984,6 +1998,20 @@ async def cmd_backtest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         price_data = await engine.data_layer.get_historical_prices(symbol, days=1095)
         price_data = price_data if isinstance(price_data, list) else []
+
+        # BT1_fix: Yahoo Finance fallback للأسهم المُرمَّزة
+        if len(price_data) < 90:
+            try:
+                from core.data_layer import resolve_stock_symbol as _rss_bt
+                _stk_bt = _rss_bt(symbol)
+                if _stk_bt.get("is_stock") and _stk_bt.get("yahoo"):
+                    _yahoo_bt = await engine.data_layer._ohlcv_yahoo(
+                        _stk_bt["yahoo"], days=1095)
+                    if _yahoo_bt and len(_yahoo_bt) >= 90:
+                        price_data = _yahoo_bt
+                        logger.info(f"BT1_fix: {symbol} ← Yahoo({_stk_bt['yahoo']}) {len(price_data)} يوم")
+            except Exception as _bt_e:
+                logger.debug(f"BT1_fix Yahoo: {_bt_e}")
 
         if len(price_data) < 90:
             await msg.edit_text(
@@ -2668,12 +2696,13 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _sym_chg_an = float((_sym_d_an or {}).get("change_24h", 0) or 0)
                 _corr_diff_an = _sym_chg_an - _btc_chg_an
                 if abs(_btc_chg_an) > 0.5 or abs(_corr_diff_an) > 2:
+                    _sym_an_disp = f" {symbol}"  # FA_bug_fix: مسافة واقية
                     if _corr_diff_an > 2:
-                        _btc_corr_an = f"\n• 🟢 {symbol} يتفوق على BTC بـ {_corr_diff_an:+.1f}% — قوة نسبية"
+                        _btc_corr_an = f"\n• 🟢{_sym_an_disp} يتفوق على BTC بـ {_corr_diff_an:+.1f}% — قوة نسبية"
                     elif _corr_diff_an < -2:
-                        _btc_corr_an = f"\n• 🔴 {symbol} أضعف من BTC بـ {_corr_diff_an:+.1f}% — ضعف نسبي"
+                        _btc_corr_an = f"\n• 🔴{_sym_an_disp} أضعف من BTC بـ {_corr_diff_an:+.1f}% — ضعف نسبي"
                     else:
-                        _btc_corr_an = f"\n• ⚪ {symbol} يتحرك مع السوق (BTC: {_btc_chg_an:+.1f}%)"
+                        _btc_corr_an = f"\n• ⚪{_sym_an_disp} يتحرك مع السوق (BTC: {_btc_chg_an:+.1f}%)"
             except Exception:
                 pass
 
