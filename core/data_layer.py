@@ -55,8 +55,8 @@ _TOKENIZED_STOCK_MAP = {
     "XHOOD": {"okx_spot": "XHOOD",  "okx_futures": "HOOD",  "yahoo": "HOOD",  "base": "HOOD"},
     "MSTR":  {"okx_spot": "XMSTR",  "okx_futures": "MSTR",  "yahoo": "MSTR",  "base": "MSTR"},
     "XMSTR": {"okx_spot": "XMSTR",  "okx_futures": "MSTR",  "yahoo": "MSTR",  "base": "MSTR"},
-    "SPCX":  {"okx_spot": "XSPCX",  "okx_futures": "SPCX",  "yahoo": None,    "base": "SPCX"},
-    "XSPCX": {"okx_spot": "XSPCX",  "okx_futures": "SPCX",  "yahoo": None,    "base": "SPCX"},
+    "SPCX":  {"okx_spot": "XSPCX",  "okx_futures": "SPCX",  "yahoo": "SPY",   "base": "SPCX", "yahoo_proxy": True},
+    "XSPCX": {"okx_spot": "XSPCX",  "okx_futures": "SPCX",  "yahoo": "SPY",   "base": "SPCX", "yahoo_proxy": True},
     # أسهم إضافية
     "BABA":  {"okx_spot": "XBABA",  "okx_futures": "BABA",  "yahoo": "BABA",  "base": "BABA"},
     "XBABA": {"okx_spot": "XBABA",  "okx_futures": "BABA",  "yahoo": "BABA",  "base": "BABA"},
