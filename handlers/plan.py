@@ -443,7 +443,9 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _pair_resolutions = dict(zip(symbols, _resols_pm))
         _display_map_pm = dict(zip(symbols, _display_syms_pm))
         sym_str    = ", ".join(symbols)
-        plan_label = f"خطة مخصصة لـ {sym_str}"
+        # PLAN_HDR_fix: استخدام display names في عنوان plan_month
+        _disp_str_pm = ", ".join(_display_syms_pm) if "_display_syms_pm" in dir() and _display_syms_pm else sym_str
+        plan_label = f"خطة مخصصة لـ {_disp_str_pm}"
 
     # إصلاح #776: دعم msg من callback
     _msg_ov = context.user_data.pop("_plan_msg_override", None)

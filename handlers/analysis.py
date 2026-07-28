@@ -1781,14 +1781,25 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _ema50_sig_corrupted = (_e50_sig_raw > price * 3.0)
             except Exception: pass
         elif candles and len(candles) >= 10:
-            # EMA_spot_fix: بيانات محدودة (X-prefix Spot جديد) → احسب EMA من ما لديك
+            # EMA_spot_fix: بيانات محدودة (X-prefix Spot جديد)
+            # نحسب EMA من جميع الشمعات المتاحة
             try:
                 _cls_sig = [float(c.get("close", 0)) for c in candles if c.get("close")]
-                _e50_sig_raw = sum(_cls_sig) / len(_cls_sig) if _cls_sig else price
-                _pve50_approx = (price - _e50_sig_raw) / max(_e50_sig_raw, 0.0001) * 100
-                if abs(_pve50_approx) > 1:  # إذا الفرق واضح → استخدمه
+                if len(_cls_sig) >= 10:
+                    # EMA حقيقية من الشمعات المتاحة
+                    _e50_sig_raw = _cls_sig[-1]  # نبدأ بالأخيرة
+                    k = 2 / (len(_cls_sig) + 1)
+                    for _c in reversed(_cls_sig[:-1]):
+                        _e50_sig_raw = _c * k + _e50_sig_raw * (1 - k)
+                    _pve50_approx = (price - _e50_sig_raw) / max(_e50_sig_raw, 0.0001) * 100
+                    # استخدم دائماً هذه القيمة بغض النظر عن الفرق
                     _ema50_sig_corrupted = True
+                    logger.info(f"EMA_spot_fix: {symbol} EMA_approx={_e50_sig_raw:.2f} ({_pve50_approx:+.1f}%)")
             except Exception: pass
+        elif not candles or len(candles) < 10:
+            # لا بيانات كافية → احسب من السعر الحالي (neutral)
+            _e50_sig_raw = price
+            _ema50_sig_corrupted = False
         _data_corrupted = (atr_pct > 25 or rsi < 5 or _pve50_chk < -50 or _ema50_sig_corrupted)
         if _data_corrupted:
             if hasattr(signal, "suggested_leverage"):
