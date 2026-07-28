@@ -133,7 +133,6 @@ def _build_commands_text(user_id: int, tier: str, tier_name: str) -> str:
         deep = [
             "/analyze — تحليل عميق بالذكاء الاصطناعي",
             "/liquidity — تحليل السيولة المتقدم",
-            "/risk — تقييم مخاطر السوق",
             "/onchain — تحليل On-Chain",
             "/planweek — خطة أسبوعية",
             "/planmonth — خطة شهرية",
@@ -339,6 +338,14 @@ async def post_init(app: Application):
         if hasattr(engine, "run_scan"):
             scheduler.register_scan(engine.run_scan)
 
+        # تسجيل المراجعة الأسبوعية الشاملة
+        try:
+            from core.weekly_review import register_with_scheduler as _reg_review
+            _reg_review(engine, scheduler._scheduler if hasattr(scheduler, "_scheduler") else scheduler)
+            logger.info("✅ weekly_review: مُسجَّل — كل ثلاثاء 04:00 UTC")
+        except Exception as _rwe:
+            logger.warning(f"weekly_review register: {_rwe}")
+
         scheduler.start()
         app.bot_data["scheduler"] = scheduler
         engine.scheduler = scheduler
@@ -356,7 +363,6 @@ async def post_init(app: Application):
         BotCommand("onchain",      "تحليل On-Chain"),
         BotCommand("liquidity",    "تحليل السيولة"),
         BotCommand("backtest",     "اختبار تاريخي"),
-        BotCommand("risk",         "تقييم مخاطر السوق"),  # R1
         BotCommand("analyze",      "تحليل عميق"),
         BotCommand("planmonth",    "خطة شهرية"),
         BotCommand("planweek",     "خطة أسبوعية"),
@@ -364,7 +370,7 @@ async def post_init(app: Application):
         BotCommand("autotrade",    "تداول تلقائي on/off"),
         BotCommand("execute",      "تنفيذ فوري"),
         BotCommand("stats",        "إحصائيات فورية"),
-
+        BotCommand("risk",         "حالة المخاطر"),
         BotCommand("events",       "الأحداث القادمة"),
         BotCommand("drift",        "حالة النموذج"),
         BotCommand("killswitch",   "Kill Switch"),
@@ -450,6 +456,14 @@ def build_app() -> Application:
     analysis_handlers.register(app)
     plan_handlers.register(app)
     trading_handlers.register(app)
+
+    # ── /review للمدير — المراجعة الأسبوعية الشاملة ──
+    try:
+        from core.weekly_review import cmd_review as _cmd_review
+        app.add_handler(CommandHandler("review", _cmd_review))
+        logger.info("✅ /review مُسجَّل — للمدير فقط")
+    except Exception as _rve:
+        logger.warning(f"/review: {_rve}")
 
 
     # T1/T2/T4 مُسجَّلة في trading_handlers.register() ✅
