@@ -1021,6 +1021,28 @@ class DataLayer:
             _store(key, results, "hist")
             return results
 
+        # ── Yahoo Finance للأسهم المُرمَّزة (BT1_fix) ─────────────
+        _stk_info = resolve_stock_symbol(symbol)
+        if _stk_info.get("is_stock") and _stk_info.get("yahoo"):
+            logger.info(f"Historical: جرب Yahoo Finance لـ {symbol}")
+            yahoo_results = await self._ohlcv_yahoo(_stk_info["yahoo"], days=days)
+            if len(yahoo_results) >= 90:
+                # تحويل format Yahoo إلى format Backtest
+                yahoo_hist = []
+                for i, c in enumerate(yahoo_results):
+                    yahoo_hist.append({
+                        "open":      c.get("open",  c.get("close", 0)),
+                        "high":      c.get("high",  c.get("close", 0)),
+                        "low":       c.get("low",   c.get("close", 0)),
+                        "close":     c.get("close", 0),
+                        "volume":    c.get("volume", 0),
+                        "timestamp": c.get("ts", i * 86400),
+                        "price":     c.get("close", 0),
+                    })
+                logger.info(f"BT1_fix: {symbol} ← Yahoo({_stk_info['yahoo']}) {len(yahoo_hist)} يوم")
+                _store(key, yahoo_hist, "hist")
+                return yahoo_hist
+
         # ── CoinGecko fallback ──────────────────────────────────
         logger.info(f"Historical: OKX فشل لـ {symbol} — CoinGecko fallback")
         results = await self._hist_coingecko(symbol, days)
