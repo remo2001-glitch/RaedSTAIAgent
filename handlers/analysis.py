@@ -3184,7 +3184,10 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 price_d, candles, fear, btc_dom = await asyncio.wait_for(
                     asyncio.gather(
                         engine.data_layer.get_price(symbol, quote, mkttype=_mkt_arg_qs),
-                        engine.data_layer.get_ohlcv(symbol, "1d", 250, quote, mkttype=_mkt_arg_qs),
+                        # T10_fix: تمرير raw_arg كـ hint للـ cache key
+                        engine.data_layer.get_ohlcv(symbol, "1d", 250, quote,
+                            mkttype=_mkt_arg_qs,
+                            _cache_hint=raw_arg.upper()),
                         engine.data_layer.get_fear_greed(),
                         engine.data_layer.get_btc_dominance(),
                         return_exceptions=True
