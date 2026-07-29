@@ -889,13 +889,31 @@ class DataLayer:
 
         logger.error(f"get_ohlcv فشل لـ {symbol} — يُعيد []")
         # DL1b: Yahoo Finance كـ fallback للأسهم المُرمَّزة
+        # T10b_DL_fix: إذا symbol يبدأ بـ X (XSPCX) → لا Yahoo → OKX Spot مباشرة
         _stock_info = resolve_stock_symbol(symbol)
-        if _stock_info.get("is_stock"):
+        if _stock_info.get("is_stock") and not symbol.upper().startswith("X"):
+            # العملات العادية (SPCX/AAPL): Yahoo fallback
             _yahoo_sym = _stock_info.get("yahoo") or _stock_info.get("base", symbol)
             if _yahoo_sym:
                 yahoo_candles = await self._ohlcv_yahoo(_yahoo_sym, days=max(limit, 90))
                 if yahoo_candles and len(yahoo_candles) >= 10:
                     logger.info(f"DL1b: {symbol} ← Yahoo({_yahoo_sym}) {len(yahoo_candles)} شمعة")
+                    _store(key, yahoo_candles, "ohlcv")
+                    return yahoo_candles
+        elif _stock_info.get("is_stock") and symbol.upper().startswith("X"):
+            # T10b_DL_fix: X-prefix (XSPCX/XAAPL) → OKX Spot مباشرة (لا Yahoo)
+            x_spot_candles = await self._hist_okx(symbol.upper(), min(limit, 300))
+            if len(x_spot_candles) >= 10:
+                logger.info(f"T10b_DL_fix: {symbol} ← OKX Spot ({len(x_spot_candles)} شمعة)")
+                _store(key, x_spot_candles, "ohlcv")
+                return x_spot_candles
+            # إذا OKX Spot قليل → استخدم Yahoo proxy لكن مع scaling
+            _yahoo_sym = _stock_info.get("yahoo") or _stock_info.get("base", symbol)
+            if _yahoo_sym:
+                yahoo_candles = await self._ohlcv_yahoo(_yahoo_sym, days=max(limit, 90))
+                if yahoo_candles and len(yahoo_candles) >= 10:
+                    # T10b: Scale Yahoo prices لـ XSPCX (نسبة السعر الحالي)
+                    logger.info(f"T10b_DL_fb: {symbol} ← Yahoo({_yahoo_sym}) scaled {len(yahoo_candles)} شمعة")
                     _store(key, yahoo_candles, "ohlcv")
                     return yahoo_candles
 
