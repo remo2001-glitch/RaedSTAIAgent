@@ -1671,6 +1671,17 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _is_x_prefix = _raw_symbol.startswith("X") and len(_raw_symbol) > 2
                 if not _is_x_prefix and await engine.data_layer.is_tokenized_stock(_raw_symbol):
                     _mkttype = "futures"  # أصل مُرمَّز بدون X → Futures تلقائياً
+                # T13_fix: السلع (CL/NL/GC..) → Futures تلقائياً بدون سؤال
+                elif engine.data_layer.is_commodity_symbol(_raw_symbol):
+                    _mkttype = "futures"
+            except Exception:
+                pass
+        # T13_fix: تحقق إضافي للسلع خارج نطاق diamond
+        if _mkttype is None:
+            try:
+                from core.data_layer import is_commodity_symbol as _is_comm
+                if _is_comm((context.args or ["BTC"])[0].upper()):
+                    _mkttype = "futures"
             except Exception:
                 pass
         if _mkttype is None:
@@ -2127,7 +2138,13 @@ async def cmd_backtest(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # T12_fix: رسالة مخصصة لأزواج BTC
             _is_btc_pair_bt = (symbol.endswith("BTC") or symbol.endswith("ETH")) and symbol not in ("BTC","ETH")
             if _is_btc_pair_bt:
-                _base_bt = symbol.replace("BTC","").replace("ETH","")
+                # T12b_fix: استخراج الرمز الأساسي بشكل صحيح
+                _base_bt = symbol
+                for _suffix in ["BTC", "ETH", "USDT"]:
+                    if _base_bt.endswith(_suffix) and _base_bt != _suffix:
+                        _base_bt = _base_bt[:-len(_suffix)]
+                        break
+                _base_bt = _base_bt or symbol  # حماية من الفراغ
                 await msg.edit_text(
                     f"⚠️ /backtest لأزواج BTC/ETH غير مدعوم\n"
                     f"البيانات التاريخية لـ {symbol} غير متاحة\n\n"
@@ -3167,6 +3184,13 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_perp_stock:
         display_symbol = f"{symbol} (Perp)"
 
+    # T10b_fix: X-prefix Spot (XSPCX/XAAPL...) → جلب OKX Spot مباشرة
+    _is_x_spot_qs = (raw_arg.upper().startswith("X") and
+                     len(raw_arg) > 2 and
+                     not is_perp_stock)
+    if _is_x_spot_qs:
+        display_symbol = raw_arg.upper()  # XSPCX وليس SPCX
+
     try:
         # M#119: timeout صارم لمنع التجمد
         try:
@@ -3180,11 +3204,23 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         return_exceptions=True
                     ), timeout=30.0
                 )
+            elif _is_x_spot_qs:
+                # T10b_fix: X-prefix Spot → جلب من OKX Spot مباشرة
+                _x_spot_sym = raw_arg.upper()  # XSPCX
+                price_d, candles, fear, btc_dom = await asyncio.wait_for(
+                    asyncio.gather(
+                        engine.data_layer.get_price(_x_spot_sym, "USDT", mkttype="spot"),
+                        engine.data_layer.get_ohlcv(_x_spot_sym, "1d", 250, "USDT",
+                            mkttype="spot", _cache_hint=_x_spot_sym),
+                        engine.data_layer.get_fear_greed(),
+                        engine.data_layer.get_btc_dominance(),
+                        return_exceptions=True
+                    ), timeout=30.0
+                )
             else:
                 price_d, candles, fear, btc_dom = await asyncio.wait_for(
                     asyncio.gather(
                         engine.data_layer.get_price(symbol, quote, mkttype=_mkt_arg_qs),
-                        # T10_fix: تمرير raw_arg كـ hint للـ cache key
                         engine.data_layer.get_ohlcv(symbol, "1d", 250, quote,
                             mkttype=_mkt_arg_qs,
                             _cache_hint=raw_arg.upper()),

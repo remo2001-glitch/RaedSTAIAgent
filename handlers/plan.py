@@ -724,8 +724,11 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                       else "🔴 بيع" if (cand or {}).get("direction") == "short"
                       else "⚪ انتظار")
             conf = float((cand or {}).get("confidence") or 0)
+            # T2_plan_fix: عتبة حسب الباقة في plan_month
+            _tier_pm_w = _sm.get_tier(update.effective_user.id) if update.effective_user else "silver"
+            _t_entry_pm = _TIER_CONF_PLAN.get(_tier_pm_w, 55)
             conf_warn = (" ⚠️ دون حد الدخول"
-                         if (cand and not ((cand or {}).get("direction") == "long" and conf >= 0.65))
+                         if (cand and not ((cand or {}).get("direction") == "long" and conf >= _t_entry_pm / 100))
                          else "")
             # تنسيق السعر الصحيح حسب حجمه
             price_str = _fmt_price(price_v) if price_v > 0 else "🔄 جاري الجلب"
