@@ -834,12 +834,12 @@ class DataLayer:
     # ═══════════════════════════════════════════════════════════
     async def get_ohlcv(self, symbol: str, interval: str = "1d",
                          limit: int = 365, quote: str = "USDT",
-                         mkttype: str = "spot") -> List[Dict]:
+                         mkttype: str = "spot", _cache_hint: str = "") -> List[Dict]:
         """إصلاح #258: mkttype يُميِّز كاش Spot عن Futures."""
-        _orig_symbol = symbol.upper()     # T10_fix: احتفظ بالاسم الأصلي للـ cache key
+        _orig_symbol = (_cache_hint or symbol).upper()  # T10_fix: XSPCX وليس SPCX
         symbol = _clean_symbol(symbol)   # BTCUSDT → BTC (نظام-واسع)
         quote  = quote.upper()
-        # T10_fix: استخدم _orig_symbol في key لتمييز XSPCX عن SPCX/XSPY
+        # T10_fix: key يميز XSPCX عن SPCX وXSPY
         key = f"ohlcv:{_orig_symbol}:{quote}:{interval}:{limit}:{mkttype}"
         if cached := _cached(key, "ohlcv"):
             return cached  # دائماً List
