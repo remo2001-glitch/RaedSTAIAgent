@@ -486,13 +486,13 @@ def _build_professional_block(
 
     # الأسباب
     reasons = []
-    if conf < 0.65:
-        reasons.append(f"• الثقة {conf:.0%} أقل من الحد 65%")
+    # T2_fix: عتبة الدخول تعتمد على الباقة (مُمرَّرة كـ threshold)
+    _threshold = threshold if "threshold" in dir() else 0.65
+    if conf < _threshold:
+        reasons.append(f"• الثقة {conf:.0%} أقل من الحد {_threshold:.0%}")
     elif _scenario == "counter_trend_bounce" and _vol_ratio < 0.8:
-        # إصلاح #61(ثانوي): الثقة تجاوزت 65% لكن الحجم غير مؤكَّد —
-        # وضّح السبب الفعلي بدل حذف سطر العتبة بصمت
         reasons.append(
-            f"• الثقة {conf:.0%} تجاوزت 65% — لكن الحجم {_vol_ratio:.1f}x "
+            f"• الثقة {conf:.0%} تجاوزت {_threshold:.0%} — لكن الحجم {_vol_ratio:.1f}x "
             f"أقل من 0.8x المطلوب لتأكيد الارتداد")
     # إصلاح #86/#130: ADX فقط عند الخطورة القصوى
     if adx > 45:
@@ -587,9 +587,19 @@ def _build_professional_block(
     # إضافة تحذير السيناريو
     _scenario_warn = signal.technicals.get("scenario_warn", "") if hasattr(signal, "technicals") else ""
     _scenario_ar   = signal.technicals.get("scenario_ar",   "") if hasattr(signal, "technicals") else ""
-    # إصلاح #95 (توحيد القاعدة): SL% من السعر الحالي (نفس قاعدة Worst-Case
-    # وR/R) بدل pro_entry — يمنع ظهور "Worst-Case% < SL%" بسبب اختلاف القاعدة
+    # إصلاح #95 (توحيد القاعدة): SL% من السعر الحالي
     sl_pct  = abs(price - pro_sl) / max(price, 1e-9) * 100
+    # T6_fix: cap SL للأصول المُرمَّزة X-prefix (سيولة منخفضة)
+    _is_x_asset = symbol.upper().startswith("X") and len(symbol) > 2
+    if _is_x_asset and sl_pct > 10.0:
+        # إعادة حساب pro_sl بحد أقصى 10%
+        _sl_cap = 0.10
+        pro_sl  = price * (1 - _sl_cap)
+        sl_pct  = _sl_cap * 100
+    elif not _is_x_asset and sl_pct > 15.0:
+        # حد أقصى 15% للعملات العادية
+        pro_sl = price * 0.85
+        sl_pct = 15.0
     tp_pct  = abs(pro_tp - pro_entry) / max(pro_entry, 1e-9) * 100
     hold    = 3 if adx > 40 else 5
 
@@ -1210,6 +1220,7 @@ def _build_scenarios_context(
     fib: dict,
     rsi: float,
     is_bear: bool,
+    threshold: float = 0.65,   # T2_fix: عتبة الباقة
 ) -> str:
     """
     يبني السيناريوهات الثلاثة من بيانات حقيقية:
@@ -1838,7 +1849,8 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 _cls_sig = [float(c.get("close", 0)) for c in candles if c.get("close")]
                 _e50_sig_raw = sum(_cls_sig[-50:]) / 50 if len(_cls_sig) >= 50 else price
-                _ema50_sig_corrupted = (_e50_sig_raw > price * 3.0)
+                # T4_fix: EMA50 > 30% فوق السعر = فساد (بيانات Futures مختلطة)
+                _ema50_sig_corrupted = (_e50_sig_raw > price * 1.30 or _e50_sig_raw > price * 3.0)
             except Exception: pass
         elif candles and len(candles) >= 10:
             # EMA_spot_fix: بيانات محدودة (X-prefix Spot جديد)
@@ -1999,6 +2011,8 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # تحذير المجاني
         if _free_warning:
             full_text += _free_warning
+        # T3_fix: تعريف _is_stock_sig في نطاق cmd_signal
+        _is_stock_sig = _is_perp_sig
         # تنبيه الأسهم المحظورة
         if _is_stock_sig and _STOCK_TIER_CONF.get(_tier_sig) is None:
             full_text += (f"\n\n🔒 *الأسهم المُرمَّزة — ذهبي وأعلى*"
@@ -2653,12 +2667,15 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # بناء السيناريوهات من البيانات الحقيقية قبل Groq
         _fib_for_ctx  = _calc_fibonacci(candles)
         _atr_for_ctx  = _calc_atr(candles)
+        # T2_fix: تمرير عتبة الباقة للـ scenarios context
+        _t_entry_an = _TIER_CONF.get(tier_an, _TIER_CONF["silver"])[1]
         _scenarios_ctx = _build_scenarios_context(
-            price    = price,
-            atr_pct  = _atr_for_ctx,
-            fib      = _fib_for_ctx,
-            rsi      = rsi,
-            is_bear  = is_bearish,
+            price     = price,
+            atr_pct   = _atr_for_ctx,
+            fib       = _fib_for_ctx,
+            rsi       = rsi,
+            is_bear   = is_bearish,
+            threshold = _t_entry_an / 100,
         )
         # دمج السيناريوهات مع candles_summary
         _full_context = f"{candles_summary}\n{_scenarios_ctx}".strip() if candles_summary else _scenarios_ctx

@@ -687,7 +687,8 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines = [
             f"📋 *الخطة الشهرية — {plan_label}*",
             "━━━━━━━━━━━━━━━━━━",
-            f"العملات: {', '.join(symbols)}",
+            # T7_fix: استخدام display names (XGOOGL وليس GOOGL)
+            f"العملات: {', '.join(_display_syms_pm if '_display_syms_pm' in dir() else symbols)}",
             f"السوق: {regime.description_ar}",
             f"الثقة: {regime.confidence:.0%}",
             "",
