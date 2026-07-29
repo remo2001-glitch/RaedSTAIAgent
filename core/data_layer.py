@@ -907,13 +907,29 @@ class DataLayer:
                 logger.info(f"T10b_DL_fix: {symbol} ← OKX Spot ({len(x_spot_candles)} شمعة)")
                 _store(key, x_spot_candles, "ohlcv")
                 return x_spot_candles
-            # إذا OKX Spot قليل → استخدم Yahoo proxy لكن مع scaling
+            # T10b_scaling_fix: إذا OKX Spot قليل → Yahoo مع تصحيح الأسعار
             _yahoo_sym = _stock_info.get("yahoo") or _stock_info.get("base", symbol)
             if _yahoo_sym:
                 yahoo_candles = await self._ohlcv_yahoo(_yahoo_sym, days=max(limit, 90))
                 if yahoo_candles and len(yahoo_candles) >= 10:
-                    # T10b: Scale Yahoo prices لـ XSPCX (نسبة السعر الحالي)
-                    logger.info(f"T10b_DL_fb: {symbol} ← Yahoo({_yahoo_sym}) scaled {len(yahoo_candles)} شمعة")
+                    # T10b_scaling: نسحب سعر XSPCX الحالي لتصحيح نسبة Yahoo
+                    try:
+                        _x_price_now = await self.get_price(symbol.upper(), "USDT", mkttype="spot")
+                        _x_px = float((_x_price_now or {}).get("price", 0))
+                        _y_px = float((yahoo_candles[-1] or {}).get("close", 0))
+                        if _x_px > 0 and _y_px > 0:
+                            _scale = _x_px / _y_px
+                            scaled = []
+                            for c in yahoo_candles:
+                                sc = dict(c)
+                                for k in ("open","high","low","close"):
+                                    if k in sc and sc[k]:
+                                        sc[k] = float(sc[k]) * _scale
+                                scaled.append(sc)
+                            yahoo_candles = scaled
+                            logger.info(f"T10b_scaling: {symbol} ← Yahoo({_yahoo_sym}) scaled×{_scale:.4f} {len(yahoo_candles)} شمعة")
+                    except Exception as _e_sc:
+                        logger.debug(f"T10b_scaling error: {_e_sc}")
                     _store(key, yahoo_candles, "ohlcv")
                     return yahoo_candles
 
