@@ -29,6 +29,11 @@ logger = logging.getLogger(__name__)
 # ══════════════════════════════════════════════════════════════════
 
 # قاموس الأسهم المُرمَّزة: رمز المستخدم → {okx_spot, okx_futures, yahoo, base}
+# T13_fix: رموز السلع على OKX — Futures فقط
+_COMMODITY_SYMBOLS = {
+    "CL", "NL", "GC", "SI", "HG", "NG", "WTI", "BRENT",
+}
+
 _TOKENIZED_STOCK_MAP = {
     # الأسهم الأمريكية الكبرى
     "AAPL":  {"okx_spot": "XAAPL",  "okx_futures": "AAPL",  "yahoo": "AAPL",  "base": "AAPL"},
@@ -79,6 +84,11 @@ _TOKENIZED_STOCK_MAP = {
     "DIS":   {"okx_spot": "XDIS",   "okx_futures": "DIS",   "yahoo": "DIS",   "base": "DIS"},
     "XDIS":  {"okx_spot": "XDIS",   "okx_futures": "DIS",   "yahoo": "DIS",   "base": "DIS"},
 }
+
+
+def is_commodity_symbol(symbol: str) -> bool:
+    """T13_fix: هل الرمز سلعة تحتاج Futures؟"""
+    return symbol.upper().strip() in _COMMODITY_SYMBOLS
 
 
 def resolve_stock_symbol(symbol: str, market: str = "futures") -> dict:
