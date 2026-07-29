@@ -724,11 +724,11 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                       else "🔴 بيع" if (cand or {}).get("direction") == "short"
                       else "⚪ انتظار")
             conf = float((cand or {}).get("confidence") or 0)
-            # T2_plan_fix: عتبة حسب الباقة في plan_month
+            # T2_eq_fix: "دون حد" يعتمد على confidence فقط
             _tier_pm_w = _sm.get_tier(update.effective_user.id) if update.effective_user else "silver"
             _t_entry_pm = _TIER_CONF_PLAN.get(_tier_pm_w, 55)
             conf_warn = (" ⚠️ دون حد الدخول"
-                         if (cand and not ((cand or {}).get("direction") == "long" and conf >= _t_entry_pm / 100))
+                         if (cand and conf < _t_entry_pm / 100)
                          else "")
             # تنسيق السعر الصحيح حسب حجمه
             price_str = _fmt_price(price_v) if price_v > 0 else "🔄 جاري الجلب"
@@ -1173,6 +1173,11 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                     # T2_plan_bug_fix_v2: تعريف _t_entry_plan هنا (يشمل جميع المسارات)
                     _t_entry_plan = _TIER_CONF_PLAN.get(_tier_pw, 65)
+                    # SOL_bug_fix: reset pro_* في بداية كل iteration لمنع تسرب بيانات العملة السابقة
+                    pro_entry_w = price * 0.99
+                    pro_tp_w    = price * 1.05
+                    pro_sl_w    = price * 0.93
+                    rr_w        = 1.5
                     # إصلاح #11: fallback موحَّد لأي حالة بدون entry_lines
                     # (ثقة < 40% أو R/R < 1.2) — يضمن أن كل عملة تُعرض ببيانات كاملة
                     if not entry_lines:
@@ -1203,9 +1208,9 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             f"  📊 Fib دعم: {_fmt_price(_disp_support)} | مقاومة: {_fmt_price(_disp_resistance)}",
                         ]
 
-                # تنبيه إذا الثقة تحت الحد
+                # T2_eq_fix: "دون حد" يعتمد على confidence فقط وليس direction
                 conf_warning = (" ⚠️ دون حد الدخول"
-                                if not (signal.direction == "long" and signal.confidence >= _t_entry_plan / 100)
+                                if signal.confidence < _t_entry_plan / 100
                                 else "")
                 price_str = f" — {_fmt_price(price)}{change_str}" if price > 0 else " — 🔄 جاري جلب السعر"
                 # تطوير #188 (Phase 2): فقرة الزوج المُكثَّفة إن وُجدت

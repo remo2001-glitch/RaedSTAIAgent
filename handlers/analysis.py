@@ -1940,19 +1940,14 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _btc_chg = float((_btc_d or {}).get("change_24h", 0) or 0)
                 _price_chg = float((await engine.data_layer.get_price(symbol) or {}).get("change_24h", 0) or 0)
                 _corr_diff = _price_chg - _btc_chg
-                # FA: تخفيض الشرط من 2% إلى 0.5% لضمان الظهور دائماً
-                # FA: عتبة diff من 3% → 2% + شرط BTC 0.5%
-                if abs(_btc_chg) > 0.5 or abs(_corr_diff) > 2:
-                    if _corr_diff > 2:
-                        # FA_bug_fix: مسافة قبل الرمز لمنع التصاق الحروف العربية
-                        _sym_disp = f" {symbol}"  # مسافة واقية
-                        _btc_corr_txt = f"\n• 🟢{_sym_disp} يتفوق على BTC بـ {_corr_diff:+.1f}% — قوة نسبية"
-                    elif _corr_diff < -2:
-                        _sym_disp = f" {symbol}"
-                        _btc_corr_txt = f"\n• 🔴{_sym_disp} أضعف من BTC بـ {_corr_diff:+.1f}% — ضعف نسبي"
-                    else:
-                        _sym_disp = f" {symbol}"
-                        _btc_corr_txt = f"\n• ⚪{_sym_disp} يتحرك مع السوق (BTC: {_btc_chg:+.1f}%)"
+                # FA_missing_fix: إظهار FA دائماً (بدون شرط حجم التغير)
+                _sym_disp = f" {symbol}"
+                if _corr_diff > 2:
+                    _btc_corr_txt = f"\n• 🟢{_sym_disp} يتفوق على BTC بـ {abs(_corr_diff):.1f}% — قوة نسبية"
+                elif _corr_diff < -2:
+                    _btc_corr_txt = f"\n• 🔴{_sym_disp} أضعف من BTC بـ {abs(_corr_diff):.1f}% — ضعف نسبي"
+                else:
+                    _btc_corr_txt = f"\n• ⚪{_sym_disp} يتحرك مع السوق (BTC: {_btc_chg:+.1f}%)"
             except Exception:
                 pass
 
@@ -2836,14 +2831,14 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _sym_d_an   = await engine.data_layer.get_price(symbol)
                 _sym_chg_an = float((_sym_d_an or {}).get("change_24h", 0) or 0)
                 _corr_diff_an = _sym_chg_an - _btc_chg_an
-                if abs(_btc_chg_an) > 0.5 or abs(_corr_diff_an) > 2:
-                    _sym_an_disp = f" {symbol}"  # FA_bug_fix: مسافة واقية
-                    if _corr_diff_an > 2:
-                        _btc_corr_an = f"\n• 🟢{_sym_an_disp} يتفوق على BTC بـ {_corr_diff_an:+.1f}% — قوة نسبية"
-                    elif _corr_diff_an < -2:
-                        _btc_corr_an = f"\n• 🔴{_sym_an_disp} أضعف من BTC بـ {_corr_diff_an:+.1f}% — ضعف نسبي"
-                    else:
-                        _btc_corr_an = f"\n• ⚪{_sym_an_disp} يتحرك مع السوق (BTC: {_btc_chg_an:+.1f}%)"
+                # FA_missing_fix: إظهار FA دائماً في /analyze
+                _sym_an_disp = f" {symbol}"
+                if _corr_diff_an > 2:
+                    _btc_corr_an = f"\n• 🟢{_sym_an_disp} يتفوق على BTC بـ {abs(_corr_diff_an):.1f}% — قوة نسبية"
+                elif _corr_diff_an < -2:
+                    _btc_corr_an = f"\n• 🔴{_sym_an_disp} أضعف من BTC بـ {abs(_corr_diff_an):.1f}% — ضعف نسبي"
+                else:
+                    _btc_corr_an = f"\n• ⚪{_sym_an_disp} يتحرك مع السوق (BTC: {_btc_chg_an:+.1f}%)"
             except Exception:
                 pass
 
