@@ -19,6 +19,15 @@ except ImportError:
     is_symbol_allowed = lambda s, t: True
     get_tier_message  = lambda s, t: f'⛔ {s} غير متاحة'
 from core.state_manager import state_manager as _sm
+
+# T2_plan_fix: عتبات الثقة حسب الباقة في /plan
+_TIER_CONF_PLAN = {
+    "free":    45,   # مجاني
+    "silver":  50,   # فضي
+    "gold":    55,   # ذهبي
+    "diamond": 55,   # ماسي
+    "admin":   55,   # مدير
+}
 from core.pair_resolver import resolve_symbol, PairResolution, build_pair_addon_inline
 from handlers.analysis import normalize_symbol_alias  # X6: مرادفات الرموز المركزية
 
@@ -1181,14 +1190,17 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             f"  ⏳ شروط الدخول:",
                             _rsi_cond,
                             _ema_cond,
-                            f"  • الثقة ≥ 65% (حالياً {signal.confidence:.0%})",
+                            # T2_plan_fix: عتبة حسب الباقة
+                            f"  • الثقة ≥ {_t_entry_plan}% (حالياً {signal.confidence:.0%})",
                             f"  🛡️ خيار المحترف: Limit @ {_fmt_price(pro_entry_w)} | وقف: {_fmt_price(pro_sl_w)} | هدف: {_fmt_price(pro_tp_w)} | R/R: 1:{rr_w:.1f}",
                             f"  📊 Fib دعم: {_fmt_price(_disp_support)} | مقاومة: {_fmt_price(_disp_resistance)}",
                         ]
 
                 # تنبيه إذا الثقة تحت الحد
+                # T2_plan_fix: مقارنة بعتبة الباقة
+                _t_entry_plan = _TIER_CONF_PLAN.get(_tier_pw, 65)
                 conf_warning = (" ⚠️ دون حد الدخول"
-                                if not (signal.direction == "long" and signal.confidence >= 0.65)
+                                if not (signal.direction == "long" and signal.confidence >= _t_entry_plan / 100)
                                 else "")
                 price_str = f" — {_fmt_price(price)}{change_str}" if price > 0 else " — 🔄 جاري جلب السعر"
                 # تطوير #188 (Phase 2): فقرة الزوج المُكثَّفة إن وُجدت

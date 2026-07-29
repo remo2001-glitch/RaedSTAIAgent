@@ -812,9 +812,11 @@ def _build_professional_block(
             except Exception:
                 pass
     elif _conf_score < 75:
-        _decision_label = f"[NORMAL] — حجم {_t_max_pos//2}–{_t_max_pos}%"
-        _pos_norm  = min(float(_t_max_pos), round(_t_risk / max(_sl_base / 100, 0.01) * 100, 1))
-        _pos_size_rule = f"{max(_t_max_pos//2, min(_t_max_pos, round(_pos_norm)))}% — ثقة متوسطة"
+        # #3237_fix: حجم NORMAL = نصف max بحد أقصى 20% للماسي
+        _normal_cap = min(_t_max_pos, 20)  # cap عند 20% في NORMAL
+        _decision_label = f"[NORMAL] — حجم {_normal_cap//2}–{_normal_cap}%"
+        _pos_norm  = min(float(_normal_cap), round(_t_risk / max(_sl_base / 100, 0.01) * 100, 1))
+        _pos_size_rule = f"{max(_normal_cap//2, min(_normal_cap, round(_pos_norm)))}% — ثقة متوسطة"
     else:
         _decision_label = f"[HIGH] — حجم {_t_max_pos}%"
         _pos_high  = min(float(_t_max_pos), round(_t_risk * 1.3 / max(_sl_base / 100, 0.01) * 100, 1))
@@ -2122,10 +2124,21 @@ async def cmd_backtest(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.debug(f"BT1_fix Yahoo: {_bt_e}")
 
         if len(price_data) < 90:
-            await msg.edit_text(
-                f"⚠️ بيانات {symbol} التاريخية غير كافية\n"
-                f"({len(price_data)} يوم متاح — الحد الأدنى 90 يوماً)\n"
-                f"أعد المحاولة بعد دقيقتين")
+            # T12_fix: رسالة مخصصة لأزواج BTC
+            _is_btc_pair_bt = (symbol.endswith("BTC") or symbol.endswith("ETH")) and symbol not in ("BTC","ETH")
+            if _is_btc_pair_bt:
+                _base_bt = symbol.replace("BTC","").replace("ETH","")
+                await msg.edit_text(
+                    f"⚠️ /backtest لأزواج BTC/ETH غير مدعوم\n"
+                    f"البيانات التاريخية لـ {symbol} غير متاحة\n\n"
+                    f"💡 جرب بدلاً من ذلك:\n"
+                    f"• /backtest {_base_bt} (بوحدة USDT)\n"
+                    f"• /backtest BTC")
+            else:
+                await msg.edit_text(
+                    f"⚠️ بيانات {symbol} التاريخية غير كافية\n"
+                    f"({len(price_data)} يوم متاح — الحد الأدنى 90 يوماً)\n"
+                    f"أعد المحاولة بعد دقيقتين")
             return
 
         result = await engine.backtest_engine.run(symbol, price_data, strategy)
