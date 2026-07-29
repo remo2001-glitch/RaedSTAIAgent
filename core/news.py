@@ -1047,9 +1047,11 @@ class NewsEngine:
         # llama-3.2-90b-vision-preview → decommissioned
         # llama-3.2-11b-vision-preview → decommissioned (HTTP 400)
         # llama-4-scout يعمل ✅ (1022 حرف)
+        # T11_fix: نماذج Groq Vision المدعومة (2026) — llava محذوف
         VISION_MODELS = [
-            "meta-llama/llama-4-scout-17b-16e-instruct",
-            "meta-llama/llama-4-maverick-17b-128e-instruct",
+            "meta-llama/llama-4-scout-17b-16e-instruct",    # الأسرع ✅
+            "meta-llama/llama-4-maverick-17b-128e-instruct", # fallback
+            "llama-3.2-90b-vision-preview",                  # fallback إضافي
         ]
 
         try:

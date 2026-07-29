@@ -836,9 +836,11 @@ class DataLayer:
                          limit: int = 365, quote: str = "USDT",
                          mkttype: str = "spot") -> List[Dict]:
         """إصلاح #258: mkttype يُميِّز كاش Spot عن Futures."""
+        _orig_symbol = symbol.upper()     # T10_fix: احتفظ بالاسم الأصلي للـ cache key
         symbol = _clean_symbol(symbol)   # BTCUSDT → BTC (نظام-واسع)
         quote  = quote.upper()
-        key = f"ohlcv:{symbol}:{quote}:{interval}:{limit}:{mkttype}"
+        # T10_fix: استخدم _orig_symbol في key لتمييز XSPCX عن SPCX/XSPY
+        key = f"ohlcv:{_orig_symbol}:{quote}:{interval}:{limit}:{mkttype}"
         if cached := _cached(key, "ohlcv"):
             return cached  # دائماً List
 
