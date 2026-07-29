@@ -1735,7 +1735,7 @@ async def cmd_vtrades(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "📋 *الصفقات الافتراضية*\n\n"
             "لا توجد صفقات مفتوحة حالياً.\n"
-            "سيتم التنفيذ تلقائياً عند وجود إشارة قوية ≥ 80% ✅",
+            "سيتم التنفيذ تلقائياً عند وجود إشارة قوية ≥ 55% ✅",
             parse_mode=ParseMode.MARKDOWN)
         return
 
@@ -2801,7 +2801,7 @@ async def cb_goto_vtrades(update, context):
             await query.message.reply_text(
                 "📋 *الصفقات الافتراضية*\n\n"
                 "لا توجد صفقات مفتوحة حالياً.\n"
-                "سيتم التنفيذ تلقائياً عند وجود إشارة قوية ≥ 80% ✅",
+                "سيتم التنفيذ تلقائياً عند وجود إشارة قوية ≥ 55% ✅",
                 parse_mode="Markdown")
             return
         engine = context.bot_data.get("raed_engine")

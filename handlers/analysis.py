@@ -3210,13 +3210,24 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 price_d, candles, fear, btc_dom = await asyncio.wait_for(
                     asyncio.gather(
                         engine.data_layer.get_price(_x_spot_sym, "USDT", mkttype="spot"),
-                        engine.data_layer.get_ohlcv(_x_spot_sym, "1d", 250, "USDT",
+                        engine.data_layer.get_ohlcv(_x_spot_sym, "1d", 30, "USDT",
                             mkttype="spot", _cache_hint=_x_spot_sym),
                         engine.data_layer.get_fear_greed(),
                         engine.data_layer.get_btc_dominance(),
                         return_exceptions=True
                     ), timeout=30.0
                 )
+                # T10b_scaling: إذا candles قليلة من OKX → احسب ATR من ما لديه
+                if isinstance(candles, list) and len(candles) < 10:
+                    # OKX Spot بيانات محدودة → نحاول جلب آخر 7 أيام مباشرة
+                    try:
+                        _short_c = await engine.data_layer.get_ohlcv(
+                            _x_spot_sym, "1d", 7, "USDT",
+                            mkttype="spot", _cache_hint=f"{_x_spot_sym}_short")
+                        if isinstance(_short_c, list) and len(_short_c) >= 3:
+                            candles = _short_c
+                    except Exception:
+                        pass
             else:
                 price_d, candles, fear, btc_dom = await asyncio.wait_for(
                     asyncio.gather(
@@ -3420,9 +3431,14 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _atr_qs = _calc_atr(candles) if candles else 0.0
         if _atr_qs > 0:
             lines.append(f"📊 ATR: {_atr_qs:.1f}% يومياً")
+        # T1_fix: تحذير للمجاني + عتبة الباقة في /quicksignal
+        _tier_qs_t1 = _sm.get_tier(user_id_q) if user_id_q else "silver"
+        _entry_qs = _TIER_CONF.get(_tier_qs_t1, _TIER_CONF["silver"])[1]
+        if _tier_qs_t1 == "free":
+            lines.append(f"\n⚠️ *إشارة تقنية فقط* — تحقق من الأخبار قبل الدخول")
         lines += [
             "",
-            "💡 للتحليل العميق الكامل: /analyze (ذهبي+)",
+            f"💡 للتحليل العميق الكامل: /analyze (ذهبي+)",
             "⚠️ هذا تحليل استرشادي — القرار للمستخدم",
         ]
         # تطوير #188 (Phase 2.5): فقرة إضافية في نهاية التقرير

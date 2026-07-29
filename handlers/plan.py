@@ -1171,6 +1171,8 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 f"  📊 R/R: 1:{rr:.1f} | ATR: {atr_v*100:.1f}%",
                             ]
 
+                    # T2_plan_bug_fix_v2: تعريف _t_entry_plan هنا (يشمل جميع المسارات)
+                    _t_entry_plan = _TIER_CONF_PLAN.get(_tier_pw, 65)
                     # إصلاح #11: fallback موحَّد لأي حالة بدون entry_lines
                     # (ثقة < 40% أو R/R < 1.2) — يضمن أن كل عملة تُعرض ببيانات كاملة
                     if not entry_lines:
@@ -1189,7 +1191,9 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         _ema_cond = (f"  • ✅ السعر فوق EMA50 ({_fmt_price(ema50_w)}) — مُستوفى"
                                      if price > ema50_w else
                                      f"  • إغلاق فوق EMA50 ({_fmt_price(ema50_w)} — بُعد {_ema50_dist:.1f}%)")
-                        entry_lines = [
+                        # T2_plan_bug_fix: تعريف _t_entry_plan قبل استخدامه
+                _t_entry_plan = _TIER_CONF_PLAN.get(_tier_pw, 65)
+                entry_lines = [
                             f"  ⏳ شروط الدخول:",
                             _rsi_cond,
                             _ema_cond,
@@ -1200,8 +1204,6 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         ]
 
                 # تنبيه إذا الثقة تحت الحد
-                # T2_plan_fix: مقارنة بعتبة الباقة
-                _t_entry_plan = _TIER_CONF_PLAN.get(_tier_pw, 65)
                 conf_warning = (" ⚠️ دون حد الدخول"
                                 if not (signal.direction == "long" and signal.confidence >= _t_entry_plan / 100)
                                 else "")
