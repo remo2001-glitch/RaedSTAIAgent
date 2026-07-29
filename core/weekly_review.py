@@ -646,20 +646,33 @@ def register_with_scheduler(engine, scheduler) -> bool:
             except Exception as e:
                 logger.error(f"weekly_review job: {e}")
 
-        scheduler.add_job(
-            _weekly_job,
-            trigger=CronTrigger(
-                day_of_week="tue",  # كل ثلاثاء
-                hour=4,             # 04:00 UTC = 07:00 السعودية
-                minute=0,
-                timezone="UTC",
-            ),
-            id="weekly_review",
-            name="المراجعة الأسبوعية الشاملة",
-            replace_existing=True,
-            misfire_grace_time=3600,  # تسامح ساعة إذا تأخر التشغيل
-        )
-        logger.info("✅ weekly_review: مُسجَّل في Scheduler — كل ثلاثاء 04:00 UTC")
+        # T9_fix: استخدام API الـ Scheduler الصحيح في رائد
+        # الـ Scheduler يدعم register_weekly مباشرة
+        if hasattr(scheduler, "register_weekly"):
+            scheduler.register_weekly(_weekly_job)
+            logger.info("✅ weekly_review: مُسجَّل عبر register_weekly — كل ثلاثاء")
+        elif hasattr(scheduler, "add_job"):
+            # APScheduler مباشر
+            from apscheduler.triggers.cron import CronTrigger
+            scheduler.add_job(
+                _weekly_job,
+                trigger=CronTrigger(day_of_week="tue", hour=4, minute=0, timezone="UTC"),
+                id="weekly_review",
+                replace_existing=True,
+            )
+            logger.info("✅ weekly_review: مُسجَّل عبر add_job — كل ثلاثاء 04:00 UTC")
+        elif hasattr(scheduler, "_scheduler") and hasattr(scheduler._scheduler, "add_job"):
+            # Wrapper حول APScheduler
+            from apscheduler.triggers.cron import CronTrigger
+            scheduler._scheduler.add_job(
+                _weekly_job,
+                trigger=CronTrigger(day_of_week="tue", hour=4, minute=0, timezone="UTC"),
+                id="weekly_review",
+                replace_existing=True,
+            )
+            logger.info("✅ weekly_review: مُسجَّل عبر _scheduler — كل ثلاثاء 04:00 UTC")
+        else:
+            logger.warning("⚠️ weekly_review: Scheduler API غير معروف — يُنفَّذ يدوياً عبر /review")
         return True
     except Exception as e:
         logger.error(f"weekly_review register: {e}")
