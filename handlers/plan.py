@@ -989,9 +989,9 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
             engine.data_layer.get_fear_greed(),
             engine.data_layer.get_onchain(),
             engine.data_layer.get_ohlcv("BTC", "1d", 200),
-            # XAMZN_EMA50_fix: استخدام X-prefix مباشرة للأصول المُرمَّزة
-            *[engine.data_layer.get_ohlcv(sym.upper(), "1d", 100,
-                  _cache_hint=sym.upper())
+            # XAMZN_EMA50_fix v2: X-prefix → OKX Spot مباشرة (XAMZN/XGOOGL/XSPCX)
+            *[engine.data_layer.get_ohlcv(sym.upper(), "1d", 50,
+                  mkttype="spot", _cache_hint=f"pw_{sym.upper()}")
                if (sym.upper().startswith("X") and len(sym) > 2)
                else engine.data_layer.get_ohlcv_perp(sym, 100)
                if sym.upper() in {"SPCX","COIN","AAPL","NVDA","TSLA","MSFT","AMZN",
