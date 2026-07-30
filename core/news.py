@@ -1091,6 +1091,9 @@ class NewsEngine:
                         lambda r=req: urllib.request.urlopen(r, context=ctx, timeout=60).read().decode())
                     data    = json.loads(resp)
                     content = data["choices"][0]["message"]["content"].strip()
+                    # T11b_fix: تصفية <think>...</think> من Qwen3 reasoning
+                    import re as _re_qw
+                    content = _re_qw.sub("<think>[\\s\\S]*?</think>", "", content).strip()
                     content = _strip_markdown_headers(content)
                     logger.info(f"Groq Vision ({model}): {len(content)} حرف ✅")
                     return content
