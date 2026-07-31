@@ -1526,6 +1526,34 @@ class DataLayer:
                 enriched["funding_rate_pct"] = fr.get("rate_pct", 0.0)
         except Exception as e:
             logger.debug(f"signal_enrichment ({symbol}): {e}")
+
+        # OKX_Agent_Skills_fix: CVD من OKX trades (آخر 100 صفقة)
+        try:
+            import urllib.request as _ur_cvd, json as _jj_cvd, ssl as _ssl_cvd
+            _ctx_cvd = _ssl_cvd.create_default_context()
+            _ctx_cvd.check_hostname = False
+            _ctx_cvd.verify_mode = _ssl_cvd.CERT_NONE
+            _sym_cvd = f"{symbol.upper()}-USDT"
+            _url_cvd = f"https://www.okx.com/api/v5/market/trades?instId={_sym_cvd}&limit=100"
+            _req_cvd = _ur_cvd.Request(_url_cvd, headers={"User-Agent":"Mozilla/5.0"})
+            _resp_cvd = _ur_cvd.urlopen(_req_cvd, context=_ctx_cvd, timeout=5)
+            _data_cvd = _jj_cvd.loads(_resp_cvd.read())
+            if _data_cvd.get("data"):
+                _trades = _data_cvd["data"]
+                _buy_vol  = sum(float(t.get("sz",0)) for t in _trades if t.get("side")=="buy")
+                _sell_vol = sum(float(t.get("sz",0)) for t in _trades if t.get("side")=="sell")
+                _cvd = _buy_vol - _sell_vol
+                _total = _buy_vol + _sell_vol
+                enriched["cvd"] = round(_cvd, 4)
+                enriched["cvd_pct"] = round(_cvd / max(_total, 1e-9) * 100, 2)
+                enriched["cvd_signal"] = (
+                    "🟢 شراء" if _cvd > 0 else
+                    "🔴 بيع"  if _cvd < 0 else
+                    "⚪ محايد"
+                )
+        except Exception as _cvd_e:
+            logger.debug(f"OKX CVD ({symbol}): {_cvd_e}")
+
         return enriched
 
     async def _bgeo_fetch(self, slug: str, extra_keys: tuple = (),
