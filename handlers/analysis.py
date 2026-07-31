@@ -3051,9 +3051,11 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sym_label = f" — {symbol}" if symbol else ""
         # إضافة header بمعلومات العملة (M#54)
         _sym_label = f" — {symbol}" if symbol else ""
+        # CHART_FORMAT_fix: تنسيق احترافي محسَّن
+        _mkt_icon = "📈 Futures/Perp" if _chart_is_futures else "⚡ Spot"
         header_lines = [
-            f"📊 *تحليل الشارت البصري{_sym_label}*",
-            f"🏪 نوع السوق: {'📈 Futures/Perp' if _chart_is_futures else '⚡ Spot'}",
+            f"📊 تحليل الشارت البصري{_sym_label}",
+            f"🏪 نوع السوق: {_mkt_icon}",
             "━━━━━━━━━━━━━━━━━━",
         ]
         if symbol:
@@ -3064,8 +3066,9 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if pd3 and pd3.get("price", 0) > 0:
                         p3 = pd3["price"]
                         c3 = pd3.get("change_24h", 0)
+                        _c3_icon = "📈" if c3 >= 0 else "📉"
                         header_lines += [
-                            f"💰 السعر: {_fmt_price(p3)} ({c3:+.2f}%)",
+                            f"💰 السعر: {_fmt_price(p3)} ({c3:+.2f}%) {_c3_icon}",
                             f"⏱️ الإطار الزمني: يومي (1D)",
                             "━━━━━━━━━━━━━━━━━━",
                         ]
@@ -3073,10 +3076,12 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
         # إصلاح #236: ربط /chart ↔ /signal للتكامل التحليلي
         _signal_hint = f"\n💡 للتحليل الشامل متعدد المصادر: /signal {symbol}" if symbol else ""
-        full = _clean_md(
+        # CHART_FORMAT_fix: بناء الرسالة النهائية بتنسيق منظم
+        _analysis_clean = analysis.strip()
+        full = (
             "\n".join(header_lines) + "\n\n" +
-            f"{analysis}\n\n"
-            f"{_signal_hint}\n"
+            _analysis_clean + "\n\n" +
+            f"{_signal_hint}\n" +
             f"⚠️ التحليل استرشادي — القرار للمستخدم"
         )
         if len(full) > 4000:
