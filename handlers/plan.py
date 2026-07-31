@@ -1267,7 +1267,10 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             _ema_cond,
                             # T2_plan_fix: عتبة حسب الباقة
                             f"  • الثقة ≥ {_t_entry_plan}% (حالياً {signal.confidence:.0%})",
-                            f"  🛡️ خيار المحترف: Limit @ {_fmt_price(pro_entry_w)} | وقف: {_fmt_price(pro_sl_w)} | هدف: {_fmt_price(pro_tp_w)} | R/R: 1:{rr_w:.1f}",
+                            # plan_pro_fix: label واضح حسب حالة الإشارة
+                            (f"  🛡️ خيار المحترف: Limit @ {_fmt_price(pro_entry_w)} | وقف: {_fmt_price(pro_sl_w)} | هدف: {_fmt_price(pro_tp_w)} | R/R: 1:{rr_w:.1f}"
+                             if signal.confidence >= _t_entry_plan / 100
+                             else f"  🔒 خيار المحترف: غير مُفعَّل (ثقة {signal.confidence*100:.0f}% < {_t_entry_plan}%)"),
                             f"  📊 Fib دعم: {_fmt_price(_disp_support)} | مقاومة: {_fmt_price(_disp_resistance)}",
                         ]
 

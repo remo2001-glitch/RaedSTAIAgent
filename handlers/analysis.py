@@ -560,7 +560,9 @@ def _build_professional_block(
             _cond3,
         ]
         if ns > 0:
-            entry_conds.append(f"4. وصول Demand Zone {_fmt_price(ns)}")
+            # إصلاح التكرار: Demand Zone = مستوى أعمق من الدعم القريب
+            _demand_level = ns * 0.98  # 2% أعمق من الدعم
+            entry_conds.append(f"4. وصول Demand Zone {_fmt_price(_demand_level)} (دعم أعمق)")
         if adx > 40:
             entry_conds.append("5. MACD إيجابي أو تقاطع صاعد")
 
@@ -2044,7 +2046,8 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _price_chg = float((await engine.data_layer.get_price(symbol) or {}).get("change_24h", 0) or 0)
                 _corr_diff = _price_chg - _btc_chg
                 # FA_missing_fix: إظهار FA دائماً (بدون شرط حجم التغير)
-                _sym_disp = f" {symbol}"
+                # FA_name_fix: استخدام _display_symbol للعرض
+                _sym_disp = f" {_display_symbol}" if "_display_symbol" in dir() else f" {symbol}"
                 if _corr_diff > 2:
                     _btc_corr_txt = f"\n• 🟢{_sym_disp} يتفوق على BTC بـ {abs(_corr_diff):.1f}% — قوة نسبية"
                 elif _corr_diff < -2:
@@ -2537,21 +2540,27 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 pass
 
-            # T18b_fix: liquidity_score من 0-1 → × 100 للمقارنة
+            # T18b_fix v2: قرار يراعي is_tradeable + liquidity_score
             _liq_score_raw = getattr(profile, "liquidity_score", 0) or 0
-            _liq_score = _liq_score_raw * 100  # تحويل 0.81 → 81
+            _liq_score = _liq_score_raw * 100  # 0.81 → 81
+            _is_tradeable = getattr(profile, "is_tradeable", True)
             _liq_decision = []
-            if _liq_score >= 60:
+
+            if not _is_tradeable:
+                # microstructure قرر عدم التداول → لا تناقض مع T18b
+                _liq_decision.append("⛔ غير موصى بالتداول — سيولة غير كافية")
+            elif _liq_score >= 60:
                 _liq_decision.append("✅ سيولة كافية للتداول")
             elif _liq_score >= 40:
                 _liq_decision.append("🟡 سيولة متوسطة — قلل الحجم")
             else:
                 _liq_decision.append("🔴 سيولة منخفضة — خطر Slippage")
 
-            if _ofs > 60 and _liq_score >= 50:
-                _liq_decision.append("دعم: ارتداد محتمل")
-            elif _ofs < 40:
-                _liq_decision.append("لا تدخل ضد الضغط البيعي")
+            if _is_tradeable:
+                if _ofs > 60 and _liq_score >= 50:
+                    _liq_decision.append("دعم: ارتداد محتمل")
+                elif _ofs < 40:
+                    _liq_decision.append("لا تدخل ضد الضغط البيعي")
 
             if _liq_decision:
                 text += f"\n\n🎯 *القرار:* {' · '.join(_liq_decision)}"
@@ -3050,7 +3059,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _sym_chg_an = float((_sym_d_an or {}).get("change_24h", 0) or 0)
                 _corr_diff_an = _sym_chg_an - _btc_chg_an
                 # FA_missing_fix: إظهار FA دائماً في /analyze
-                _sym_an_disp = f" {symbol}"
+                _sym_an_disp = f" {_display_symbol_an if _display_symbol_an else symbol}"
                 if _corr_diff_an > 2:
                     _btc_corr_an = f"\n• 🟢{_sym_an_disp} يتفوق على BTC بـ {abs(_corr_diff_an):.1f}% — قوة نسبية"
                 elif _corr_diff_an < -2:
