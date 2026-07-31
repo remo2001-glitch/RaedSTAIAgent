@@ -1009,6 +1009,11 @@ def _build_professional_block(
     if _tvl > 0 and not _is_perp_asset:
         _tvl_chg = float(_onchain.get("tvl_change_1d", 0) or 0)
         deriv_lines.append(f"• TVL الكلي: ${_tvl/1e9:.1f}B ({_tvl_chg:+.1f}% 24h)")
+    # OKX_Agent_Skills_fix: CVD من enrichment
+    _cvd_sig = _onchain.get("cvd_signal", "")
+    _cvd_pct = float(_onchain.get("cvd_pct", 0) or 0)
+    if _cvd_sig:
+        deriv_lines.append(f"• CVD (100 صفقة): {_cvd_sig} ({_cvd_pct:+.1f}%)")
     if deriv_lines:
         parts.extend(["", "*🔗 Derivatives & On-Chain*"])
         parts.extend(deriv_lines)
@@ -2463,8 +2468,6 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # F3: Order Flow Score + توصية محسّنة
         _imb = getattr(profile, "imbalance", 0.5)
-
-        # Order Flow Score: 0-100 (50=محايد، >60=صعودي، <40=هبوطي)
         _ofs = int(_imb * 100)
         _ofs_bars = int(_ofs / 10)
         _ofs_bar  = "█" * _ofs_bars + "░" * (10 - _ofs_bars)
@@ -2484,13 +2487,76 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif _fund_pct > 0.02:
             _reco.append("Funding مرتفع — خطر تصفية Longs مفرطة")
 
-        # F3: إضافة Order Flow في النص
         text += (
             f"\n\n📊 *Order Flow Score*"
             f"\n{_ofs_bar} {_ofs}% — {_ofs_label}"
         )
         if _reco:
             text += f"\n\n💡 *التفسير*: {' · '.join(_reco)}"
+
+        # T18_fix: Slippage متعدد الأحجام + Volume Profile + قرار
+        try:
+            # Slippage تقديري من bid_depth/ask_depth
+            _bid_d = getattr(profile, "bid_depth_usd", 0) or 0
+            _ask_d = getattr(profile, "ask_depth_usd", 0) or 0
+            _spread_pct = getattr(profile, "spread_pct", 0) or 0
+            _price_liq = getattr(profile, "price", 0) or 0
+
+            if _bid_d > 0 and _price_liq > 0:
+                _slippage_1k  = round(_spread_pct / 2, 4)
+                _slippage_10k = round(_spread_pct / 2 + (10000 / max(_bid_d, 1)) * 100, 3)
+                _slippage_50k = round(_spread_pct / 2 + (50000 / max(_bid_d, 1)) * 100, 3)
+                text += (
+                    f"\n\n📐 *Slippage المتوقع*"
+                    f"\n• $1K: ~{_slippage_1k:.3f}%"
+                    f"\n• $10K: ~{min(_slippage_10k, 5.0):.3f}%"
+                    f"\n• $50K: ~{min(_slippage_50k, 10.0):.3f}%"
+                )
+
+            # Volume Profile تقريبي من candles
+            try:
+                _liq_candles = await asyncio.wait_for(
+                    engine.data_layer.get_ohlcv(symbol, "1h", 24),
+                    timeout=5.0)
+                if isinstance(_liq_candles, list) and len(_liq_candles) >= 10:
+                    _vols = [float(c.get("volume",0)) for c in _liq_candles if c.get("volume")]
+                    _closes = [float(c.get("close",0)) for c in _liq_candles if c.get("close")]
+                    if _vols and _closes:
+                        # POC: السعر الأكثر تداولاً
+                        _poc_idx = _vols.index(max(_vols))
+                        _poc = _closes[_poc_idx] if _poc_idx < len(_closes) else 0
+                        _vah = max(_closes)  # Value Area High
+                        _val = min(_closes)  # Value Area Low
+                        if _poc > 0:
+                            text += (
+                                f"\n\n📊 *Volume Profile (24h)*"
+                                f"\n• POC (أكثر تداولاً): ${_poc:,.4f}"
+                                f"\n• VAH (أعلى نطاق): ${_vah:,.4f}"
+                                f"\n• VAL (أدنى نطاق): ${_val:,.4f}"
+                            )
+            except Exception:
+                pass
+
+            # T18_fix: قرار واضح بناءً على السيولة
+            _liq_score = getattr(profile, "liquidity_score", 0) or 0
+            _liq_decision = []
+            if _liq_score >= 60:
+                _liq_decision.append("✅ سيولة كافية للتداول")
+            elif _liq_score >= 40:
+                _liq_decision.append("🟡 سيولة متوسطة — قلل الحجم")
+            else:
+                _liq_decision.append("🔴 سيولة منخفضة — خطر Slippage")
+
+            if _ofs > 60 and _liq_score >= 50:
+                _liq_decision.append("دعم: ارتداد محتمل")
+            elif _ofs < 40:
+                _liq_decision.append("لا تدخل ضد الضغط البيعي")
+
+            if _liq_decision:
+                text += f"\n\n🎯 *القرار:* {' · '.join(_liq_decision)}"
+
+        except Exception as _t18e:
+            logger.debug(f"T18_fix: {_t18e}")
 
         await msg.edit_text(text, parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
