@@ -727,9 +727,12 @@ def _build_professional_block(
         _conf_flags = list(_conf_flags) + ["Funding Rate سالب (فرصة Longs) ✓"]
     if _oi_chg < -5:
         _conf_flags = list(_conf_flags) + ["OI انخفض (تصفية Shorts) ✓"]
-    # إصلاح #471: فقط إذا ratio حقيقي (> 0) نُضيف flag
-    if _whale_ratio > 0 and _whale_ratio < 0.6:
-        _conf_flags = list(_conf_flags) + ["الحيتان تتراكم ✓"]
+    # T27_fix: Whale > 1.3 = صاعد ✅ | < 0.7 = هابط ⚠️
+    if _whale_ratio > 0:
+        if _whale_ratio >= 1.3:
+            _conf_flags = list(_conf_flags) + [f"Whale Ratio {_whale_ratio:.2f} — أغلبية Long ✓"]
+        elif _whale_ratio <= 0.7:
+            pass  # هابط — لا نُضيفه كـ confirmation
     # إصلاح #619/#651: Volume Spike يُضاف كـ Confirmation Flag
     if _vol_ratio >= 1.5:
         _conf_flags = list(_conf_flags) + [f"Volume Spike {_vol_ratio:.1f}x ✓"]
@@ -1033,9 +1036,14 @@ def _build_professional_block(
             entry_lines.append(f"• TP3 (اختياري): {_fmt_price(tp3_v)} (+{tp3_pct:.1f}%)")
     else:
         entry_lines.append("• الأهداف: متاحة بعد تأكيد 2/4 مؤشرات")
+    # T28_fix: R/R يُعرض فقط مع أهداف حقيقية
+    _has_targets = tp1_v > 0 and tp1_v != price
+    _rr_line = (f"• R/R الواقعي: 1:{rr_real}{_rr_adjusted_note}"
+                if _has_targets
+                else "• R/R: غير محسوب — انتظر تأكيد الأهداف")
     entry_lines.extend([
         f"• وقف الخسارة: {_fmt_price(pro_sl)} ({sl_pct:.1f}%-)",
-        f"• R/R الواقعي: 1:{rr_real}{_rr_adjusted_note}",
+        _rr_line,
         f"• الحجم: {_pos_size_rule}",
     ])
     parts.extend(entry_lines)
@@ -1063,16 +1071,42 @@ def _build_professional_block(
     if not _conf_flags:
         parts.append("  • لا تأكيدات بعد — يمكن الدخول بحجم مصغَّر فقط")
 
-    # 6-B. Checklist الاستعداد (مؤشرات داعمة — لا تؤثر على الحجم، تكميلية)
+    # 6-B. Checklist الاستعداد (مؤشرات داعمة + تحذيرات)
+    # T26_fix: Divergence = تحذير واضح لا مجرد check
+    _div_line = ""
+    if _rsi_div == "bullish":
+        _div_line = "☑ RSI Divergence 🟢 (داعم للصعود)"
+    elif _rsi_div == "bearish":
+        _div_line = "⚠️ RSI Divergence 🔴 (تحذير هبوطي — لا تعدّه داعماً)"
+    else:
+        _div_line = "□ RSI Divergence"
+
+    # T27_fix: Whale > 1.0 = Long صاعد، < 0.5 = Short هابط
+    _whale_line = ""
+    if _whale_ratio >= 1.3:
+        _whale_line = f"☑ Whale Ratio {_whale_ratio:.2f} 🟢 (أغلبية Long — صاعد)"
+    elif _whale_ratio > 0 and _whale_ratio <= 0.7:
+        _whale_line = f"⚠️ Whale Ratio {_whale_ratio:.2f} 🔴 (أغلبية Short — هابط)"
+    else:
+        _whale_line = f"□ Whale Ratio {_whale_ratio:.2f} ⚪ (محايد)"
+
+    # T29_fix: Reclaim فقط إذا السعر كان تحت المستوى وعاد فوقه
+    _reclaim_line = ""
+    if ns > 0:
+        _above = price >= ns * 0.995
+        _reclaim_line = (f"☑ السعر فوق الدعم {_fmt_price(ns)}" if _above
+                         else f"□ إغلاق فوق الدعم {_fmt_price(ns)}")
+    else:
+        _reclaim_line = "□ دعم غير محدد"
+
     parts.extend([
         "",
         "*📋 Checklist الاستعداد (مؤشرات داعمة — لا تؤثر على حجم الصفقة)*",
-        f"{'☑' if _rsi_div != 'none' else '□'} RSI Divergence"
-        + (" 🟢" if _rsi_div == "bullish" else " 🔴" if _rsi_div == "bearish" else ""),
+        _div_line,
         f"{'☑' if _vol_ratio >= 1.5 else '□'} Volume Spike ≥1.5x (حالياً {_vol_ratio:.1f}x)",
-        f"{'☑' if ns > 0 and price >= ns * 0.995 else '□'} Reclaim الدعم {_fmt_price(ns) if ns else 'N/A'}",
+        _reclaim_line,
         f"{'☑' if tech.get('macd_hist', 0) > 0 else '□'} MACD إيجابي",
-        f"{'☑' if _whale_ratio > 0 and _whale_ratio < 0.6 else '□'} On-chain تراكم (Whale Ratio < 0.6)",
+        _whale_line,
         f"{'☑' if _fund_pct < -0.01 else '□'} Funding Rate مناسب",
     ])
 
@@ -3035,8 +3069,37 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _chart_is_futures = any(kw in symbol.upper()
                                      for kw in ("PERP","SWAP","FUT"))
 
+        # T31_fix: تحذير قبل افتتاح سوق الأسهم لـ X-prefix
+        _is_x_asset = symbol.upper().startswith("X") and len(symbol) > 2
+        _pre_market_warn = ""
+        if _is_x_asset:
+            from datetime import datetime, timezone
+            _now_utc = datetime.now(timezone.utc)
+            _hour = _now_utc.hour
+            _weekday = _now_utc.weekday()  # 0=Mon, 6=Sun
+            # NYSE: 13:30-20:00 UTC (9:30-16:00 EST)
+            _is_market_hours = (0 <= _weekday <= 4) and (13 <= _hour < 20)
+            if not _is_market_hours:
+                _pre_market_warn = (
+                    "\n⚠️ **تحذير: خارج ساعات تداول NYSE**\n"
+                    "السعر الحالي قد لا يعكس القيمة الحقيقية.\n"
+                    "الأسعار الاصطناعية قبل الافتتاح قد تختلف ±20%.\n"
+                )
+
+        # T30_fix: تمرير السعر الحالي لـ Qwen3 لمنع تحليل أصل خاطئ
+        _current_px = 0.0
+        try:
+            if symbol and engine:
+                _px_data = await engine.data_layer.get_price(symbol.upper())
+                if _px_data and _px_data.get("price", 0) > 0:
+                    _current_px = float(_px_data["price"])
+        except Exception:
+            pass
+
         analysis = await engine.news_engine.analyze_chart_image(
-            image_data=bytes(image_bytes), symbol=symbol)
+            image_data=bytes(image_bytes),
+            symbol=symbol,
+            current_price=_current_px)
 
         # فحص نص التحليل — القسم "0-نوع السوق" يُصرِّح بالنوع صراحةً
         if not _chart_is_futures and analysis:
@@ -3078,8 +3141,11 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _signal_hint = f"\n💡 للتحليل الشامل متعدد المصادر: /signal {symbol}" if symbol else ""
         # CHART_FORMAT_fix: بناء الرسالة النهائية بتنسيق منظم
         _analysis_clean = analysis.strip()
+        # T31_fix: إضافة تحذير قبل الافتتاح إن وُجد
+        _pre_block = _pre_market_warn if _pre_market_warn else ""
         full = (
             "\n".join(header_lines) + "\n\n" +
+            _pre_block +
             _analysis_clean + "\n\n" +
             f"{_signal_hint}\n" +
             f"⚠️ التحليل استرشادي — القرار للمستخدم"
