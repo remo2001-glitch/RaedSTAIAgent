@@ -803,18 +803,20 @@ class NewsEngine:
         ]
 
         import html as _html
-        # T37+Y2_unify: منطق تصنيف الأخبار موحَّد للـ key_events والـ extra_news
-        _neg_kw_news = ("ban","sanction","hack","crash","fraud","seized","jail",
-                        "breach","ransom","arrest","scam","stolen","exploit","attack",
-                        "sue","lawsuit","penalty","fine","banned","shutdown","violation",
-                        "حظر","عقوبة","اختراق","انهيار","احتيال","مصادرة","غرامة")
-        _pos_kw_news = ("approve","launch","partner","etf","adopt","record","high",
-                        "charter","trust","license","grant","bullish","surge","rally",
-                        "موافقة","إطلاق","شراكة","قياسي","تبنّي","ترخيص")
+        # T37b_fix: منطق تصنيف موحَّد مع word boundary (يحل مشكلة "sue" في "Issuer")
+        import re as _re_news
+        _neg_exact_news  = r"\b(ban|hack|crash|fraud|seized|jail|breach|ransom|arrest|scam|stolen|exploit|attack|lawsuit|penalty|fine|banned|shutdown|violation)\b"
+        _neg_partial_news = ("sanction","حظر","عقوبة","اختراق","انهيار","احتيال","مصادرة","غرامة","عقوبات")
+        _neg_sue_news    = r"\bsues?\b"
+        _pos_exact_news  = r"\b(approve|approved|launch|partner|etf|adopt|record|high|charter|trust|license|grant|bullish|surge|rally)\b"
+        _pos_ar_news     = ("موافقة","إطلاق","شراكة","قياسي","تبنّي","ترخيص")
         def _news_impact(e):
             el = str(e).lower()
-            if any(k in el for k in _neg_kw_news): return (0, "🔴")
-            if any(k in el for k in _pos_kw_news): return (2, "🟢")
+            if (_re_news.search(_neg_exact_news, el) or _re_news.search(_neg_sue_news, el)
+                    or any(k in el for k in _neg_partial_news)):
+                return (0, "🔴")
+            if _re_news.search(_pos_exact_news, el) or any(k in str(e) for k in _pos_ar_news):
+                return (2, "🟢")
             return (1, "🟡")
 
         events = analysis.get("key_events", [])
