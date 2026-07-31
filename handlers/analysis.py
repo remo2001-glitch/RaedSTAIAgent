@@ -3045,6 +3045,14 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # TK_label_fix: اعرض نوع السوق الصحيح
             _mkt_label_an_display = "Spot" if not _use_futures_an else "Perpetual"
             parts.append(f"📌 {_display_symbol_an} — أصل مُرمَّز ({_mkt_label_an_display}) على OKX")
+        # T25_fix: تحذير Synthetic في /analyze
+        _is_x_an = _display_symbol_an.upper().startswith("X") and len(_display_symbol_an) > 2
+        if _is_x_an:
+            parts.append(
+                f"\n⚠️ *تحذير:* {_display_symbol_an} أصل اصطناعي (Synthetic) — "
+                "السيولة محدودة + لا تحماية مستثمرين."
+            )
+
         # FA_an: إضافة BTC correlation في /analyze
         if _btc_corr_an:
             parts.append(_clean_md(_btc_corr_an.strip()))
@@ -3607,6 +3615,31 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _atr_qs = _calc_atr(candles) if candles else 0.0
         if _atr_qs > 0:
             lines.append(f"📊 ATR: {_atr_qs:.1f}% يومياً")
+        # T24_fix: تحذير Synthetic + سيناريوهات
+        _is_x_qs = display_symbol.upper().startswith("X") and len(display_symbol) > 2
+        if _is_x_qs:
+            lines.append(
+                f"\n⚠️ *تحذير:* {display_symbol} أصل اصطناعي (Synthetic) — "
+                "السيولة محدودة + مخاطر إضافية."
+            )
+
+        # T24_fix: سيناريوهات بناءً على RSI + Direction
+        _qs_scenarios = []
+        if direction.startswith("🟢") and rsi < 40:
+            _qs_scenarios = [
+                f"🟢 صاعد (60%): ثبات فوق {_fmt_price(support, quote)} → هدف {_fmt_price(tp1, quote)}",
+                f"⚪ محايد (30%): تذبذب {_fmt_price(support, quote)}-{_fmt_price(resistance, quote)}",
+                f"🔴 هابط (10%): كسر {_fmt_price(sl, quote)} → مراجعة المركز",
+            ]
+        elif direction.startswith("⚪"):
+            _qs_scenarios = [
+                f"🟢 صاعد: كسر {_fmt_price(resistance, quote)} مع حجم → دخول",
+                f"⚪ محايد (50%): انتظار — السيناريو الأرجح",
+                f"🔴 هابط: كسر {_fmt_price(support, quote)} → لا دخول",
+            ]
+        if _qs_scenarios:
+            lines += ["", "📋 *السيناريوهات*"] + [f"• {s}" for s in _qs_scenarios]
+
         # T1_fix: تحذير للمجاني + عتبة الباقة في /quicksignal
         _tier_qs_t1 = _sm.get_tier(user_id_q) if user_id_q else "silver"
         _entry_qs = _TIER_CONF.get(_tier_qs_t1, _TIER_CONF["silver"])[1]

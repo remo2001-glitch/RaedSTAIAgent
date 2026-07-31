@@ -835,6 +835,31 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as _fcae:
             logger.debug(f"planmonth forecast30: {_fcae}")
 
+        # T23_fix: مصفوفة قرار بناءً على السيناريوهات
+        _pm_matrix = []
+        if fear_val <= 25 and "هابط" in regime.description_ar:
+            _pm_matrix = [
+                "🟢 إذا Fear > 35 + كسر مقاومة → دخول 30%",
+                "⚪ إذا Fear 25-35 + تذبذب → انتظار + سيولة",
+                "🔴 إذا Fear < 20 + كسر دعم → خروج كامل",
+            ]
+        elif "صاعد" in regime.description_ar:
+            _pm_matrix = [
+                "🟢 إذا RSI < 60 + Vol > 1x → دخول 50%",
+                "⚪ إذا RSI > 70 → انتظار تصحيح 10-15%",
+                "🔴 إذا كسر EMA50 → خروج 50%",
+            ]
+        else:
+            _pm_matrix = [
+                "🟢 إذا Fear < 30 + ADX > 20 → دخول محدود 25%",
+                "⚪ إذا ADX < 15 → انتظار اتجاه واضح",
+                "🔴 إذا Fear > 70 → تحقيق أرباح جزئي",
+            ]
+
+        if _pm_matrix:
+            lines += ["", "🎯 *مصفوفة القرار الشهري*"]
+            lines += [f"  {s}" for s in _pm_matrix]
+
         lines += ["", "📅 *جدول الشهر المقترح*"] + week_plan + [
             "",
             "⚠️ خطة استرشادية — القرار النهائي للمستخدم",
@@ -1047,11 +1072,29 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return_exceptions=True,
         )
 
+        # T22_fix: قسم السياق الكلي + قرار واضح
+        _fear_label = fear.get("label_ar", "محايد")
+        _regime_ar  = regime.description_ar
+
+        # قرار موقفي بناءً على السوق
+        if fear_val <= 20 and "هابط" in _regime_ar:
+            _pw_decision = "🚨 *لا دخول* — خوف شديد + سوق هابط"
+        elif fear_val <= 30 and "هابط" in _regime_ar:
+            _pw_decision = "⚠️ *تقليل التعرض* — سوق هابط + خوف"
+        elif fear_val <= 40:
+            _pw_decision = "🟡 *انتظار* — شروط الدخول غير مكتملة"
+        elif "صاعد" in _regime_ar and fear_val >= 50:
+            _pw_decision = "✅ *يمكن الدخول بحجم طبيعي* — شروط مناسبة"
+        else:
+            _pw_decision = "🟡 *دخول محدود* — انتظر تأكيداً إضافياً"
+
         lines = [
             "📅 *الخطة الأسبوعية — رائد*",
             "━━━━━━━━━━━━━━━━━━",
-            f"السوق: {regime.description_ar}",
-            f"Fear & Greed: {fear_val} — {fear.get('label_ar','محايد')}",
+            f"السوق: {_regime_ar}",
+            f"Fear & Greed: {fear_val} — {_fear_label}",
+            "",
+            f"🎯 *القرار الأسبوعي:* {_pw_decision}",
             "",
         ]
 
