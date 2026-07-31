@@ -2124,6 +2124,13 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # TK_label_fix: اعرض نوع السوق الصحيح
             _mkt_label_display = "Spot" if not _use_futures else "Perpetual"
             full_text += f"\n\n📌 *{_display_symbol}* — أصل مُرمَّز ({_mkt_label_display}) على OKX"
+            # T25b_fix: تحذير Synthetic في /signal
+            _is_x_sig = _display_symbol.upper().startswith("X") and len(_display_symbol) > 2
+            if _is_x_sig:
+                full_text += (
+                    f"\n⚠️ *تحذير:* {_display_symbol} أصل اصطناعي (Synthetic) — "
+                    "السيولة محدودة + لا حماية مستثمرين."
+                )
         # إصلاح #236: ربط /signal ↔ /chart للتكامل التحليلي
         # CHART_SIG_fix: استخدام _display_symbol (XSPY وليس SPY)
         full_text += f"\n📊 للتحليل البصري: /chart {_display_symbol}"
