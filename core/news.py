@@ -582,7 +582,10 @@ class NewsEngine:
             # إصلاح #274: json_mode يتحكم في response_format
             sys_msg = ("أنت محلل مالي متخصص. أجب دائماً بـ JSON صحيح فقط بدون أي نص إضافي."
                        if json_mode else
-                       "أنت خبير تحليل فني. أجب بنص عربي احترافي مباشر بدون JSON وبدون markdown.")
+                       # T30_fix: system prompt يتضمن اسم الأصل والسعر
+                f"أنت خبير تحليل فني للأصل {symbol_name} (السعر الحالي: {_price_str}). "
+                "أجب بنص عربي احترافي مباشر بدون JSON وبدون markdown. "
+                f"ركز حصراً على {symbol_name} وأرقامه المرئية في الصورة.")
             req_body = {
                 "model":       model,
                 "messages":    [
@@ -1046,8 +1049,11 @@ class NewsEngine:
             return "spot"  # fallback آمن
 
     async def analyze_chart_image(self, image_data: bytes,
-                                   symbol: str = "") -> str:
-        """تحليل صورة الشارت — نموذج Vision محدَّث مع fallback."""
+                                   symbol: str = "",
+                                   current_price: float = 0.0) -> str:
+        """تحليل صورة الشارت — نموذج Vision محدَّث مع fallback.
+        T30_fix: symbol و current_price لمنع تحليل أصل خاطئ.
+        """
         if not self.groq_key:
             return "⚠️ Groq API غير مُفعَّل — أضف GROQ_API_KEY في Railway"
 
@@ -1090,6 +1096,10 @@ class NewsEngine:
             )
             ctx  = ssl.create_default_context()
             loop = asyncio.get_event_loop()
+
+            # T30_fix: تعريف symbol_name و current_price للـ prompt
+            symbol_name = symbol.upper() if symbol else "الأصل المعروض"
+            _price_str = f"${current_price:,.4f}" if current_price > 0 else "غير متوفر"
 
             for model in VISION_MODELS:
                 try:
