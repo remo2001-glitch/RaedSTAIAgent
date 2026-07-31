@@ -1536,8 +1536,13 @@ class DataLayer:
             _sym_cvd = f"{symbol.upper()}-USDT"
             _url_cvd = f"https://www.okx.com/api/v5/market/trades?instId={_sym_cvd}&limit=100"
             _req_cvd = _ur_cvd.Request(_url_cvd, headers={"User-Agent":"Mozilla/5.0"})
-            _resp_cvd = _ur_cvd.urlopen(_req_cvd, context=_ctx_cvd, timeout=5)
-            _data_cvd = _jj_cvd.loads(_resp_cvd.read())
+            import asyncio as _aio_cvd
+            _loop_cvd = _aio_cvd.get_event_loop()
+            def _fetch_cvd():
+                return _ur_cvd.urlopen(_req_cvd, context=_ctx_cvd, timeout=5).read()
+            _raw_cvd  = await _aio_cvd.wait_for(
+                _loop_cvd.run_in_executor(None, _fetch_cvd), timeout=6.0)
+            _data_cvd = _jj_cvd.loads(_raw_cvd)
             if _data_cvd.get("data"):
                 _trades = _data_cvd["data"]
                 _buy_vol  = sum(float(t.get("sz",0)) for t in _trades if t.get("side")=="buy")
