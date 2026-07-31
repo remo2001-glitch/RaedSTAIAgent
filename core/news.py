@@ -805,10 +805,21 @@ class NewsEngine:
         import html as _html
         events = analysis.get("key_events", [])
         if events:
-            lines += ["", "⚡ *الأحداث الرئيسية*"]
+            # T37_fix: ترتيب الأخبار حسب التأثير المقدَّر
+            _neg_kw = ("ban","sanction","hack","crash","fraud","seized","jail",
+                       "حظر","عقوبة","اختراق","انهيار","احتيال","مصادرة")
+            _pos_kw = ("approve","launch","partner","etf","adopt","record","high",
+                       "موافقة","إطلاق","شراكة","قياسي","تبنّي")
+            def _news_impact(e):
+                el = str(e).lower()
+                if any(k in el for k in _neg_kw): return (0, "🔴")
+                if any(k in el for k in _pos_kw): return (2, "🟢")
+                return (1, "🟡")
+            _sorted_ev = sorted(events[:6], key=lambda e: _news_impact(e)[0])
+            lines += ["", "⚡ *الأحداث الرئيسية (مرتبة حسب التأثير)*"]
             lines += [
-                f"• {_html.unescape(str(e)).replace('_',' ').replace('*','')[:100]}"
-                for e in events[:4] if e
+                f"{_news_impact(e)[1]} {_html.unescape(str(e)).replace('_',' ').replace('*','')[:100]}"
+                for e in _sorted_ev if e
             ]
 
         flags = analysis.get("risk_flags", [])
