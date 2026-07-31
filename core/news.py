@@ -733,12 +733,13 @@ class NewsEngine:
     # 4. تنسيق التقرير
     # ═══════════════════════════════════════════════════════════
     def format_ar(self, items: List[Dict], analysis: Dict) -> str:
+        # T19_fix: تنسيق احترافي مُحسَّن
         sent_label, _ = SENTIMENT_LABELS.get(
             analysis.get("sentiment", "neutral"),
             ("⚪ محايد", 0.0)
         )
         impact_ar = {
-            "high":   "🔴 كبير",
+            "high":   "🔴 عالي",
             "medium": "🟠 متوسط",
             "low":    "🟡 محدود",
         }.get(analysis.get("impact_level", "low"), "🟡")
@@ -751,24 +752,48 @@ class NewsEngine:
             else source
         )
 
-        # F2: Sentiment Score Bar مرئي
         _conf_news = analysis.get("confidence", 0)
         _bars_news = int(_conf_news * 10)
         _sentiment_bar = "█" * _bars_news + "░" * (10 - _bars_news)
-        # توصية تداول بناءً على المشاعر
+        _n_sources = len(items) if items else 0
+
+        # توصية مبنية على المشاعر
         _news_advice = (
             "💡 *توصية:* مراقبة فرص الشراء — الأخبار إيجابية"
             if "إيجابي" in sent_label else
-            "⚠️ *توصية:* تقليل التعرض — أخبار سلبية قد تضغط على الأسعار"
+            "⚠️ *توصية:* تقليل التعرض — أخبار سلبية قد تضغط"
             if "سلبي" in sent_label else
             "💡 *توصية:* أخبار محايدة — تابع المؤشرات التقنية"
         )
+
+        # T19_fix: سيناريوهات سعرية بناءً على المشاعر
+        _is_positive = "إيجابي" in sent_label
+        _is_negative = "سلبي" in sent_label
+        _scenarios = []
+        if _is_positive:
+            _scenarios = [
+                "🟢 *صاعد:* إذا تأكدت الأخبار الإيجابية → ارتفاع +3-5%",
+                "⚪ *محايد:* إذا تراجع تأثير الأخبار → تذبذب جانبي",
+                "🔴 *هابط:* إذا تعارضت مع بيانات اقتصادية → انعكاس",
+            ]
+        elif _is_negative:
+            _scenarios = [
+                "🔴 *هابط:* إذا استمر ضغط الأخبار السلبية → هبوط -3-5%",
+                "⚪ *محايد:* إذا تم تسعير الأخبار مسبقاً → استقرار",
+                "🟢 *صاعد:* إذا تحسنت البيانات الاقتصادية → ارتداد",
+            ]
+        else:
+            _scenarios = [
+                "🟢 *صاعد:* إذا جاءت بيانات اقتصادية إيجابية",
+                "⚪ *محايد:* السيناريو الأرجح — انتظار محفز واضح",
+                "🔴 *هابط:* إذا تصاعدت التوترات التنظيمية",
+            ]
+
         lines = [
             "📰 *تقرير الأخبار — رائد*",
             "━━━━━━━━━━━━━━━━━━",
-            f"المشاعر: {sent_label}",
-            f"التأثير: {impact_ar}",
-            f"الثقة:   {_sentiment_bar} {_conf_news:.0%}",
+            f"المشاعر: {sent_label} | التأثير: {impact_ar}",
+            f"الثقة: {_sentiment_bar} {_conf_news:.0%} | المصادر: {_n_sources}",
             "",
             "📋 *الملخص*",
             analysis.get("summary_ar", ""),
@@ -822,6 +847,10 @@ class NewsEngine:
                            "اختراق", "احتيال", "سرقة", "اعتقال", "مصادرة", "غرامة")
                 _prefix = "🔴 " if any(k in title.lower() for k in _neg_kw) else "• "
                 lines.append(f"{_prefix}{title}")
+
+        # T19_fix: إضافة سيناريوهات سعرية
+        lines += ["", "📊 *السيناريوهات السعرية*"]
+        lines += _scenarios
 
         # F2b: توصية رائد المحسّنة مع Sentiment Bar
         s_val = float(analysis.get("sentiment_score", 0) or 0)
