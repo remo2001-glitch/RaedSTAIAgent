@@ -3680,9 +3680,9 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "",
             "📍 *مناطق الدخول والخروج*",
             f"• نقطة الدخول: {_fmt_price(entry, quote)}",
-            f"• هدف 1:       {_fmt_price(tp1, quote)} ({(tp1/price-1)*100:+.1f}%)",
-            f"• هدف 2:       {_fmt_price(tp2, quote)} ({(tp2/price-1)*100:+.1f}%)",
-            f"• وقف الخسارة: {_fmt_price(sl, quote)} ({(sl/price-1)*100:+.1f}%)",
+            f"• هدف 1:       {_fmt_price(tp1, quote)} ({(tp1/max(price,1e-9)-1)*100:+.1f}%)",
+            f"• هدف 2:       {_fmt_price(tp2, quote)} ({(tp2/max(price,1e-9)-1)*100:+.1f}%)",
+            f"• وقف الخسارة: {_fmt_price(sl, quote)} ({(sl/max(price,1e-9)-1)*100:+.1f}%)",
         ]
         if support > 0 and resistance > 0:
             _sup_s, _res_s = _fmt_price_pair(support, resistance, quote)
