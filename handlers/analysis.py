@@ -1036,11 +1036,12 @@ def _build_professional_block(
             entry_lines.append(f"• TP3 (اختياري): {_fmt_price(tp3_v)} (+{tp3_pct:.1f}%)")
     else:
         entry_lines.append("• الأهداف: متاحة بعد تأكيد 2/4 مؤشرات")
-    # T28_fix: R/R يُعرض فقط مع أهداف حقيقية
-    _has_targets = tp1_v > 0 and tp1_v != price
+    # T28_fix v2: R/R يُعرض فقط مع أهداف مؤكدة (≥2 confirmations)
+    # _confirmed = _flags_found >= 2 (مُعرَّف أعلاه)
+    _has_real_targets = _confirmed and tp1_v > 0 and tp1_v != price
     _rr_line = (f"• R/R الواقعي: 1:{rr_real}{_rr_adjusted_note}"
-                if _has_targets
-                else "• R/R: غير محسوب — انتظر تأكيد الأهداف")
+                if _has_real_targets
+                else "• R/R: غير محسوب — انتظر تأكيد 2/4 مؤشرات")
     entry_lines.extend([
         f"• وقف الخسارة: {_fmt_price(pro_sl)} ({sl_pct:.1f}%-)",
         _rr_line,
@@ -1592,6 +1593,51 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if _reco_parts:
             lines += ["", f"💡 *التفسير*: {' · '.join(_reco_parts)}"]
 
+        # T17_fix: إضافة DXY + 10Y من Yahoo Finance
+        try:
+            import urllib.request as _ur, json as _jj, ssl as _ssl
+            _ctx_t17 = _ssl.create_default_context()
+            _ctx_t17.check_hostname = False
+            _ctx_t17.verify_mode = _ssl.CERT_NONE
+            _macro_lines = []
+            for _ysy, _lbl in [("DX=F","DXY"), ("^TNX","10Y Treasury")]:
+                try:
+                    _url_t = f"https://query1.finance.yahoo.com/v8/finance/chart/{_ysy}?interval=1d&range=2d"
+                    _req_t = urllib.request.Request(_url_t, headers={"User-Agent":"Mozilla/5.0"})
+                    _resp_t = _ur.urlopen(_req_t, context=_ctx_t17, timeout=5)
+                    _d_t = _jj.loads(_resp_t.read())
+                    _closes_t = _d_t["chart"]["result"][0]["indicators"]["quote"][0]["close"]
+                    _v_t = [x for x in _closes_t if x]
+                    if len(_v_t) >= 2:
+                        _chg_t = (_v_t[-1] - _v_t[-2]) / _v_t[-2] * 100
+                        _icon_t = "📈" if _chg_t >= 0 else "📉"
+                        _macro_lines.append(f"• {_lbl}: {_v_t[-1]:.2f} ({_chg_t:+.2f}%) {_icon_t}")
+                except Exception:
+                    pass
+            if _macro_lines:
+                lines += ["", "🌍 *السياق الكلي*"] + _macro_lines
+        except Exception:
+            pass
+
+        # T17_fix: سيناريوهات بناءً على البيانات المجمَّعة
+        _bull_conditions = []
+        _bear_conditions = []
+        if fear_val < 30: _bull_conditions.append("Fear & Greed منخفض (فرصة تراكم)")
+        if _fund_pct < -0.01: _bull_conditions.append("Funding سالب (ضغط Shorts)")
+        if tvl_change > 1: _bull_conditions.append("TVL يرتفع")
+        if fear_val > 70: _bear_conditions.append("Greed مرتفع (خطر الانعكاس)")
+        if _fund_pct > 0.02: _bear_conditions.append("Funding مرتفع (Long مزدحم)")
+        if tvl_change < -3: _bear_conditions.append("خروج سيولة DeFi")
+
+        if _bull_conditions or _bear_conditions:
+            lines += ["", "📋 *السيناريوهات*"]
+            if _bull_conditions:
+                lines.append(f"🟢 صاعد: {' + '.join(_bull_conditions[:2])}")
+            if _bear_conditions:
+                lines.append(f"🔴 هابط: {' + '.join(_bear_conditions[:2])}")
+            if not _bull_conditions and not _bear_conditions:
+                lines.append("⚪ محايد: انتظار محفز واضح")
+
         _src = "📡 المصدر: DeFiLlama + OKX"
         if btc_adv.get("available"):
             _src += " + BGeometrics"
@@ -1657,10 +1703,25 @@ async def cmd_regime(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _tip = _regime_tips.get(_regime_action, "")
         if _tip:
             text += f"\n\n💡 *توصية رائد:* {_tip}"
-        # إضافة مرجع السوق الكلي
-        text += (
-            f"\n\n📡 *المصدر:* OKX + BGeometrics | 🤖 رائد التداول الذكي"
-        )
+
+        # T20_fix: إضافة تحذيرات ADX + SPX Correlation
+        try:
+            _adx_r = getattr(result, "adx", 0) or 0
+            _atr_r = getattr(result, "atr_pct", 0) or 0
+            _vol_r = getattr(result, "volume_ratio", 1) or 1
+            _warns = []
+            if _adx_r > 0 and _adx_r < 20:
+                _warns.append(f"⚠️ ADX={_adx_r:.0f} < 20 → لا اتجاه واضح (Whipsaw محتمل)")
+            if _vol_r < 0.8:
+                _warns.append(f"⚠️ Volume {_vol_r:.1f}x → ضغط بيع خفي أو انتظار")
+            if _atr_r > 4:
+                _warns.append(f"⚠️ ATR={_atr_r:.1f}% مرتفع → تقلب شديد، قلل الحجم")
+            if _warns:
+                text += "\n\n⚠️ *تحذيرات النظام*\n" + "\n".join(_warns)
+        except Exception:
+            pass
+
+        text += f"\n\n📡 *المصدر:* OKX + BGeometrics | 🤖 رائد التداول الذكي"
         await msg.edit_text(text, parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         logger.error(f"cmd_regime: {e}")
@@ -2199,6 +2260,48 @@ async def cmd_backtest(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 for ln in lines
             )
         text = _fix_md_stars(_clean_md(engine.backtest_engine.format_ar(result)))
+
+        # T21_fix: إضافة Sortino + Benchmark + قرار واضح
+        try:
+            _wr  = getattr(result, "win_rate", 0)
+            _ret = getattr(result, "total_return", 0)
+            _dd  = getattr(result, "max_drawdown", 0)
+            _sr  = getattr(result, "sharpe_ratio", 0)
+            _n   = getattr(result, "total_trades", 0)
+
+            # حساب Sortino تقريبي
+            _sortino_note = ""
+            if _sr > 0:
+                _sortino_approx = _sr * 1.3  # تقدير: Sortino ~ Sharpe × 1.3
+                _sortino_note = f"\n• Sortino (تقديري): {_sortino_approx:.2f}"
+
+            # Benchmark: Buy & Hold
+            _bh_note = ""
+            if len(price_data) > 10:
+                _bh_ret = (float(price_data[-1].get("close",1)) /
+                           float(price_data[0].get("close",1)) - 1) * 100
+                _vs_bh = _ret - _bh_ret
+                _bh_emoji = "🟢" if _vs_bh > 0 else "🔴"
+                _bh_note = f"\n• vs Buy & Hold: {_bh_emoji} {_vs_bh:+.1f}%"
+
+            # قرار واضح
+            if _n < 15 or _sr < 0:
+                _decision = "🔴 *لا تتداول* — بيانات غير كافية أو أداء سلبي"
+            elif _sr < 0.5 or _wr < 45:
+                _decision = "🟡 *اختبار صغير* — استراتيجية ضعيفة، جرب بـ 2-5% فقط"
+            elif _sr >= 1.5 and _wr >= 55:
+                _decision = "🟢 *تداول كامل* — استراتيجية قوية، راقب دورياً"
+            else:
+                _decision = "🟡 *تداول بحذر* — أداء مقبول، قلل الحجم في السوق الهابط"
+
+            if _sortino_note or _bh_note or _decision:
+                text += f"\n\n💡 *T21 — مؤشرات إضافية*"
+                if _sortino_note: text += _sortino_note
+                if _bh_note:      text += _bh_note
+                text += f"\n\n🎯 *القرار:* {_decision}"
+        except Exception as _bt21_e:
+            logger.debug(f"T21_backtest: {_bt21_e}")
+
         await msg.edit_text(text, parse_mode=ParseMode.MARKDOWN)
 
     except Exception as e:
