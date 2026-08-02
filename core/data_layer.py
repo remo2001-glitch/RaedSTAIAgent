@@ -663,15 +663,27 @@ class DataLayer:
     async def _price_okx(self, symbol: str, quote: str = "USDT") -> Optional[Dict]:
         """OKX Public API — fallback للسعر (غير محجوب على Railway).
         إصلاح/تطوير #188: quote اختياري ("USDT" افتراضياً = السلوك السابق
-        دون أي تغيير) — يدعم أزواج BTC/ETH المباشرة (مثل ETH-BTC)."""
+        دون أي تغيير) — يدعم أزواج BTC/ETH المباشرة (مثل ETH-BTC).
+        xSKHY_fix: X-prefix Spot assets تبدأ بـ x صغير في OKX API.
+        """
         try:
-            inst_id = f"{symbol.upper()}-{quote.upper()}"
-            data = await _fetch(
-                self.session,
-                f"https://www.okx.com/api/v5/market/ticker?instId={inst_id}",
-                headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
-                retries=2,
-            )
+            sym_up = symbol.upper()
+            inst_id = f"{sym_up}-{quote.upper()}"
+            # xSKHY_fix: جرّب uppercase أولاً ثم lowercase لـ X-prefix
+            _inst_ids = [inst_id]
+            if sym_up.startswith("X") and len(sym_up) > 2:
+                _inst_ids.append(f"x{sym_up[1:]}-{quote.upper()}")
+            data = None
+            for _iid in _inst_ids:
+                _d = await _fetch(
+                    self.session,
+                    f"https://www.okx.com/api/v5/market/ticker?instId={_iid}",
+                    headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+                    retries=2,
+                )
+                if isinstance(_d, dict) and _d.get("data"):
+                    data = _d
+                    break
             if isinstance(data, dict) and data.get("data"):
                 ticker = data["data"][0]
                 price  = float(ticker.get("last", 0))
@@ -1820,8 +1832,24 @@ class DataLayer:
             inst_id   = f"{sym_upper}-{quote.upper()}"
             limit     = min(days, 300)
 
-            # DL1c_fix: إذا بدأ الرمز بـ X → جرب مباشرة كـ Spot
+            # DL1c_fix + xSKHY_fix: X-prefix → جرب uppercase ثم lowercase
             if sym_upper.startswith("X") and len(sym_upper) > 2:
+                # lowercase: xSKHY-USDT (OKX Spot format)
+                _inst_x_low = f"x{sym_upper[1:]}-{quote.upper()}"
+                for _iid_x in [inst_id, _inst_x_low]:
+                    data_x = await _fetch(
+                        self.session,
+                        f"https://www.okx.com/api/v5/market/history-candles?instId={_iid_x}&bar=1D&limit={limit}",
+                        headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+                        retries=2,
+                    )
+                    if data_x and isinstance(data_x, dict) and data_x.get("data"):
+                        candles_x = _parse_okx_candles(data_x["data"])
+                        if len(candles_x) >= 5:
+                            return candles_x
+                # إذا فشل كلاهما → استمر للـ fallback
+                _dummy_skip = True
+            if False:  # placeholder to maintain structure
                 data_x = await _fetch(
                     self.session,
                     f"https://www.okx.com/api/v5/market/history-candles?instId={inst_id}&bar=1D&limit={limit}",

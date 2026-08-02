@@ -806,7 +806,9 @@ class NewsEngine:
         # T37b_fix: منطق تصنيف موحَّد مع word boundary (يحل مشكلة "sue" في "Issuer")
         import re as _re_news
         _neg_exact_news  = r"\b(ban|hack|crash|fraud|seized|jail|breach|ransom|arrest|scam|stolen|exploit|attack|lawsuit|penalty|fine|banned|shutdown|violation)\b"
-        _neg_partial_news = ("sanction","حظر","عقوبة","اختراق","انهيار","احتيال","مصادرة","غرامة","عقوبات")
+        _neg_partial_news = ("sanction","exploit","hack","breach",
+                              "حظر","عقوبة","اختراق","انهيار","احتيال","مصادرة","غرامة","عقوبات",
+                              "استغلال","اختراق","سرقة","هجوم","احتيال")
         _neg_sue_news    = r"\bsues?\b"
         _pos_exact_news  = r"\b(approve|approved|launch|partner|etf|adopt|record|high|charter|trust|license|grant|bullish|surge|rally)\b"
         _pos_ar_news     = ("موافقة","إطلاق","شراكة","قياسي","تبنّي","ترخيص")
