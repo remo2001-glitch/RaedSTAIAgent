@@ -1896,9 +1896,12 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     symbol     = resolution.base
 
     # TK_Spot_fix: للأصول X-prefix في Spot → استخدام XSPCX لجلب البيانات
-    # لكن الاسم المعروض يبقى SPCX (base)
-    if not _use_futures and raw_arg.upper().startswith("X") and len(raw_arg) > 2:
-        _spot_data_symbol = raw_arg.upper()  # XSPCX للـ OKX API
+    # XSKHY_fix: إذا X-prefix وليس في القائمة المعروفة → symbol = raw_arg كاملاً
+    if raw_arg.upper().startswith("X") and len(raw_arg) > 2:
+        _spot_data_symbol = raw_arg.upper()  # XSPCX/XSKHY للـ OKX API
+        # إذا resolve أعطانا base مختلف → أعِد symbol للأصلي
+        if symbol != raw_arg.upper() and not _use_futures:
+            symbol = raw_arg.upper()
     else:
         _spot_data_symbol = symbol  # الرمز العادي
 
@@ -1979,13 +1982,15 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             news_an = {}
 
         if len(candles) < 50:
+            # XSKHY_name_fix: عرض الاسم الكامل في رسالة الخطأ
+            _err_sym = _display_symbol if _display_symbol else symbol
             await msg.edit_text(
                 (
-                    f"⚠️ *{symbol}* غير مدرج في OKX حالياً\n"
+                    f"⚠️ *{_err_sym}* غير مدرج في OKX حالياً\n"
                     f"• تحقق من قائمة الأصول في OKX\n"
                     f"• أو جرّب رمزاً مختلفاً"
                     if symbol.upper() not in _OKX_TOKENIZED_STOCKS
-                    else f"⚠️ بيانات {symbol} غير متوفرة مؤقتاً — أعد المحاولة بعد دقيقة"
+                    else f"⚠️ بيانات {_err_sym} غير متوفرة مؤقتاً — أعد المحاولة بعد دقيقة"
                 ))
             return
 
@@ -2103,10 +2108,12 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-        # تحذير RSI/اتجاه متعارض
+        # MTF: عرض التأكيد أو التعارض
         warning = ""
+        if _mtf_confirm:
+            warning = f"\n\n{_mtf_confirm}"
         if _mtf_warns:
-            warning = "\n\n" + "\n".join(_mtf_warns)
+            warning += ("\n\n" if not warning else "\n") + "\n".join(_mtf_warns)
         if signal.direction == "short" and rsi < 30:
             warning += "\n\n⚠️ *تنبيه:* RSI في ذروة البيع مع إشارة بيع — خطر انعكاس مرتفع"
         elif signal.direction == "long" and rsi > 70:
