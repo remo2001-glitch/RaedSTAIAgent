@@ -1176,6 +1176,9 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _rsi_cond = (f"  • ✅ RSI فوق {_rsi_t_w} (حالياً {rsi_w:.0f}){_rsi_warn_w} — مُستوفى"
                              if rsi_w > _rsi_t_w else
                              f"  • RSI يرتفع فوق {_rsi_t_w} (حالياً {rsi_w:.0f})")
+                # BGB_fix: إذا ema50_w=0 → استخدم السعر
+                if ema50_w <= 0:
+                    ema50_w = price
                 _ema50_dist_w = abs(price - ema50_w) / max(ema50_w, 1) * 100
                 _ema_cond = (f"  • ✅ السعر فوق EMA50 ({_fmt_price(ema50_w)}) — مُستوفى"
                              if price > ema50_w else
@@ -1322,6 +1325,19 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # إصلاح تنسيق "بعد 20ساعة" → "بعد 20 ساعة"
         events_text = re.sub(r'(بعد\s*)(\d+)(ساعة)', r'بعد  ساعة', events_text)
         events_text = re.sub(r'(بعد\s*)(\d+)(يوم)', r'بعد  يوم', events_text)
+        # events_filter_fix: حذف الأحداث المنتهية (hours سالبة)
+        try:
+            _ev_raw = events_text.split("\n")
+            _ev_ok = []
+            for _el in _ev_raw:
+                import re as _re_ev
+                _m_hr = _re_ev.search(r'بعد\s*(-?\d+)\s*ساعة', _el)
+                if _m_hr and int(_m_hr.group(1)) < 0:
+                    continue  # حدث منتهٍ
+                _ev_ok.append(_el)
+            events_text = "\n".join(_ev_ok)
+        except Exception:
+            pass
         sched_text  = engine.scheduler.next_weekly_ar() if engine.scheduler else ""
 
         # إصلاح #293/#252: week_plan ديناميكي في planweek

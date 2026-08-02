@@ -3415,6 +3415,12 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _sym_label = f" — {symbol}" if symbol else ""
         # CHART_FORMAT_fix: تنسيق احترافي محسَّن
         _mkt_icon = "📈 Futures/Perp" if _chart_is_futures else "⚡ Spot"
+        # chart_header_fix: إضافة معلومات الأصل الكاملة
+        _is_x_chart = symbol.upper().startswith("X") and len(symbol) > 2 if symbol else False
+        _synthetic_warn_chart = (
+            f"⚠️ تحذير: {symbol.upper()} أصل اصطناعي (Synthetic) — السيولة محدودة"
+            if _is_x_chart else ""
+        )
         header_lines = [
             f"📊 تحليل الشارت البصري{_sym_label}",
             f"🏪 نوع السوق: {_mkt_icon}",
@@ -3432,8 +3438,10 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         header_lines += [
                             f"💰 السعر: {_fmt_price(p3)} ({c3:+.2f}%) {_c3_icon}",
                             f"⏱️ الإطار الزمني: يومي (1D)",
-                            "━━━━━━━━━━━━━━━━━━",
                         ]
+                        if _synthetic_warn_chart:
+                            header_lines.append(_synthetic_warn_chart)
+                        header_lines.append("━━━━━━━━━━━━━━━━━━")
             except Exception:
                 pass
         # إصلاح #236: ربط /chart ↔ /signal للتكامل التحليلي
