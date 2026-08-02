@@ -1533,7 +1533,11 @@ class DataLayer:
             _ctx_cvd = _ssl_cvd.create_default_context()
             _ctx_cvd.check_hostname = False
             _ctx_cvd.verify_mode = _ssl_cvd.CERT_NONE
-            _sym_cvd = f"{symbol.upper()}-USDT"
+            # X-prefix assets: XSPY → SPY للـ trades API
+            _sym_raw = symbol.upper()
+            _sym_cvd_base = (_sym_raw[1:] if _sym_raw.startswith("X") and len(_sym_raw) > 2
+                             else _sym_raw)
+            _sym_cvd = f"{_sym_cvd_base}-USDT"
             _url_cvd = f"https://www.okx.com/api/v5/market/trades?instId={_sym_cvd}&limit=100"
             _req_cvd = _ur_cvd.Request(_url_cvd, headers={"User-Agent":"Mozilla/5.0"})
             import asyncio as _aio_cvd
@@ -1549,13 +1553,16 @@ class DataLayer:
                 _sell_vol = sum(float(t.get("sz",0)) for t in _trades if t.get("side")=="sell")
                 _cvd = _buy_vol - _sell_vol
                 _total = _buy_vol + _sell_vol
-                enriched["cvd"] = round(_cvd, 4)
-                enriched["cvd_pct"] = round(_cvd / max(_total, 1e-9) * 100, 2)
-                enriched["cvd_signal"] = (
-                    "🟢 شراء" if _cvd > 0 else
-                    "🔴 بيع"  if _cvd < 0 else
-                    "⚪ محايد"
-                )
+                # CVD_sanity: تحقق من موثوقية البيانات
+                _buy_ratio = _buy_vol / max(_total, 1e-9)
+                if _total > 0 and 0.02 < _buy_ratio < 0.98:
+                    enriched["cvd"] = round(_cvd, 4)
+                    enriched["cvd_pct"] = round(_cvd / max(_total, 1e-9) * 100, 2)
+                    enriched["cvd_signal"] = (
+                        "🟢 شراء" if _cvd > 0 else
+                        "🔴 بيع"  if _cvd < 0 else
+                        "⚪ محايد"
+                    )
         except Exception as _cvd_e:
             logger.debug(f"OKX CVD ({symbol}): {_cvd_e}")
 
