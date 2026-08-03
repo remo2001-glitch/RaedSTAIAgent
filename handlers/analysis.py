@@ -1981,7 +1981,10 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             news_an = {}
 
-        if len(candles) < 50:
+        # X3_fix: خفض الحد لـ X-prefix assets (بيانات محدودة)
+        _is_x_sig = raw_arg.upper().startswith("X") and len(raw_arg) > 2
+        _min_candles_sig = 15 if _is_x_sig else 50
+        if len(candles) < _min_candles_sig:
             # XSKHY_name_fix: عرض الاسم الكامل في رسالة الخطأ
             _err_sym = _display_symbol if _display_symbol else symbol
             await msg.edit_text(
@@ -2237,6 +2240,12 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"\n⚠️ *تحذير:* {_display_symbol} أصل اصطناعي (Synthetic) — "
                     "السيولة محدودة + لا حماية مستثمرين."
                 )
+                # X3_fix: تحذير بيانات محدودة إذا كان len(candles) < 50
+                if len(candles) < 50:
+                    full_text += (
+                        f"\n⚠️ *ملاحظة:* بيانات محدودة ({len(candles)} يوم) — "
+                        "التحليل تقديري وليس نهائياً."
+                    )
         # إصلاح #236: ربط /signal ↔ /chart للتكامل التحليلي
         # CHART_SIG_fix: استخدام _display_symbol (XSPY وليس SPY)
         full_text += f"\n📊 للتحليل البصري: /chart {_display_symbol}"
