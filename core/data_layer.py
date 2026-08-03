@@ -95,6 +95,18 @@ _TOKENIZED_STOCK_MAP = {
 }
 
 
+# xSKHY_fix: قاموس OKX Spot aliases من SYMBOL_MAP
+_OKX_SPOT_ALIASES = {
+    sym: info["okx_spot"]
+    for sym, info in _STOCK_SYMBOL_MAP.items()
+    if "okx_spot" in info and info["okx_spot"] != sym
+}
+
+# أسماء خاصة بأسعار غير موثوقة من Yahoo (KRW أو غير USDT)
+# لهذه الأصول: OKX فقط، Yahoo محظور لتجنب بيانات خاطئة
+_YAHOO_BLOCKED_SYMBOLS = {"XSKHY", "SKHY", "XAUT"}
+
+
 def is_commodity_symbol(symbol: str) -> bool:
     """T13_fix: هل الرمز سلعة تحتاج Futures؟"""
     return symbol.upper().strip() in _COMMODITY_SYMBOLS
@@ -926,7 +938,7 @@ class DataLayer:
         if _stock_info.get("is_stock") and not symbol.upper().startswith("X"):
             # العملات العادية (SPCX/AAPL): Yahoo fallback
             _yahoo_sym = _stock_info.get("yahoo") or _stock_info.get("base", symbol)
-            if _yahoo_sym:
+            if _yahoo_sym and symbol.upper() not in _YAHOO_BLOCKED_SYMBOLS:
                 yahoo_candles = await self._ohlcv_yahoo(_yahoo_sym, days=max(limit, 90))
                 if yahoo_candles and len(yahoo_candles) >= 10:
                     logger.info(f"DL1b: {symbol} ← Yahoo({_yahoo_sym}) {len(yahoo_candles)} شمعة")
@@ -941,7 +953,7 @@ class DataLayer:
                 return x_spot_candles
             # T10b_scaling_fix: إذا OKX Spot قليل → Yahoo مع تصحيح الأسعار
             _yahoo_sym = _stock_info.get("yahoo") or _stock_info.get("base", symbol)
-            if _yahoo_sym:
+            if _yahoo_sym and symbol.upper() not in _YAHOO_BLOCKED_SYMBOLS:
                 yahoo_candles = await self._ohlcv_yahoo(_yahoo_sym, days=max(limit, 90))
                 if yahoo_candles and len(yahoo_candles) >= 10:
                     # T10b_scaling: نسحب سعر XSPCX الحالي لتصحيح نسبة Yahoo
