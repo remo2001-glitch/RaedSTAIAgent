@@ -1325,15 +1325,28 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # إصلاح تنسيق "بعد 20ساعة" → "بعد 20 ساعة"
         events_text = re.sub(r'(بعد\s*)(\d+)(ساعة)', r'بعد  ساعة', events_text)
         events_text = re.sub(r'(بعد\s*)(\d+)(يوم)', r'بعد  يوم', events_text)
-        # events_filter_fix: حذف الأحداث المنتهية (hours سالبة)
+        # events_filter_fix v2: فلتر متقدم للأحداث المنتهية
         try:
+            from datetime import datetime as _dt_ev, timezone as _tz_ev
+            _now_ev = _dt_ev.now(_tz_ev.utc)
             _ev_raw = events_text.split("\n")
             _ev_ok = []
             for _el in _ev_raw:
                 import re as _re_ev
+                # حذف أحداث بساعات سالبة
                 _m_hr = _re_ev.search(r'بعد\s*(-?\d+)\s*ساعة', _el)
                 if _m_hr and int(_m_hr.group(1)) < 0:
-                    continue  # حدث منتهٍ
+                    continue
+                # حذف FOMC إذا كان في يوليو 2026 أو قبله (انتهى 29 يوليو)
+                if ("الفيدرالي" in _el or "FOMC" in _el):
+                    _m_date = _re_ev.search(r'20(\d\d)-0?(\d+)-0?(\d+)', _el)
+                    if _m_date:
+                        _yr = int("20" + _m_date.group(1))
+                        _mo = int(_m_date.group(2))
+                        _dy = int(_m_date.group(3))
+                        from datetime import date as _date_ev
+                        if _date_ev(_yr, _mo, _dy) < _now_ev.date():
+                            continue  # حدث منتهٍ
                 _ev_ok.append(_el)
             events_text = "\n".join(_ev_ok)
         except Exception:
