@@ -83,6 +83,15 @@ _TOKENIZED_STOCK_MAP = {
     "XINTC": {"okx_spot": "XINTC",  "okx_futures": "INTC",  "yahoo": "INTC",  "base": "INTC", "is_stock": True},
     "DIS":   {"okx_spot": "XDIS",   "okx_futures": "DIS",   "yahoo": "DIS",   "base": "DIS", "is_stock": True},
     "XDIS":  {"okx_spot": "XDIS",   "okx_futures": "DIS",   "yahoo": "DIS",   "base": "DIS", "is_stock": True},
+    # XSKHY_fix + X3_fix: أصول X-prefix ذات أسماء خاصة في OKX
+    # OKX يستخدم lowercase x لهذه الأصول في Spot API
+    "XSKHY": {"okx_spot": "xSKHY",  "okx_futures": "SKHY",  "yahoo": "000660.KS", "base": "SKHY",  "is_stock": True, "cg_id": "sk-hynix"},
+    "SKHY":  {"okx_spot": "xSKHY",  "okx_futures": "SKHY",  "yahoo": "000660.KS", "base": "SKHY",  "is_stock": True, "cg_id": "sk-hynix"},
+    "XAUT":  {"okx_spot": "XAUt",   "okx_futures": "XAUT",  "yahoo": "XAUUSD=X",  "base": "XAUT",  "is_stock": False, "cg_id": "tether-gold"},
+    "XPCY":  {"okx_spot": "xPCY",   "okx_futures": "PCY",   "yahoo": "PCY",        "base": "PCY",   "is_stock": True, "cg_id": None},
+    "XEWY":  {"okx_spot": "XEWY",   "okx_futures": "EWY",   "yahoo": "EWY",        "base": "EWY",   "is_stock": True, "cg_id": None},
+    "XQQQ":  {"okx_spot": "XQQQ",   "okx_futures": "QQQ",   "yahoo": "QQQ",        "base": "QQQ",   "is_stock": True, "cg_id": None},
+    "XSPY":  {"okx_spot": "XSPY",   "okx_futures": "SPY",   "yahoo": "SPY",        "base": "SPY",   "is_stock": True, "cg_id": None},
 }
 
 
@@ -1005,7 +1014,12 @@ class DataLayer:
         return candles
 
     async def _ohlcv_coingecko(self, symbol: str, days: int) -> List[Dict]:
-        cg   = _cg_id(symbol)
+        # X3_fix: استخدم cg_id من _TOKENIZED_STOCK_MAP إذا متاح
+        sym_up = symbol.upper()
+        if sym_up in _TOKENIZED_STOCK_MAP and _TOKENIZED_STOCK_MAP[sym_up].get("cg_id"):
+            cg = _TOKENIZED_STOCK_MAP[sym_up]["cg_id"]
+        else:
+            cg = _cg_id(symbol)
         # CoinGecko: days<=1 → hourly, days>1 → daily تلقائياً
         data = await _fetch(
             self.session,
