@@ -367,6 +367,15 @@ def _cg_id(symbol: str) -> str:
     return sym.lower()
 
 
+# OKX_ALIASES_fix: قاموس الأسماء الخاصة في OKX (case-sensitive)
+# بعض الأصول تستخدم أسماء مختلفة في OKX API عن الرمز المتعارف عليه
+_OKX_SPOT_ALIASES: dict = {
+    "XSKHY":  "xSKHY",   # SK Hynix — OKX يستخدم lowercase x
+    "XAUT":   "XAUt",    # Tether Gold — OKX يستخدم t صغير
+    "XPCY":   "xPCY",    # Pacer ETF — OKX يستخدم lowercase x
+}
+
+
 def _clean_symbol(symbol: str) -> str:
     """
     يُطبِّع رمز العملة على مستوى النظام:
@@ -668,10 +677,12 @@ class DataLayer:
         """
         try:
             sym_up = symbol.upper()
-            inst_id = f"{sym_up}-{quote.upper()}"
+            # OKX_ALIASES_fix: تطبيق aliases للأسماء الخاصة
+            _okx_sym = _OKX_SPOT_ALIASES.get(sym_up, sym_up)
+            inst_id = f"{_okx_sym}-{quote.upper()}"
             # xSKHY_fix: جرّب uppercase أولاً ثم lowercase لـ X-prefix
             _inst_ids = [inst_id]
-            if sym_up.startswith("X") and len(sym_up) > 2:
+            if sym_up.startswith("X") and len(sym_up) > 2 and sym_up not in _OKX_SPOT_ALIASES:
                 _inst_ids.append(f"x{sym_up[1:]}-{quote.upper()}")
             data = None
             for _iid in _inst_ids:
@@ -1545,11 +1556,15 @@ class DataLayer:
             _ctx_cvd = _ssl_cvd.create_default_context()
             _ctx_cvd.check_hostname = False
             _ctx_cvd.verify_mode = _ssl_cvd.CERT_NONE
-            # X-prefix assets: XSPY → SPY للـ trades API
+            # OKX_ALIASES_fix: تطبيق aliases في CVD
             _sym_raw = symbol.upper()
-            _sym_cvd_base = (_sym_raw[1:] if _sym_raw.startswith("X") and len(_sym_raw) > 2
-                             else _sym_raw)
-            _sym_cvd = f"{_sym_cvd_base}-USDT"
+            if _sym_raw in _OKX_SPOT_ALIASES:
+                _sym_cvd = f"{_OKX_SPOT_ALIASES[_sym_raw]}-USDT"
+            elif _sym_raw.startswith("X") and len(_sym_raw) > 2:
+                # X-prefix: جرّب xSYMBOL ثم SYMBOL للـ trades
+                _sym_cvd = f"x{_sym_raw[1:]}-USDT"
+            else:
+                _sym_cvd = f"{_sym_raw}-USDT"
             _url_cvd = f"https://www.okx.com/api/v5/market/trades?instId={_sym_cvd}&limit=100"
             _req_cvd = _ur_cvd.Request(_url_cvd, headers={"User-Agent":"Mozilla/5.0"})
             import asyncio as _aio_cvd
@@ -1829,11 +1844,13 @@ class DataLayer:
         DL1c_fix: يجرب XSYMBOL-USDT تلقائياً للأسهم المُرمَّزة."""
         try:
             sym_upper = symbol.upper()
-            inst_id   = f"{sym_upper}-{quote.upper()}"
+            # OKX_ALIASES_fix: تطبيق aliases للأسماء الخاصة
+            _okx_sym_h = _OKX_SPOT_ALIASES.get(sym_upper, sym_upper)
+            inst_id   = f"{_okx_sym_h}-{quote.upper()}"
             limit     = min(days, 300)
 
             # DL1c_fix + xSKHY_fix: X-prefix → جرب uppercase ثم lowercase
-            if sym_upper.startswith("X") and len(sym_upper) > 2:
+            if sym_upper.startswith("X") and len(sym_upper) > 2 and sym_upper not in _OKX_SPOT_ALIASES:
                 # lowercase: xSKHY-USDT (OKX Spot format)
                 _inst_x_low = f"x{sym_upper[1:]}-{quote.upper()}"
                 for _iid_x in [inst_id, _inst_x_low]:
