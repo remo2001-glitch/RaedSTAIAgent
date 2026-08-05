@@ -3228,9 +3228,33 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _sig_a.confidence = min(getattr(_sig_a, "confidence", 0.49), _analyze_conf_cap)
             if hasattr(_sig_a, "suggested_leverage"):
                 _sig_a.suggested_leverage = _analyze_lev_cap or 1
-        # conf_reason_fix_an: تطبيق conf_boost على signal قبل _build_professional_block
+        # conf_reason_fix_an: تطبيق conf_boost على _sig_a.confidence
         # حتى تعمل conf_reason_fix وتُعرض الثقة الصحيحة في الأسباب
         _sig_a_conf_original = getattr(_sig_a, "confidence", 0.5)
+        # احسب conf_boost لـ /analyze
+        try:
+            _an_rsi = rsi
+            _an_dir = getattr(_sig_a, "direction", "neutral")
+            _an_div = (_sig_a.technicals or {}).get("rsi_divergence", "none") if hasattr(_sig_a, "technicals") else "none"
+            _an_flags = 0
+            if hasattr(_sig_a, "technicals") and isinstance(_sig_a.technicals, dict):
+                _oi_chk = _sig_a.technicals.get("oi_data", {})
+                _fund_chk = _sig_a.technicals.get("fund_data", {})
+                _whale_chk = _sig_a.technicals.get("whale_data", {})
+                _bb_chk = _sig_a.technicals.get("bb_pos", 0.5)
+                if float((_fund_chk or {}).get("funding_rate", 0) or 0) < -0.01: _an_flags += 1
+                whale_r = float((_whale_chk or {}).get("whale_ratio", 1.0) or 1.0)
+                if whale_r > 1.5 and _an_dir == "long": _an_flags += 1
+                elif whale_r < 0.7 and _an_dir == "short": _an_flags += 1
+                if _bb_chk > 0.8 or _bb_chk < 0.2: _an_flags += 1
+            _an_boost = _an_flags * 3
+            if _an_rsi > 80 and _an_dir == "long": _an_boost = max(0, _an_boost - 3)
+            if _an_div == "bearish" and _an_dir == "long": _an_boost = 0
+            if _an_div == "bullish" and _an_dir == "short": _an_boost = 0
+            if _an_boost > 0:
+                _sig_a.confidence = min(_sig_a_conf_original + _an_boost / 100, 0.85)
+        except Exception:
+            pass
         pro_block_a, _ = _build_professional_block(
             symbol, price, _sig_a, _reg_a, candles, rsi, _atr_a, fib_a,
             tech_extra={"is_perp_asset": _is_perp_an} if _is_perp_an else {},
@@ -3493,7 +3517,15 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "━━━━━━━━━━━━━━━━━━",
         ]
         # chart_header_price: محاولة جلب السعر من caption أو OKX
+        # إذا symbol مستخرج من caption → استخدمه
+        # إذا فارغ → حاول استخراج من _sym_label (إذا موجود)
         _chart_price_sym = symbol or ""
+        if not _chart_price_sym and _sym_label:
+            # _sym_label قد يكون " — XSPY" أو " — BTC"
+            import re as _re_cps
+            _m_lbl = _re_cps.search(r'—\s*([A-Za-z]{2,10})', _sym_label)
+            if _m_lbl:
+                _chart_price_sym = _m_lbl.group(1).upper()
         if _chart_price_sym:
             try:
                 eng3 = context.bot_data.get("raed_engine")
