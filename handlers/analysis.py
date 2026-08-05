@@ -3228,6 +3228,9 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _sig_a.confidence = min(getattr(_sig_a, "confidence", 0.49), _analyze_conf_cap)
             if hasattr(_sig_a, "suggested_leverage"):
                 _sig_a.suggested_leverage = _analyze_lev_cap or 1
+        # conf_reason_fix_an: تطبيق conf_boost على signal قبل _build_professional_block
+        # حتى تعمل conf_reason_fix وتُعرض الثقة الصحيحة في الأسباب
+        _sig_a_conf_original = getattr(_sig_a, "confidence", 0.5)
         pro_block_a, _ = _build_professional_block(
             symbol, price, _sig_a, _reg_a, candles, rsi, _atr_a, fib_a,
             tech_extra={"is_perp_asset": _is_perp_an} if _is_perp_an else {},
@@ -3489,11 +3492,13 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🏪 نوع السوق: {_mkt_icon}",
             "━━━━━━━━━━━━━━━━━━",
         ]
-        if symbol:
+        # chart_header_price: محاولة جلب السعر من caption أو OKX
+        _chart_price_sym = symbol or ""
+        if _chart_price_sym:
             try:
                 eng3 = context.bot_data.get("raed_engine")
                 if eng3:
-                    pd3 = await eng3.data_layer.get_price(symbol)
+                    pd3 = await eng3.data_layer.get_price(_chart_price_sym)
                     if pd3 and pd3.get("price", 0) > 0:
                         p3 = pd3["price"]
                         c3 = pd3.get("change_24h", 0)
