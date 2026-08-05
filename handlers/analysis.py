@@ -786,9 +786,11 @@ def _build_professional_block(
         _conf_before = conf
         conf = min(conf + _boost_pro / 100, 0.85)
         # conf_reason_fix_pro: تحديث نص سبب الثقة بعد الرفع
+        # الحل: نُحدَّث أي سبب يحتوي "أقل من الحد" بالثقة الجديدة
+        # بدون شرط النسبة المئوية (يُسبب تعارض تقريب Python)
         _new_reasons_pro = []
         for _r in reasons:
-            if "أقل من الحد" in _r and f"{_conf_before:.0%}" in _r:
+            if "أقل من الحد" in _r:
                 _new_reasons_pro.append(
                     f"• الثقة {conf:.0%} أقل من الحد {_threshold:.0%}"
                     if conf < _threshold else
