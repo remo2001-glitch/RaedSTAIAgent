@@ -773,6 +773,23 @@ def _build_professional_block(
     _flags_found = len(_conf_flags)
     _confirmed   = _flags_found >= 2
 
+    # conf_boost_fix (الخيار ج): التأكيدات ترفع الثقة ما لم يكن هناك تعارض منطقي
+    _conf_raw = conf  # الثقة الأصلية
+    _boost_pct = _flags_found * 3  # 3% لكل تأكيد
+    # التعارضات المنطقية
+    _rsi_div = tech.get("rsi_divergence", "none") if isinstance(tech, dict) else "none"
+    if rsi > 80 and direction == "long":
+        _boost_pct = max(0, _boost_pct - 3)  # RSI ذروة شراء → قلل الرفع
+    if rsi < 20 and direction == "short":
+        _boost_pct = max(0, _boost_pct - 3)  # RSI ذروة بيع + short → قلل الرفع
+    if _rsi_div == "bearish" and direction == "long":
+        _boost_pct = 0  # Bearish divergence + Long → ألغِ الرفع
+    if _rsi_div == "bullish" and direction == "short":
+        _boost_pct = 0  # Bullish divergence + Short → ألغِ الرفع
+    # تطبيق الرفع بحد أقصى 85%
+    if _boost_pct > 0:
+        conf = min(conf + _boost_pct / 100, 0.85)
+
     # ── Confidence Score مفصّل ──────────────────────────────
     _tech_score    = round(tech.get("score", 0.5) * 100)
     _oc_score      = round(getattr(signal, "onchain_score", 0.5) * 100)
@@ -3347,17 +3364,27 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         image_bytes = await file.download_as_bytearray()
         caption = (_photo_msg.caption or "") if _photo_msg else ""
         symbol  = ""
-        # chart_sym_fix: استخراج symbol مع دعم "xSPY/USDT" و "BTC-USDT"
+        # chart_sym_fix v2: استخراج symbol من caption بأشكال مختلفة
         import re as _re_chart
+        # محاولة 1: "xSPY/USDT" أو "BTC-USDT" أو "BICO/USDT"
         _cap_sym = _re_chart.search(
-            r'\b([A-Za-z]{2,10})\s*[/\-]\s*USDT', caption, _re_chart.IGNORECASE)
+            r'\b([A-Za-z]{1,10})\s*[/\-]\s*USDT', caption, _re_chart.IGNORECASE)
         if _cap_sym:
             symbol = _cap_sym.group(1).upper()
-        else:
+        # محاولة 2: كلمة منفردة
+        if not symbol:
             for word in caption.split():
-                w = word.strip("/").upper()
-                if len(w) >= 2 and w.isalpha() and w not in ("ANALYZE", "CHART", "USDT"):
+                w = _re_chart.sub(r'[^A-Za-z]', '', word).upper()
+                if len(w) >= 2 and w not in ("ANALYZE","CHART","USDT","SPOT","THE","AND"):
                     symbol = w
+                    break
+        # محاولة 3: أي رمز معروف في النص
+        if not symbol:
+            _known = ["BTC","ETH","SOL","BNB","XRP","BICO","LAYER","GRASS","XSPY",
+                      "XSPCX","XAAPL","XAMD","XMETA","XGOOGL","XAUT","XSKHY"]
+            for _k in _known:
+                if _k.lower() in caption.lower():
+                    symbol = _k
                     break
 
         # تطوير #222 (محسَّن): اكتشاف نوع السوق من:
