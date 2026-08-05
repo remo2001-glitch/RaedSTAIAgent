@@ -496,6 +496,8 @@ def _build_professional_block(
         else:
             _t_entry_pct = 100  # محظور
     _threshold = _t_entry_pct / 100.0
+    # conf_reason_fix: حفظ conf الأصلي للعرض الصحيح بعد الرفع
+    _conf_for_reason = conf  # سيُحدَّث لاحقاً إذا رُفعت الثقة
     if conf < _threshold:
         reasons.append(f"• الثقة {conf:.0%} أقل من الحد {_threshold:.0%}")
     elif _scenario == "counter_trend_bounce" and _vol_ratio < 0.8:
@@ -789,6 +791,19 @@ def _build_professional_block(
     # تطبيق الرفع بحد أقصى 85%
     if _boost_pct > 0:
         conf = min(conf + _boost_pct / 100, 0.85)
+        # conf_reason_fix: تحديث نص الأسباب بالثقة المرفوعة
+        _new_reasons = []
+        for _r in reasons:
+            if "أقل من الحد" in _r:
+                # تحديث الثقة في نص السبب
+                _new_reasons.append(
+                    f"• الثقة {conf:.0%} أقل من الحد {_threshold:.0%}"
+                    if conf < _threshold else
+                    f"• الثقة {conf:.0%} (مرفوعة من التأكيدات +{_boost_pct}%)"
+                )
+            else:
+                _new_reasons.append(_r)
+        reasons = _new_reasons
 
     # ── Confidence Score مفصّل ──────────────────────────────
     _tech_score    = round(tech.get("score", 0.5) * 100)
@@ -2887,11 +2902,16 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     ), timeout=30.0
                 )
             else:
+                # RSI_Fib_fix: X-prefix يستخدم 90 يوم من OKX (لا Yahoo طويل المدى)
+                _an_days = 90 if (
+                    _spot_data_symbol_an.upper().startswith("X") and
+                    len(_spot_data_symbol_an) > 2
+                ) else 365
                 price_d, candles, fear, btc_dom = await asyncio.wait_for(
                     asyncio.gather(
                         # TK_Spot_fix: XSPCX لجلب السعر والبيانات في Spot
                         engine.data_layer.get_price(_spot_data_symbol_an, mkttype=_mkt_arg_an),
-                        engine.data_layer.get_ohlcv(_spot_data_symbol_an, "1d", 365, mkttype=_mkt_arg_an),
+                        engine.data_layer.get_ohlcv(_spot_data_symbol_an, "1d", _an_days, mkttype=_mkt_arg_an),
                         engine.data_layer.get_fear_greed(),
                         engine.data_layer.get_btc_dominance(),
                         return_exceptions=True
