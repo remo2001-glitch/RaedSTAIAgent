@@ -102,9 +102,17 @@ _OKX_SPOT_ALIASES = {
     if "okx_spot" in info and info["okx_spot"] != sym
 }
 
-# أسماء خاصة بأسعار غير موثوقة من Yahoo (KRW أو غير USDT)
+# أسماء خاصة بأسعار غير موثوقة من Yahoo
 # لهذه الأصول: OKX فقط، Yahoo محظور لتجنب بيانات خاطئة
-_YAHOO_BLOCKED_SYMBOLS = {"XSKHY", "SKHY", "XAUT"}
+# X-prefix Spot assets: Yahoo يُعيد بيانات خاطئة (KRW أو ticker مختلف)
+_YAHOO_BLOCKED_SYMBOLS = {
+    "XSKHY", "SKHY",   # Korean Won KRW خاطئ
+    "XAUT", "XAUUSD",  # Gold: OKX يُعيد XAUt مباشرة
+    "XSPY", "SPY",     # S&P 500: Yahoo يُعيد بيانات مختلفة عن OKX
+    "XSPCX", "SPCX",   # S&P 500 variant
+    "XQQQ", "QQQ",     # Nasdaq: نفس المشكلة
+    "XEWY", "EWY",     # iShares MSCI South Korea
+}
 
 
 def is_commodity_symbol(symbol: str) -> bool:
