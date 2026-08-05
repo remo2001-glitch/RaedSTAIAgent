@@ -775,6 +775,29 @@ def _build_professional_block(
     _flags_found = len(_conf_flags)
     _confirmed   = _flags_found >= 2
 
+    # conf_boost_pro: تطبيق الرفع بعد بناء reasons لتحديث نص الثقة
+    _boost_pro = _flags_found * 3
+    _rsi_div_pro = tech.get("rsi_divergence", "none") if isinstance(tech, dict) else "none"
+    if rsi > 80 and direction == "long": _boost_pro = max(0, _boost_pro - 3)
+    if rsi < 20 and direction == "short": _boost_pro = max(0, _boost_pro - 3)
+    if _rsi_div_pro == "bearish" and direction == "long": _boost_pro = 0
+    if _rsi_div_pro == "bullish" and direction == "short": _boost_pro = 0
+    if _boost_pro > 0:
+        _conf_before = conf
+        conf = min(conf + _boost_pro / 100, 0.85)
+        # conf_reason_fix_pro: تحديث نص سبب الثقة بعد الرفع
+        _new_reasons_pro = []
+        for _r in reasons:
+            if "أقل من الحد" in _r and f"{_conf_before:.0%}" in _r:
+                _new_reasons_pro.append(
+                    f"• الثقة {conf:.0%} أقل من الحد {_threshold:.0%}"
+                    if conf < _threshold else
+                    f"• الثقة {conf:.0%} (مرفوعة من التأكيدات +{_boost_pro}%)"
+                )
+            else:
+                _new_reasons_pro.append(_r)
+        reasons = _new_reasons_pro
+
     # conf_boost_fix (الخيار ج): التأكيدات ترفع الثقة ما لم يكن هناك تعارض منطقي
     _conf_raw = conf  # الثقة الأصلية
     _boost_pct = _flags_found * 3  # 3% لكل تأكيد
