@@ -526,7 +526,7 @@ class NewsEngine:
   "sentiment": "very_bullish|bullish|neutral|bearish|very_bearish",
   "sentiment_score": <رقم من -1.0 إلى 1.0>,
   "impact_level": "high|medium|low",
-  "summary_ar": "<ملخص احترافي في 2-3 جمل عربية>",
+  "summary_ar": "<ملخص احترافي في 2-3 جمل عربية فقط — لا تستخدم كلمات إنجليزية في الجمل العربية>",
   "key_events": ["<حدث مهم 1>", "<حدث مهم 2>"],
   "affected_coins": ["BTC", "ETH"],
   "market_impact_ar": "<توقع التأثير على السوق في جملة واحدة>",
