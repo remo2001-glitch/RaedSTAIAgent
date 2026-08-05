@@ -102,15 +102,18 @@ _OKX_SPOT_ALIASES = {
     if "okx_spot" in info and info["okx_spot"] != sym
 }
 
-# أسماء خاصة بأسعار غير موثوقة من Yahoo
-# لهذه الأصول: OKX فقط، Yahoo محظور لتجنب بيانات خاطئة
-# X-prefix Spot assets: Yahoo يُعيد بيانات خاطئة (KRW أو ticker مختلف)
+# قاموس 1: محظور في كل الأوامر (بيانات خاطئة كلياً — KRW أو غير USDT)
 _YAHOO_BLOCKED_SYMBOLS = {
     "XSKHY", "SKHY",   # Korean Won KRW خاطئ
     "XAUT", "XAUUSD",  # Gold: OKX يُعيد XAUt مباشرة
-    "XSPY", "SPY",     # S&P 500: Yahoo يُعيد بيانات مختلفة عن OKX
+}
+
+# قاموس 2: محظور في /analyze فقط (Yahoo يُعطي RSI/Fib خاطئ على 365 يوم)
+# /signal يستخدم Yahoo لأن OKX لا يملك بيانات كافية لهذه الأصول
+_YAHOO_ANALYZE_BLOCKED = {
+    "XSPY", "SPY",     # S&P 500 ETF
     "XSPCX", "SPCX",   # S&P 500 variant
-    "XQQQ", "QQQ",     # Nasdaq: نفس المشكلة
+    "XQQQ", "QQQ",     # Nasdaq ETF
     "XEWY", "EWY",     # iShares MSCI South Korea
 }
 
@@ -959,9 +962,15 @@ class DataLayer:
                 logger.info(f"T10b_DL_fix: {symbol} ← OKX Spot ({len(x_spot_candles)} شمعة)")
                 _store(key, x_spot_candles, "ohlcv")
                 return x_spot_candles
-            # T10b_scaling_fix: إذا OKX Spot قليل → Yahoo مع تصحيح الأسعار
+            # T10b_scaling_fix + RSI_Fib_fix: X-prefix Yahoo fallback
+            # /signal (limit>90): يستخدم Yahoo للحصول على بيانات كافية
+            # /analyze (limit≤90): يتجنب Yahoo لأنه يُعطي RSI/Fib خاطئ
             _yahoo_sym = _stock_info.get("yahoo") or _stock_info.get("base", symbol)
-            if _yahoo_sym and symbol.upper() not in _YAHOO_BLOCKED_SYMBOLS:
+            _yahoo_ok_for_analyze = (
+                limit > 90 or  # /signal يستخدم limit كبير
+                symbol.upper() not in _YAHOO_ANALYZE_BLOCKED  # أصل غير محظور في /analyze
+            )
+            if _yahoo_sym and symbol.upper() not in _YAHOO_BLOCKED_SYMBOLS and _yahoo_ok_for_analyze:
                 yahoo_candles = await self._ohlcv_yahoo(_yahoo_sym, days=max(limit, 90))
                 if yahoo_candles and len(yahoo_candles) >= 10:
                     # T10b_scaling: نسحب سعر XSPCX الحالي لتصحيح نسبة Yahoo
