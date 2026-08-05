@@ -798,35 +798,9 @@ def _build_professional_block(
                 _new_reasons_pro.append(_r)
         reasons = _new_reasons_pro
 
-    # conf_boost_fix (الخيار ج): التأكيدات ترفع الثقة ما لم يكن هناك تعارض منطقي
-    _conf_raw = conf  # الثقة الأصلية
-    _boost_pct = _flags_found * 3  # 3% لكل تأكيد
-    # التعارضات المنطقية
-    _rsi_div = tech.get("rsi_divergence", "none") if isinstance(tech, dict) else "none"
-    if rsi > 80 and direction == "long":
-        _boost_pct = max(0, _boost_pct - 3)  # RSI ذروة شراء → قلل الرفع
-    if rsi < 20 and direction == "short":
-        _boost_pct = max(0, _boost_pct - 3)  # RSI ذروة بيع + short → قلل الرفع
-    if _rsi_div == "bearish" and direction == "long":
-        _boost_pct = 0  # Bearish divergence + Long → ألغِ الرفع
-    if _rsi_div == "bullish" and direction == "short":
-        _boost_pct = 0  # Bullish divergence + Short → ألغِ الرفع
-    # تطبيق الرفع بحد أقصى 85%
-    if _boost_pct > 0:
-        conf = min(conf + _boost_pct / 100, 0.85)
-        # conf_reason_fix: تحديث نص الأسباب بالثقة المرفوعة
-        _new_reasons = []
-        for _r in reasons:
-            if "أقل من الحد" in _r:
-                # تحديث الثقة في نص السبب
-                _new_reasons.append(
-                    f"• الثقة {conf:.0%} أقل من الحد {_threshold:.0%}"
-                    if conf < _threshold else
-                    f"• الثقة {conf:.0%} (مرفوعة من التأكيدات +{_boost_pct}%)"
-                )
-            else:
-                _new_reasons.append(_r)
-        reasons = _new_reasons
+    # conf_boost_fix: مُدمَج مع conf_boost_pro أعلاه لتجنب double boost
+    _boost_pct = _boost_pro  # للتوافق مع الكود اللاحق
+    _conf_raw = conf  # الثقة بعد الرفع
 
     # ── Confidence Score مفصّل ──────────────────────────────
     _tech_score    = round(tech.get("score", 0.5) * 100)
