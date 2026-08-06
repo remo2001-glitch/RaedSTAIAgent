@@ -836,7 +836,16 @@ class NewsEngine:
             lines += [f"• {f}" for f in flags if f]
 
         # أخبار إضافية بدون تكرار
-        shown = {str(e)[:50].lower() for e in analysis.get("key_events", [])}
+        # news_dedup_fix: مطابقة أوسع لتجنب تكرار نفس الخبر بعناوين مختلفة
+        _key_ev_list = analysis.get("key_events", [])
+        shown = set()
+        for _ke in _key_ev_list:
+            _ke_s = str(_ke).lower()
+            shown.add(_ke_s[:30])  # أول 30 حرف
+            shown.add(_ke_s[:50])  # أول 50 حرف
+            # إضافة الكلمات الرئيسية (أسماء العلم والمصطلحات)
+            _ke_words = set(_ke_s.split()[:4])  # أول 4 كلمات
+            shown.update(_ke_words)
         extra = []
         for item in items:
             t = str(item.get("title", ""))
@@ -844,8 +853,16 @@ class NewsEngine:
             if not _is_crypto_news(t):
                 continue
             t = _translate_news_title(t)  # ترجمة M#59
-            if t[:50].lower() not in shown and t:
+            _t_low = t.lower()
+            # فحص التكرار بمعايير موسّعة
+            _is_dup = (
+                _t_low[:30] in shown or
+                _t_low[:50] in shown or
+                any(_w in shown for _w in _t_low.split()[:3] if len(_w) > 4)
+            )
+            if not _is_dup and t:
                 extra.append(t)
+                shown.add(_t_low[:30])
             if len(extra) >= 4:
                 break
 
