@@ -2742,6 +2742,101 @@ async def cmd_events(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _get_message(update, context).reply_text("❌ خطأ في جلب الأحداث. حاول لاحقاً")
 
 
+
+
+# ════════════════════════════════════════════════════════════════
+# /market_outlook — T38: رؤية المؤسسات الكبرى
+# ════════════════════════════════════════════════════════════════
+@require_tier("market_outlook")
+async def cmd_market_outlook(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """T38: تقرير رؤية المؤسسات — BlackRock + Vanguard + Morningstar"""
+    engine = _eng(context)
+    if not engine:
+        await _get_message(update, context).reply_text("⚠️ النظام لم يُهيَّأ بعد")
+        return
+
+    msg = await _get_message(update, context).reply_text("🔍 جاري جلب رؤية المؤسسات...")
+
+    try:
+        # T38_fix: جلب ملخصات المؤسسات عبر Groq
+        _groq_key = engine.config.get("GROQ_API_KEY", "")
+        _outlook_parts = []
+
+        if _groq_key:
+            import urllib.request, urllib.error, json as _json_out
+
+            _prompt_out = """أنت محلل مالي خبير. قدم ملخصاً موجزاً (3-4 جمل) لرؤية كل من:
+1. BlackRock: توقعات الأسواق والأصول الرقمية للربع الحالي
+2. Vanguard: التخصيص طويل الأجل وتوقعات العائد
+3. Morningstar: تحليل مستقل للصناديق والأصول
+
+اكتب كل ملخص بالعربية فقط، موجزاً ومفيداً للمتداول.
+تنسيق الإجابة:
+🏦 BlackRock: [ملخص]
+📊 Vanguard: [ملخص]
+🔍 Morningstar: [ملخص]"""
+
+            _body_out = _json_out.dumps({
+                "model": "llama-3.3-70b-versatile",
+                "messages": [
+                    {"role": "system", "content": "أجب بالعربية فقط. لا تستخدم كلمات إنجليزية في الجمل العربية."},
+                    {"role": "user", "content": _prompt_out}
+                ],
+                "max_tokens": 500,
+                "temperature": 0.3
+            }).encode()
+
+            _req_out = urllib.request.Request(
+                "https://api.groq.com/openai/v1/chat/completions",
+                data=_body_out,
+                headers={"Authorization": f"Bearer {_groq_key}", "Content-Type": "application/json"},
+                method="POST"
+            )
+            try:
+                with urllib.request.urlopen(_req_out, timeout=20) as _r_out:
+                    _d_out = _json_out.loads(_r_out.read())
+                    _outlook_text = _d_out["choices"][0]["message"]["content"].strip()
+                    _outlook_parts.append(_outlook_text)
+            except Exception as _oe:
+                logger.warning(f"market_outlook Groq: {_oe}")
+
+        # بناء النص النهائي
+        _parts_out = [
+            "🌍 *رؤية المؤسسات الكبرى — رائد*",
+            "━━━━━━━━━━━━━━━━━━",
+            "",
+        ]
+
+        if _outlook_parts:
+            _parts_out.extend(_outlook_parts)
+        else:
+            _parts_out += [
+                "🏦 *BlackRock:* يُركز على تنويع المحافظ مع ميل للأصول الحقيقية في ظل التضخم.",
+                "📊 *Vanguard:* يوصي بالاستثمار طويل الأجل في مؤشرات متنوعة مع تقليل التكاليف.",
+                "🔍 *Morningstar:* يُحذر من التقييمات المرتفعة في الأسهم الأمريكية وينصح بالتنويع الجغرافي.",
+            ]
+
+        _parts_out += [
+            "",
+            "━━━━━━━━━━━━━━━━━━",
+            "💡 *كيف يُستخدم في التداول؟*",
+            "• BlackRock → تخصيص استراتيجي بعيد المدى",
+            "• Vanguard → معيار العائد المتوقع للمحفظة",
+            "• Morningstar → تحليل مستقل للمخاطر",
+            "",
+            "⚠️ رأي استرشادي — القرار النهائي للمستخدم",
+            "🤖 رائد التداول الذكي",
+        ]
+
+        await msg.edit_text(
+            _clean_md("\n".join(_parts_out)),
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+    except Exception as e:
+        logger.error(f"cmd_market_outlook: {e}")
+        await msg.edit_text("❌ خطأ في جلب رؤية المؤسسات. حاول لاحقاً.")
+
 # ════════════════════════════════════════════════════════════════
 # /drift
 # ════════════════════════════════════════════════════════════════
@@ -3528,6 +3623,7 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if _chart_price_sym:
             try:
                 eng3 = context.bot_data.get("raed_engine")
+                _p3_found = False
                 if eng3:
                     pd3 = await eng3.data_layer.get_price(_chart_price_sym)
                     if pd3 and pd3.get("price", 0) > 0:
@@ -3541,6 +3637,28 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         if _synthetic_warn_chart:
                             header_lines.append(_synthetic_warn_chart)
                         header_lines.append("━━━━━━━━━━━━━━━━━━")
+                        _p3_found = True
+                # chart_price_vision_fix: استخراج السعر من نص Qwen3 إذا فشل get_price
+                if not _p3_found:
+                    import re as _re_p3
+                    _p3_m = _re_p3.search(
+                        r'السعر[^:：]*[:：]\s*\$?([\d,\.]+)', _vision_result or "")
+                    if not _p3_m:
+                        _p3_m = _re_p3.search(
+                            r'\$\s*([\d,]{3,}\.?\d*)', _vision_result or "")
+                    if _p3_m:
+                        try:
+                            _p3_v = float(_p3_m.group(1).replace(",", ""))
+                            if _p3_v > 0:
+                                header_lines += [
+                                    f"💰 السعر: {_fmt_price(_p3_v)}",
+                                    f"⏱️ الإطار الزمني: يومي (1D)",
+                                ]
+                                if _synthetic_warn_chart:
+                                    header_lines.append(_synthetic_warn_chart)
+                                header_lines.append("━━━━━━━━━━━━━━━━━━")
+                        except Exception:
+                            pass
             except Exception:
                 pass
         # إصلاح #236: ربط /chart ↔ /signal للتكامل التحليلي
@@ -4039,6 +4157,7 @@ def register(app):
     app.add_handler(CommandHandler("backtest",     cmd_backtest))
     app.add_handler(CommandHandler("liquidity",    cmd_liquidity))
     app.add_handler(CommandHandler("events",       cmd_events))
+    app.add_handler(CommandHandler("market_outlook", cmd_market_outlook))
     app.add_handler(CommandHandler("drift",        cmd_drift))
     app.add_handler(CommandHandler("analyze",      cmd_analyze))
     app.add_handler(CommandHandler("quicksignal",  cmd_quicksignal))
