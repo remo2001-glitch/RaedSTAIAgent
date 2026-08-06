@@ -836,33 +836,40 @@ class NewsEngine:
             lines += [f"• {f}" for f in flags if f]
 
         # أخبار إضافية بدون تكرار
-        # news_dedup_fix: مطابقة أوسع لتجنب تكرار نفس الخبر بعناوين مختلفة
-        _key_ev_list = analysis.get("key_events", [])
-        shown = set()
-        for _ke in _key_ev_list:
+        # news_dedup_fix v2: المقارنة بالعناوين الإنجليزية الأصلية دائماً
+        # لأن key_events قد تكون مُترجَمة لكن items إنجليزية دائماً
+        _raw_titles_shown = set()
+        # أضف عناوين items الأولى (key_events المصدر الإنجليزي) للـ shown
+        for _item_raw in items[:len(analysis.get("key_events", []))]:
+            _t_raw = str(_item_raw.get("title", "")).lower()
+            if _t_raw:
+                _raw_titles_shown.add(_t_raw[:40])
+                _raw_titles_shown.add(_t_raw[:60])
+                # كلمات رئيسية من الكيان (اسم الشركة/الشخصية)
+                for _w in _t_raw.split()[:5]:
+                    if len(_w) > 5:
+                        _raw_titles_shown.add(_w)
+        # أيضاً: أضف key_events مباشرة للمقارنة العربية
+        for _ke in analysis.get("key_events", []):
             _ke_s = str(_ke).lower()
-            shown.add(_ke_s[:30])  # أول 30 حرف
-            shown.add(_ke_s[:50])  # أول 50 حرف
-            # إضافة الكلمات الرئيسية (أسماء العلم والمصطلحات)
-            _ke_words = set(_ke_s.split()[:4])  # أول 4 كلمات
-            shown.update(_ke_words)
+            _raw_titles_shown.add(_ke_s[:40])
         extra = []
         for item in items:
-            t = str(item.get("title", ""))
+            t_orig = str(item.get("title", ""))
             # إصلاح #192: تخطي الأخبار غير الكريبتو
-            if not _is_crypto_news(t):
+            if not _is_crypto_news(t_orig):
                 continue
-            t = _translate_news_title(t)  # ترجمة M#59
-            _t_low = t.lower()
-            # فحص التكرار بمعايير موسّعة
+            _t_orig_low = t_orig.lower()
+            # فحص التكرار بالعنوان الإنجليزي الأصلي
             _is_dup = (
-                _t_low[:30] in shown or
-                _t_low[:50] in shown or
-                any(_w in shown for _w in _t_low.split()[:3] if len(_w) > 4)
+                _t_orig_low[:40] in _raw_titles_shown or
+                _t_orig_low[:60] in _raw_titles_shown or
+                any(_w in _raw_titles_shown for _w in _t_orig_low.split()[:4] if len(_w) > 5)
             )
-            if not _is_dup and t:
+            if not _is_dup:
+                t = _translate_news_title(t_orig)  # ترجمة M#59
                 extra.append(t)
-                shown.add(_t_low[:30])
+                _raw_titles_shown.add(_t_orig_low[:40])
             if len(extra) >= 4:
                 break
 
