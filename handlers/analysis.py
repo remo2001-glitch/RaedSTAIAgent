@@ -2018,12 +2018,19 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(candles) < _min_candles_sig:
             # XSKHY_name_fix: عرض الاسم الكامل في رسالة الخطأ
             _err_sym = _display_symbol if _display_symbol else symbol
+            # XSKHY_market_hours_fix: تمييز السوق المغلق عن الأصل غير الموجود
+            _is_market_closed_sym = symbol.upper() in {"XSKHY", "SKHY"}
             await msg.edit_text(
                 (
                     f"⚠️ *{_err_sym}* غير مدرج في OKX حالياً\n"
                     f"• تحقق من قائمة الأصول في OKX\n"
                     f"• أو جرّب رمزاً مختلفاً"
                     if symbol.upper() not in _OKX_TOKENIZED_STOCKS
+                    else (
+                        f"🕐 *{_err_sym}* — السوق مغلق حالياً\n"
+                        f"• ساعات التداول: 00:00-06:30 UTC (09:00-15:30 KST)\n"
+                        f"• أعد المحاولة خلال ساعات التداول"
+                    ) if _is_market_closed_sym
                     else f"⚠️ بيانات {_err_sym} غير متوفرة مؤقتاً — أعد المحاولة بعد دقيقة"
                 ))
             return
@@ -2748,7 +2755,7 @@ async def cmd_events(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # /market_outlook — T38: رؤية المؤسسات الكبرى
 # ════════════════════════════════════════════════════════════════
 @require_tier("market_outlook")
-async def cmd_market_outlook(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cmd_outlook(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """T38: تقرير رؤية المؤسسات — BlackRock + Vanguard + Morningstar"""
     engine = _eng(context)
     if not engine:
@@ -3620,10 +3627,11 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _m_lbl = _re_cps.search(r'—\s*([A-Za-z]{2,10})', _sym_label)
             if _m_lbl:
                 _chart_price_sym = _m_lbl.group(1).upper()
+        # chart_header_price_fix v3: جلب السعر من OKX أو _current_px (T30_fix)
+        _chart_px_found = False
         if _chart_price_sym:
             try:
                 eng3 = context.bot_data.get("raed_engine")
-                _p3_found = False
                 if eng3:
                     pd3 = await eng3.data_layer.get_price(_chart_price_sym)
                     if pd3 and pd3.get("price", 0) > 0:
@@ -3637,30 +3645,25 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         if _synthetic_warn_chart:
                             header_lines.append(_synthetic_warn_chart)
                         header_lines.append("━━━━━━━━━━━━━━━━━━")
-                        _p3_found = True
-                # chart_price_vision_fix: استخراج السعر من نص Qwen3 إذا فشل get_price
-                if not _p3_found:
-                    import re as _re_p3
-                    _p3_m = _re_p3.search(
-                        r'السعر[^:：]*[:：]\s*\$?([\d,\.]+)', _vision_result or "")
-                    if not _p3_m:
-                        _p3_m = _re_p3.search(
-                            r'\$\s*([\d,]{3,}\.?\d*)', _vision_result or "")
-                    if _p3_m:
-                        try:
-                            _p3_v = float(_p3_m.group(1).replace(",", ""))
-                            if _p3_v > 0:
-                                header_lines += [
-                                    f"💰 السعر: {_fmt_price(_p3_v)}",
-                                    f"⏱️ الإطار الزمني: يومي (1D)",
-                                ]
-                                if _synthetic_warn_chart:
-                                    header_lines.append(_synthetic_warn_chart)
-                                header_lines.append("━━━━━━━━━━━━━━━━━━")
-                        except Exception:
-                            pass
+                        _chart_px_found = True
             except Exception:
                 pass
+        # fallback: _current_px من T30_fix (يُجلَب قبل header_lines)
+        if not _chart_px_found and _current_px > 0:
+            header_lines += [
+                f"💰 السعر: {_fmt_price(_current_px)}",
+                f"⏱️ الإطار الزمني: يومي (1D)",
+            ]
+            if _synthetic_warn_chart:
+                header_lines.append(_synthetic_warn_chart)
+            header_lines.append("━━━━━━━━━━━━━━━━━━")
+            _chart_px_found = True
+        # synthetic_warn بدون سعر إذا لم يُجلَب
+        if not _chart_px_found and _synthetic_warn_chart:
+            header_lines += [
+                _synthetic_warn_chart,
+                "━━━━━━━━━━━━━━━━━━",
+            ]
         # إصلاح #236: ربط /chart ↔ /signal للتكامل التحليلي
         _signal_hint = f"\n💡 للتحليل الشامل متعدد المصادر: /signal {symbol}" if symbol else ""
         # CHART_FORMAT_fix: بناء الرسالة النهائية بتنسيق منظم
@@ -4157,7 +4160,7 @@ def register(app):
     app.add_handler(CommandHandler("backtest",     cmd_backtest))
     app.add_handler(CommandHandler("liquidity",    cmd_liquidity))
     app.add_handler(CommandHandler("events",       cmd_events))
-    app.add_handler(CommandHandler("market_outlook", cmd_market_outlook))
+    app.add_handler(CommandHandler("outlook", cmd_market_outlook))
     app.add_handler(CommandHandler("drift",        cmd_drift))
     app.add_handler(CommandHandler("analyze",      cmd_analyze))
     app.add_handler(CommandHandler("quicksignal",  cmd_quicksignal))

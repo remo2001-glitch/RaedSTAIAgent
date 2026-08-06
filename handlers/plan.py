@@ -863,7 +863,7 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines += ["", "📅 *جدول الشهر المقترح*"] + week_plan + [
             "",
             # T38_plan: إشارة لأمر /market_outlook
-            "📊 *رؤية المؤسسات:* للاطلاع على توقعات BlackRock وVanguard وMorningstar: /market_outlook",
+            "📊 *رؤية المؤسسات:* للاطلاع على توقعات BlackRock وVanguard وMorningstar: /outlook",
             "",
             "⚠️ خطة استرشادية — القرار النهائي للمستخدم",
             "🤖 رائد التداول الذكي",
@@ -1417,7 +1417,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines += [
             "",
             # T38_plan: إشارة لأمر /market_outlook في plan_week
-            "📊 *رؤية المؤسسات:* BlackRock · Vanguard · Morningstar → /market_outlook",
+            "📊 *رؤية المؤسسات:* BlackRock · Vanguard · Morningstar → /outlook",
             "",
             "⚠️ خطة استرشادية — القرار النهائي للمستخدم",
             "🤖 رائد التداول الذكي",
