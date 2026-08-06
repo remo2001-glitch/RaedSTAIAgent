@@ -327,16 +327,25 @@ async def post_init(app: Application):
             else:
                 await broadcast_fn(message)
 
-        scheduler = Scheduler(send_fn=notify_user_fn)
-        scheduler.set_engine(engine)
-
-        # ربط دوال التقارير الدورية
-        if hasattr(engine, "run_weekly_report"):
-            scheduler.register_weekly(engine.run_weekly_report)
-        if hasattr(engine, "run_monthly_report"):
-            scheduler.register_monthly(engine.run_monthly_report)
-        if hasattr(engine, "run_scan"):
-            scheduler.register_scan(engine.run_scan)
+        # auto_scan_dedup_fix: استخدام engine.scheduler الموجود لتجنب نسختين
+        if hasattr(engine, "scheduler") and engine.scheduler is not None:
+            scheduler = engine.scheduler
+            # تحديث send_fn إذا تغيّر
+            if hasattr(scheduler, "_send_fn"):
+                scheduler._send_fn = notify_user_fn
+            if hasattr(scheduler, "set_engine"):
+                scheduler.set_engine(engine)
+            logger.info("✅ استخدام engine.scheduler الموجود — تجنب نسختين")
+        else:
+            scheduler = Scheduler(send_fn=notify_user_fn)
+            scheduler.set_engine(engine)
+            # ربط دوال التقارير الدورية
+            if hasattr(engine, "run_weekly_report"):
+                scheduler.register_weekly(engine.run_weekly_report)
+            if hasattr(engine, "run_monthly_report"):
+                scheduler.register_monthly(engine.run_monthly_report)
+            if hasattr(engine, "run_scan"):
+                scheduler.register_scan(engine.run_scan)
 
         # تسجيل المراجعة الأسبوعية الشاملة
         try:
@@ -372,6 +381,7 @@ async def post_init(app: Application):
         BotCommand("stats",        "إحصائيات فورية"),
         BotCommand("risk",         "حالة المخاطر"),
         BotCommand("events",       "الأحداث القادمة"),
+        BotCommand("market_outlook", "رؤية المؤسسات الكبرى"),
         BotCommand("drift",        "حالة النموذج"),
         BotCommand("killswitch",   "Kill Switch"),
         BotCommand("about",        "عن رائد"),
