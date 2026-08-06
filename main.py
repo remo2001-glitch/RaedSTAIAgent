@@ -381,7 +381,7 @@ async def post_init(app: Application):
         BotCommand("stats",        "إحصائيات فورية"),
         BotCommand("risk",         "حالة المخاطر"),
         BotCommand("events",       "الأحداث القادمة"),
-        BotCommand("market_outlook", "رؤية المؤسسات الكبرى"),
+        BotCommand("outlook", "رؤية المؤسسات — BlackRock"),
         BotCommand("drift",        "حالة النموذج"),
         BotCommand("killswitch",   "Kill Switch"),
         BotCommand("about",        "عن رائد"),
