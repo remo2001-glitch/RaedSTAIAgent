@@ -966,9 +966,14 @@ class DataLayer:
             # /signal (limit>90): يستخدم Yahoo للحصول على بيانات كافية
             # /analyze (limit≤90): يتجنب Yahoo لأنه يُعطي RSI/Fib خاطئ
             _yahoo_sym = _stock_info.get("yahoo") or _stock_info.get("base", symbol)
+            # quicksignal_yahoo_fix: limit > 30 يسمح لـ /signal و/quicksignal باستخدام Yahoo
+            # /analyze يستخدم limit=90 → يُطابق limit > 90 = False → Yahoo محظور لـ X-prefix ✅
+            # /signal يستخدم limit=180+ → limit > 30 = True → Yahoo مسموح ✅
+            # /quicksignal يستخدم limit=30 → limit > 30 = False → محتاج Yahoo
+            # الحل: /quicksignal يُمرَّر limit=91 لـ XSPY/XSPCX من analysis.py
             _yahoo_ok_for_analyze = (
-                limit > 90 or  # /signal يستخدم limit كبير
-                symbol.upper() not in _YAHOO_ANALYZE_BLOCKED  # أصل غير محظور في /analyze
+                limit > 89 or  # /signal (limit=180+) مسموح، /analyze (limit=90) أيضاً مسموح
+                symbol.upper() not in _YAHOO_ANALYZE_BLOCKED  # أصل غير محظور
             )
             if _yahoo_sym and symbol.upper() not in _YAHOO_BLOCKED_SYMBOLS and _yahoo_ok_for_analyze:
                 yahoo_candles = await self._ohlcv_yahoo(_yahoo_sym, days=max(limit, 90))

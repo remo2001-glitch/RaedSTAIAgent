@@ -1141,9 +1141,13 @@ class NewsEngine:
         try:
             b64_image = base64.b64encode(image_data).decode("utf-8")
             sym_text  = f"لـ {symbol}" if symbol else ""
+            # chart_price_prompt_fix: إضافة CURRENT_PRICE لاستخراج موثوق
+            _cp_marker = f"CURRENT_PRICE:{current_price:.4f}\n" if current_price > 0 else ""
             prompt_text = (
                 f"أنت خبير تحليل فني كريبتو. حلل شارت {sym_text} واكتب بالعربية فقط بدون تفكير."
-                " اتبع هذا التنسيق بالضبط (14 قسم مرقم):\n"
+                f" السعر الحالي: {_price_str}.\n"
+                f"{_cp_marker}"
+                "اتبع هذا التنسيق بالضبط (14 قسم مرقم):\n"
                 "0- نوع السوق: Spot أو Futures/Perp (تحقق من النص العربي: التداول الفوري=Spot | العقود الدائمة=Futures)\n"
                 "1- الاتجاه العام وقوته: صاعد/هابط/جانبي مع السبب والأسعار الدقيقة\n"
                 "2- مستويات الدعم والمقاومة: اذكر الأسعار الدقيقة من الشارت\n"
