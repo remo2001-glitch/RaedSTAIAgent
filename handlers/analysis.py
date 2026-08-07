@@ -2340,7 +2340,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"• ATR={atr_pct:.1f}% | RSI={rsi:.0f} | EMA50={_pve50_sig_display:.0f}%\n"
                 "• *لا تعتمد على هذا التحليل للتداول الفعلي*"
             )
-        # NYSE_hours_fix: تنبيه خارج ساعات التداول بتوقيت المستخدم
+        # NYSE_hours_fix: تنبيه في بداية الرسالة (بعد header مباشرة)
         try:
             _sm_sig = context.bot_data.get("subscription_manager")
             _tz_sig = int((_sm_sig.get_user_data(user_id) or {}).get("tz_offset", 3)) if _sm_sig else 3
@@ -2348,7 +2348,11 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _tz_sig = 3
         _nyse_warn_sig = _get_market_hours_warning(symbol, _tz_sig)
         if _nyse_warn_sig:
-            warning = f"\n\n{_nyse_warn_sig}" + (warning or "")
+            # إضافة بعد أول عنصر في parts (header)
+            if len(parts) >= 1:
+                parts.insert(1, f"\n{_nyse_warn_sig}\n")
+            else:
+                parts.append(f"\n{_nyse_warn_sig}\n")
 
         # FA: إضافة BTC correlation إذا وُجد
         if _btc_corr_txt:
@@ -3688,20 +3692,15 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             symbol=symbol,
             current_price=_current_px)
 
-        # chart_px_from_analysis_fix: استخراج السعر من نص Qwen3 إذا لم يُجلَب
+        # chart_px_from_analysis_fix v2: CURRENT_PRICE marker أولاً
         if not _current_px and analysis:
-            import re as _re_px
-            # محاولة 1: "السعر: $769.58" أو "السعر 769.58"
-            _px_m = _re_px.search(r'السعر[^\d]*\$?([\d,]+\.?\d*)', analysis)
-            # محاولة 2: "$57.95" أو "$769" — أي رقم بعد $
-            if not _px_m:
-                _px_m = _re_px.search(r'\$([\d,]+\.?\d*)', analysis)
-            # محاولة 3: أي رقم منفرد يبدو كسعر
-            if not _px_m:
-                _px_m = _re_px.search(r'(?<!\d)([\d]{2,}\.\d{2})(?!\d)', analysis)
-            if _px_m:
+            _cp_marker = "CURRENT_PRICE:"
+            _cp_idx = analysis.find(_cp_marker)
+            if _cp_idx >= 0:
+                _cp_end = analysis.find("\n", _cp_idx)
+                _cp_str = analysis[_cp_idx+len(_cp_marker):_cp_end].strip()
                 try:
-                    _px_v = float(_px_m.group(1).replace(",", ""))
+                    _px_v = float(_cp_str.replace(",", ""))
                     if _px_v > 0:
                         _current_px = _px_v
                 except Exception:
@@ -3934,7 +3933,8 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 price_d, candles, fear, btc_dom = await asyncio.wait_for(
                     asyncio.gather(
                         engine.data_layer.get_price(_x_spot_sym, "USDT", mkttype="spot"),
-                        engine.data_layer.get_ohlcv(_x_spot_sym, "1d", 30, "USDT",
+                        # quicksignal_yahoo_fix: limit=100 لـ X-prefix → Yahoo مسموح (limit>89)
+                        engine.data_layer.get_ohlcv(_x_spot_sym, "1d", 100, "USDT",
                             mkttype="spot", _cache_hint=_x_spot_sym),
                         engine.data_layer.get_fear_greed(),
                         engine.data_layer.get_btc_dominance(),
