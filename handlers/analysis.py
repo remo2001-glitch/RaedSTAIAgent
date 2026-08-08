@@ -2868,16 +2868,21 @@ async def cmd_outlook(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if _groq_key:
             import urllib.request, urllib.error, json as _json_out
 
-            _prompt_out = """أنت محلل مالي خبير. قدم ملخصاً موجزاً (3-4 جمل) لرؤية كل من:
-1. BlackRock: توقعات الأسواق والأصول الرقمية للربع الحالي
-2. Vanguard: التخصيص طويل الأجل وتوقعات العائد
-3. Morningstar: تحليل مستقل للصناديق والأصول
-
-اكتب كل ملخص بالعربية فقط، موجزاً ومفيداً للمتداول.
-تنسيق الإجابة:
-🏦 BlackRock: [ملخص]
-📊 Vanguard: [ملخص]
-🔍 Morningstar: [ملخص]"""
+            from datetime import datetime as _dt_out, timezone as _tz_out
+            _today_out = _dt_out.now(_tz_out.utc).strftime("%Y-%m-%d")
+            _prompt_out = (
+                f"أنت محلل مالي خبير. اليوم هو {_today_out}.\n\n"
+                "قدم ملخصاً موجزاً ومحدثاً (3-4 جمل لكل مؤسسة) يعكس التوقعات الحالية:\n"
+                "1. BlackRock: رؤيتهم الحالية للأسواق والأصول الرقمية والعملات المشفرة\n"
+                "2. Vanguard: توقعات العائد طويل الأجل والتخصيص المثالي الحالي\n"
+                "3. Morningstar: تقييمهم المستقل الحالي للأسواق والمخاطر\n\n"
+                "مهم: اذكر أرقاماً وتوقعات محددة للعام الحالي إن أمكن.\n"
+                "اكتب بالعربية فقط.\n"
+                "تنسيق الإجابة:\n"
+                "🏦 BlackRock: [ملخص محدَّث]\n"
+                "📊 Vanguard: [ملخص محدَّث]\n"
+                "🔍 Morningstar: [ملخص محدَّث]"
+            )
 
             _body_out = _json_out.dumps({
                 "model": "llama-3.3-70b-versatile",
@@ -3694,19 +3699,45 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             symbol=symbol,
             current_price=_current_px)
 
-        # chart_px_from_analysis_fix v2: CURRENT_PRICE marker أولاً
+        # chart_px_extract v3: استخراج موثوق بلا regex داخلي
         if not _current_px and analysis:
-            _cp_marker = "CURRENT_PRICE:"
-            _cp_idx = analysis.find(_cp_marker)
-            if _cp_idx >= 0:
-                _cp_end = analysis.find("\n", _cp_idx)
-                _cp_str = analysis[_cp_idx+len(_cp_marker):_cp_end].strip()
+            # محاولة 1: CURRENT_PRICE marker (إذا > 0)
+            _cpm = "CURRENT_PRICE:"
+            _ci = analysis.find(_cpm)
+            if _ci >= 0:
+                _ce = analysis.find("\n", _ci)
+                _cs = analysis[_ci+len(_cpm):_ce].strip()
                 try:
-                    _px_v = float(_cp_str.replace(",", ""))
-                    if _px_v > 0:
-                        _current_px = _px_v
+                    _v = float(_cs.replace(",",""))
+                    if _v > 0.1:
+                        _current_px = _v
                 except Exception:
                     pass
+            # محاولة 2: أكثر رقم تكراراً في التحليل (= السعر الحالي)
+            if not _current_px:
+                import re as _re_cx
+                _all_n = _re_cx.findall("[0-9]+[.][0-9]+|[0-9]{3,}", analysis)
+                _cnt = {}
+                for _n in _all_n:
+                    try:
+                        _nv = float(_n)
+                        if 0.1 < _nv < 1000000:
+                            _cnt[_nv] = _cnt.get(_nv, 0) + 1
+                    except Exception:
+                        pass
+                if _cnt:
+                    # أولاً: أكثر رقم تكراراً (>= 2 مرة)
+                    _top = sorted(_cnt.items(), key=lambda x: x[1], reverse=True)
+                    for _tv, _tc in _top:
+                        if _tc >= 2:
+                            _current_px = _tv
+                            break
+                    # إذا لا يوجد تكرار → أكثر رقم منطقي (> 10)
+                    if not _current_px:
+                        for _tv, _tc in _top:
+                            if _tv > 10:
+                                _current_px = _tv
+                                break
 
         # فحص نص التحليل — القسم "0-نوع السوق" يُصرِّح بالنوع صراحةً
         if not _chart_is_futures and analysis:
@@ -3744,8 +3775,15 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _m_lbl = _re_cps.search(r'—\s*([A-Za-z]{2,10})', _sym_label)
             if _m_lbl:
                 _chart_price_sym = _m_lbl.group(1).upper()
-        # chart_nyse_fix: حساب تنبيه ساعات السوق بعد معرفة symbol الكامل
+        # chart_nyse_fix v2: استخراج symbol من نص Qwen3 إذا كان فارغاً
         _chart_sym_for_warn = _chart_price_sym or symbol or ""
+        if not _chart_sym_for_warn and analysis:
+            # استخراج اسم الأصل من نص Qwen3
+            import re as _re_sym_w
+            _sym_m = _re_sym_w.search(
+                r'(X[A-Z]{2,8}|BTC|ETH|SOL|BNB|XRP|BICO|LAYER|GRASS)', analysis)
+            if _sym_m:
+                _chart_sym_for_warn = _sym_m.group(1)
         if _chart_sym_for_warn:
             _pre_market_warn_nyse = _get_market_hours_warning(_chart_sym_for_warn, _tz_chart)
             if _pre_market_warn_nyse:

@@ -262,6 +262,11 @@ def _calc_price_forecast(candles: list, days: int = 30,
         recent_high = max(highs[-30:])
         recent_low  = min(lows[-30:])
         diff        = recent_high - recent_low
+        # XPCY_fib_fix: إذا diff=0 (بيانات محدودة) → استخدم ATR للتقدير
+        if diff < price * 0.001:  # diff أقل من 0.1% من السعر
+            diff = price * atr_pct / 100 * 5  # تقدير من ATR
+            recent_high = price * (1 + atr_pct / 100 * 2.5)
+            recent_low  = price * (1 - atr_pct / 100 * 2.5)
         # موجة 3 و 5 (الأكثر شيوعاً في Elliott)
         fib_target1 = recent_low + diff * 1.272  # موجة 3
         fib_target2 = recent_low + diff * 1.618  # موجة 5
@@ -1188,8 +1193,14 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                              f"  • إغلاق فوق EMA50 ({_fmt_price(ema50_w)} — بُعد {_ema50_dist_w:.1f}%)")
 
                 # Fibonacci سريع
-                swing_h = max([float(c.get("high", price)) for c in candles[-30:]])
-                swing_l = min([float(c.get("low",  price)) for c in candles[-30:]])
+                _fib_candles = candles[-30:] if len(candles) >= 30 else candles
+                swing_h = max([float(c.get("high", price)) for c in _fib_candles]) if _fib_candles else price
+                swing_l = min([float(c.get("low",  price)) for c in _fib_candles]) if _fib_candles else price
+                # XPCY_fib_fix v2: guard إذا swing_h == swing_l (بيانات محدودة)
+                if swing_h <= swing_l or (swing_h - swing_l) < price * 0.001:
+                    _atr_est = atr_v if atr_v > 0 else 0.03
+                    swing_h = price * (1 + _atr_est * 3)
+                    swing_l = price * (1 - _atr_est * 3)
                 fib_382 = swing_l + (swing_h - swing_l) * 0.382
                 fib_618 = swing_l + (swing_h - swing_l) * 0.618
 
@@ -1325,6 +1336,51 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # ── 5. الأحداث والجدول ────────────────────────────────
         events_text = engine.event_risk.format_upcoming_ar(hours=168)
+
+        # events_groq_fix: تحديث الأحداث عبر Groq إذا كانت قديمة
+        try:
+            from datetime import datetime as _dt_gr, timezone as _tz_gr
+            _now_gr = _dt_gr.now(_tz_gr.utc)
+            _current_date_str = _now_gr.strftime("%Y-%m-%d")
+            # إذا كانت events_text تحتوي FOMC يوليو 2026 أو أحداث قديمة → استبدلها
+            _has_old = (
+                ("2026-07" in events_text) or
+                ("2026-06" in events_text) or
+                not events_text.strip()
+            )
+            if _has_old and hasattr(engine.news_engine, "groq_key") and engine.news_engine.groq_key:
+                import urllib.request, urllib.error, json as _jg, ssl as _slg
+                _body_gr = _jg.dumps({
+                    "model": "llama-3.3-70b-versatile",
+                    "messages": [{
+                        "role": "system",
+                        "content": "أجب بالعربية فقط. أعطِ قائمة بالأحداث الاقتصادية المهمة القادمة خلال 7 أيام."
+                    }, {
+                        "role": "user",
+                        "content": (
+                            f"اليوم هو {_current_date_str}. "
+                            "اذكر أهم 3-4 أحداث اقتصادية قادمة خلال 7 أيام (FOMC، CPI، NFP، إلخ) "
+                            "بهذا التنسيق لكل حدث في سطر: "
+                            "⏰ [اسم الحدث] — بعد [X] ساعة ([تأثير: 🔴/🟠/🟡])"
+                        )
+                    }],
+                    "max_tokens": 300,
+                    "temperature": 0.1
+                }).encode()
+                _req_gr = urllib.request.Request(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    data=_body_gr,
+                    headers={"Authorization": f"Bearer {engine.news_engine.groq_key}",
+                             "Content-Type": "application/json"},
+                    method="POST")
+                _ctx_gr = _slg.create_default_context()
+                with urllib.request.urlopen(_req_gr, context=_ctx_gr, timeout=10) as _rg:
+                    _dg = _jg.loads(_rg.read())
+                    _gr_events = _dg["choices"][0]["message"]["content"].strip()
+                    if _gr_events and len(_gr_events) > 20:
+                        events_text = _gr_events
+        except Exception as _eg:
+            logger.debug(f"events_groq_fix: {_eg}")
         # إصلاح تنسيق "بعد 20ساعة" → "بعد 20 ساعة"
         events_text = re.sub(r'(بعد\s*)(\d+)(ساعة)', r'بعد  ساعة', events_text)
         events_text = re.sub(r'(بعد\s*)(\d+)(يوم)', r'بعد  يوم', events_text)
