@@ -2887,11 +2887,15 @@ async def cmd_outlook(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _body_out = _json_out.dumps({
                 "model": "llama-3.3-70b-versatile",
                 "messages": [
-                    {"role": "system", "content": "أجب بالعربية فقط. لا تستخدم كلمات إنجليزية في الجمل العربية."},
+                    {"role": "system", "content": (
+                        "أجب بالعربية فقط. لا تستخدم كلمات إنجليزية في الجمل العربية. "
+                        "قدم تحليلاً حقيقياً ومفيداً للمتداول بناءً على المعلومات المتاحة لديك. "
+                        "لا تكرر إجابات عامة — كن محدداً بأرقام وتوقعات واقعية."
+                    )},
                     {"role": "user", "content": _prompt_out}
                 ],
                 "max_tokens": 500,
-                "temperature": 0.3
+                "temperature": 0.7
             }).encode()
 
             _req_out = urllib.request.Request(
@@ -3699,45 +3703,69 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             symbol=symbol,
             current_price=_current_px)
 
-        # chart_px_extract v3: استخراج موثوق بلا regex داخلي
+        # chart_px_extract v4: PRICE_NOW marker — الحل الجذري النهائي
+        # Qwen3 يكتب "PRICE_NOW:773.28" في أول سطر → نستخرجه بـ str.find
         if not _current_px and analysis:
-            # محاولة 1: CURRENT_PRICE marker (إذا > 0)
-            _cpm = "CURRENT_PRICE:"
-            _ci = analysis.find(_cpm)
-            if _ci >= 0:
-                _ce = analysis.find("\n", _ci)
-                _cs = analysis[_ci+len(_cpm):_ce].strip()
+            # محاولة 1: PRICE_NOW marker (الأموثوق)
+            _pn_marker = "PRICE_NOW:"
+            _pn_idx = analysis.find(_pn_marker)
+            if _pn_idx >= 0:
+                _pn_end = analysis.find("\n", _pn_idx)
+                if _pn_end < 0:
+                    _pn_end = _pn_idx + 30
+                _pn_str = analysis[_pn_idx+len(_pn_marker):_pn_end].strip()
                 try:
-                    _v = float(_cs.replace(",",""))
+                    _v = float(_pn_str.replace(",", "").replace("$", ""))
                     if _v > 0.1:
                         _current_px = _v
                 except Exception:
                     pass
-            # محاولة 2: أكثر رقم تكراراً في التحليل (= السعر الحالي)
+            # محاولة 2: CURRENT_PRICE marker (احتياطي)
             if not _current_px:
-                import re as _re_cx
-                _all_n = _re_cx.findall("[0-9]+[.][0-9]+|[0-9]{3,}", analysis)
-                _cnt = {}
-                for _n in _all_n:
+                _cpm = "CURRENT_PRICE:"
+                _ci = analysis.find(_cpm)
+                if _ci >= 0:
+                    _ce = analysis.find("\n", _ci)
+                    if _ce < 0: _ce = _ci + 25
                     try:
-                        _nv = float(_n)
-                        if 0.1 < _nv < 1000000:
-                            _cnt[_nv] = _cnt.get(_nv, 0) + 1
+                        _v = float(analysis[_ci+len(_cpm):_ce].strip().replace(",",""))
+                        if _v > 0.1:
+                            _current_px = _v
                     except Exception:
                         pass
-                if _cnt:
-                    # أولاً: أكثر رقم تكراراً (>= 2 مرة)
-                    _top = sorted(_cnt.items(), key=lambda x: x[1], reverse=True)
-                    for _tv, _tc in _top:
-                        if _tc >= 2:
-                            _current_px = _tv
-                            break
-                    # إذا لا يوجد تكرار → أكثر رقم منطقي (> 10)
-                    if not _current_px:
-                        for _tv, _tc in _top:
-                            if _tv > 10:
-                                _current_px = _tv
-                                break
+            # محاولة 3: سطر "6- نقطة الدخول" — يبحث بعد ":" فقط
+            if not _current_px:
+                for _line6 in analysis.split("\n"):
+                    if _line6.strip().startswith("6") and "دخول" in _line6:
+                        _col6 = _line6.find(":")
+                        if _col6 >= 0:
+                            _after6 = _line6[_col6+1:].strip()
+                            import re as _re_6
+                            _m6 = _re_6.search(r"(\d{2,}(?:\.\d+)?)", _after6)
+                            if _m6:
+                                try:
+                                    _v = float(_m6.group(1).replace(",",""))
+                                    if _v > 0.1:
+                                        _current_px = _v
+                                except Exception:
+                                    pass
+                        break
+
+        # chart_nyse_fix v3: تنبيه NYSE بعد تحليل Qwen3 (analysis متاح الآن)
+        if not _chart_sym_for_warn and analysis:
+            # بحث مباشر عن اسم الأصل في نص Qwen3
+            _kw_list = ["XSPY","XSPCX","XQQQ","XXLE","XAAPL","XGOOGL","XAMD",
+                        "XMETA","XNVDA","XTSLA","XMSFT","XAVGO","XSKHY",
+                        "BTC","ETH","SOL","BNB","XRP","BICO","LAYER","GRASS"]
+            _an_upper = analysis.upper()
+            for _kw in _kw_list:
+                if _kw in _an_upper:
+                    _chart_sym_for_warn = _kw
+                    break
+        if _chart_sym_for_warn:
+            _pre_market_warn_nyse = _get_market_hours_warning(_chart_sym_for_warn, _tz_chart)
+            if _pre_market_warn_nyse:
+                _pre_market_warn = f"\n{_pre_market_warn_nyse}\n"
 
         # فحص نص التحليل — القسم "0-نوع السوق" يُصرِّح بالنوع صراحةً
         if not _chart_is_futures and analysis:
@@ -3775,20 +3803,7 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _m_lbl = _re_cps.search(r'—\s*([A-Za-z]{2,10})', _sym_label)
             if _m_lbl:
                 _chart_price_sym = _m_lbl.group(1).upper()
-        # chart_nyse_fix v2: استخراج symbol من نص Qwen3 إذا كان فارغاً
-        _chart_sym_for_warn = _chart_price_sym or symbol or ""
-        if not _chart_sym_for_warn and analysis:
-            # استخراج اسم الأصل من نص Qwen3
-            import re as _re_sym_w
-            _sym_m = _re_sym_w.search(
-                r'(X[A-Z]{2,8}|BTC|ETH|SOL|BNB|XRP|BICO|LAYER|GRASS)', analysis)
-            if _sym_m:
-                _chart_sym_for_warn = _sym_m.group(1)
-        if _chart_sym_for_warn:
-            _pre_market_warn_nyse = _get_market_hours_warning(_chart_sym_for_warn, _tz_chart)
-            if _pre_market_warn_nyse:
-                _pre_market_warn = f"\n{_pre_market_warn_nyse}\n"
-
+        # chart_nyse_fix: يُحسَب لاحقاً بعد analyze_chart_image
         # chart_header_price_fix v3: جلب السعر من OKX أو _current_px (T30_fix)
         _chart_px_found = False
         if _chart_price_sym:
