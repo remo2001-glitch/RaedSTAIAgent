@@ -3472,6 +3472,11 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parts = [
             f"🧠 *تحليل {_display_symbol_an} — رائد*",
             "━━━━━━━━━━━━━━━━━━",
+        ]
+        # NYSE_hours_fix: تنبيه في بداية /analyze (بعد header)
+        if _nyse_warn_an:
+            parts.append(f"\n{_nyse_warn_an}\n")
+        parts += [
             f"💰 السعر: {_fmt_price(price)} ({change_sign}{change_24h:.2f}%)",
             f"📊 RSI: {rsi_lbl} | Fear & Greed: {fear_val}",
             f"🌍 السوق: {regime_desc}",
@@ -3519,9 +3524,6 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parts.append(_clean_md(_btc_corr_an.strip()))
         # إصلاح #250-A: رابط /chart في /analyze كما في /signal
         parts.append(f"📊 للتحليل البصري: /chart {_display_symbol_an}")
-        # NYSE_hours_fix: إضافة تنبيه ساعات التداول في نهاية /analyze
-        if _nyse_warn_an:
-            parts.append(f"\n{_nyse_warn_an}")
         # DD1c (#1891/#1905): تحذير بيانات مشوهة في /analyze
         if _data_corrupted_an:
             parts += [
@@ -3844,6 +3846,25 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id_q = update.effective_user.id if update.effective_user else 0
     tier_q    = _sm.get_tier(user_id_q)
 
+    # XSKHY_quicksignal_fix v2: early return للسوق المغلق قبل أي استدعاء
+    if raw_arg.upper() in {"XSKHY", "SKHY"}:
+        try:
+            _sm_kse = context.bot_data.get("subscription_manager")
+            _tz_kse = int((_sm_kse.get_user_data(user_id_q) or {}).get("tz_offset", 3)) if _sm_kse else 3
+        except Exception:
+            _tz_kse = 3
+        _kse_warn = _get_market_hours_warning(raw_arg, _tz_kse)
+        _msg_kse = await _get_message(update, context).reply_text("⏳")
+        if _kse_warn:
+            await _msg_kse.edit_text(
+                _kse_warn, parse_mode=ParseMode.MARKDOWN)
+        else:
+            await _msg_kse.edit_text(
+                f"⚠️ *{raw_arg}* — بيانات السوق غير متوفرة حالياً\n"
+                f"• حاول لاحقاً",
+                parse_mode=ParseMode.MARKDOWN)
+        return
+
     # تطوير #221: سؤال نوع السوق (Spot/Futures) إن لم يُحدَّد مسبقاً
     # إصلاح #237-A: الأصول المُرمَّزة (أسهم/معادن/سلع) → Futures تلقائياً بدون سؤال
     _mkttype_qs = context.user_data.pop("_mkttype", None)
@@ -3992,9 +4013,17 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         change_24h = float(price_d.get("change_24h") or price_d.get("price_change_percentage_24h") or 0)
 
         if price <= 0:
-            await msg.edit_text(
-                f"❌ لم أجد سعراً لـ {display_symbol}.\n"
-                f"تحقق من الرمز وأعد المحاولة")
+            # XSKHY_quicksignal_fix: رسالة واضحة للسوق المغلق
+            if raw_arg.upper() in {"XSKHY", "SKHY"}:
+                await msg.edit_text(
+                    f"🕐 *{display_symbol}* — السوق مغلق حالياً\n"
+                    f"• ساعات التداول: 00:00-06:30 UTC (09:00-15:30 KST)\n"
+                    f"• أعد المحاولة خلال ساعات التداول",
+                    parse_mode=ParseMode.MARKDOWN)
+            else:
+                await msg.edit_text(
+                    f"❌ لم أجد سعراً لـ {display_symbol}.\n"
+                    f"تحقق من الرمز وأعد المحاولة")
             return
 
         rsi = _calc_rsi(candles)
