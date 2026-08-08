@@ -1141,7 +1141,8 @@ class NewsEngine:
         try:
             b64_image = base64.b64encode(image_data).decode("utf-8")
             sym_text  = f"لـ {symbol}" if symbol else ""
-            # chart_price_prompt_fix: إضافة CURRENT_PRICE لاستخراج موثوق
+            # chart_price_prompt_fix: تعريف _price_str و _cp_marker قبل الاستخدام
+            _price_str = f"${current_price:,.2f}" if current_price > 0 else "غير متوفر"
             _cp_marker = f"CURRENT_PRICE:{current_price:.4f}\n" if current_price > 0 else ""
             prompt_text = (
                 f"أنت خبير تحليل فني كريبتو. حلل شارت {sym_text} واكتب بالعربية فقط بدون تفكير."
@@ -1168,9 +1169,10 @@ class NewsEngine:
             ctx  = ssl.create_default_context()
             loop = asyncio.get_event_loop()
 
-            # T30_fix: تعريف symbol_name و current_price للـ prompt
+            # T30_fix: تعريف symbol_name للـ prompt
             symbol_name = symbol.upper() if symbol else "الأصل المعروض"
-            _price_str = f"${current_price:,.4f}" if current_price > 0 else "غير متوفر"
+            # _price_str مُعرَّف أعلاه في chart_price_prompt_fix
+            _price_str_legacy = f"${current_price:,.4f}" if current_price > 0 else "غير متوفر"
 
             for model in VISION_MODELS:
                 try:
