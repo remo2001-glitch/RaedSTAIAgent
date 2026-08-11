@@ -2905,24 +2905,33 @@ async def cmd_outlook(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "🔍 Morningstar: تقييمهم المستقل للأسواق والمخاطر\n"
                 "اكتب بالعربية فقط. ابدأ مباشرة بـ 🏦 BlackRock:"
             )
-            # outlook_groq_fix v2: استخدام _call_groq من news_engine مباشرة
+            # outlook_groq_fix v3: استدعاء مباشر كـ plan.py (بدون _call_groq)
             try:
-                if hasattr(engine, "news_engine") and engine.news_engine:
-                    _raw = await engine.news_engine._call_groq(
-                        prompt=_prompt_out,
-                        model="llama-3.3-70b-versatile",
-                        json_mode=False
-                    )
-                    if _raw and isinstance(_raw, dict):
-                        _outlook_text = _raw.get("text", "") or ""
-                    elif _raw and isinstance(_raw, str):
-                        _outlook_text = _raw
-                    else:
-                        _outlook_text = ""
-                    if _outlook_text and len(_outlook_text) > 30:
-                        _outlook_parts.append(_outlook_text)
-            except Exception as _oe:
-                logger.warning(f"market_outlook _call_groq: {_oe}")
+                import urllib.request as _ur3, ssl as _ssl3, json as _js3
+                _b3 = _js3.dumps({
+                    "model": "llama-3.3-70b-versatile",
+                    "messages": [
+                        {"role": "system", "content": "أجب بالعربية فقط. لا تستخدم كلمات إنجليزية."},
+                        {"role": "user", "content": _prompt_out}
+                    ],
+                    "max_tokens": 600,
+                    "temperature": 0.7
+                }).encode()
+                _req3 = _ur3.Request(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    data=_b3,
+                    headers={"Authorization": f"Bearer {_groq_key}",
+                             "Content-Type": "application/json"},
+                    method="POST"
+                )
+                _ctx3 = _ssl3.create_default_context()
+                with _ur3.urlopen(_req3, context=_ctx3, timeout=25) as _r3:
+                    _d3 = _js3.loads(_r3.read())
+                    _ot = _d3["choices"][0]["message"]["content"].strip()
+                    if _ot and len(_ot) > 30:
+                        _outlook_parts.append(_ot)
+            except Exception as _oe3:
+                logger.warning(f"market_outlook v3: {_oe3}")
 
         # بناء النص النهائي
         _parts_out = [
@@ -3878,8 +3887,10 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _tz_an2 = 3
         _nyse_warn_an = _get_market_hours_warning(symbol, _tz_an2)
 
-        # NYSE_hours_fix: دمج تنبيه ساعات التداول في نص /chart
-        _nyse_block = f"\n{_pre_market_warn}\n" if _pre_market_warn else ""
+        # NYSE_hours_fix: دمج تنبيه ساعات التداول — بدون Markdown لتجنب parse errors
+        # chart_markdown_fix: _pre_market_warn قد يحتوي * → نُنظّفه
+        _warn_clean = _pre_market_warn.replace("*", "").replace("_", "") if _pre_market_warn else ""
+        _nyse_block = f"\n{_warn_clean}\n" if _warn_clean else ""
         full = (
             "\n".join(header_lines) + "\n\n" +
             _nyse_block +
@@ -3887,6 +3898,7 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"{_signal_hint}\n" +
             f"⚠️ التحليل استرشادي — القرار للمستخدم"
         )
+        full = _clean_md(full)
         if len(full) > 4000:
             await msg.edit_text(full[:4000], parse_mode="Markdown")
             await _get_message(update, context).reply_text(full[4000:], parse_mode="Markdown")
