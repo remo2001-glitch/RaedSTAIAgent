@@ -1143,13 +1143,22 @@ class NewsEngine:
             sym_text  = f"لـ {symbol}" if symbol else ""
             # chart_price_prompt_fix: تعريف _price_str و _cp_marker قبل الاستخدام
             _price_str = f"${current_price:,.2f}" if current_price > 0 else "غير متوفر"
-            _cp_marker = f"CURRENT_PRICE:{current_price:.4f}\n" if current_price > 0 else ""
+            # chart_px_prompt_fix v2: تعليمة مُحسَّنة للسعر
+            if current_price > 0:
+                # السعر معروف → نُخبر Qwen3 به مباشرة
+                _px_instruction = (
+                    f"السعر الحالي من OKX هو {_price_str}.\n"
+                    f"PRICE_NOW:{current_price:.2f}\n"
+                )
+            else:
+                # السعر غير معروف → Qwen3 يستخرجه من الشارت
+                _px_instruction = (
+                    "ابحث عن السعر الكبير الظاهر في أعلى يمين الشارت واكتبه هكذا في أول سطر:\n"
+                    "PRICE_NOW:[السعر] مثال: PRICE_NOW:773.28\n"
+                )
             prompt_text = (
-                f"أنت خبير تحليل فني كريبتو. حلل شارت {sym_text} واكتب بالعربية فقط بدون تفكير."
-                f" السعر الحالي من OKX هو {_price_str}.\n"
-                "** مهم جداً: أول سطر في إجابتك يجب أن يكون بهذا الشكل بالضبط:\n"
-                "PRICE_NOW:[السعر الحالي الظاهر في أعلى الشارت]\n"
-                "مثال: PRICE_NOW:773.28\n"
+                f"أنت خبير تحليل فني كريبتو. حلل شارت {sym_text} واكتب بالعربية فقط بدون تفكير.\n"
+                f"{_px_instruction}"
                 "اتبع هذا التنسيق بالضبط (14 قسم مرقم):\n"
                 "0- نوع السوق: Spot أو Futures/Perp (تحقق من النص العربي: التداول الفوري=Spot | العقود الدائمة=Futures)\n"
                 "1- الاتجاه العام وقوته: صاعد/هابط/جانبي مع السبب والأسعار الدقيقة\n"
