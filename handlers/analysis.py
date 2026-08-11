@@ -2905,10 +2905,11 @@ async def cmd_outlook(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "🔍 Morningstar: تقييمهم المستقل للأسواق والمخاطر\n"
                 "اكتب بالعربية فقط. ابدأ مباشرة بـ 🏦 BlackRock:"
             )
-            # outlook_groq_fix v3: استدعاء مباشر كـ plan.py (بدون _call_groq)
+            # outlook_groq_fix v4: استخدام aiohttp (نفس /signal و/analyze)
+            # urllib يُعطي 403 من Railway → aiohttp يعمل
             try:
-                import urllib.request as _ur3, ssl as _ssl3, json as _js3
-                _b3 = _js3.dumps({
+                import aiohttp as _aio4, json as _js4
+                _b4 = _js4.dumps({
                     "model": "llama-3.3-70b-versatile",
                     "messages": [
                         {"role": "system", "content": "أجب بالعربية فقط. لا تستخدم كلمات إنجليزية."},
@@ -2916,23 +2917,26 @@ async def cmd_outlook(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     ],
                     "max_tokens": 600,
                     "temperature": 0.7
-                }).encode()
-                _req3 = _ur3.Request(
-                    "https://api.groq.com/openai/v1/chat/completions",
-                    data=_b3,
-                    headers={"Authorization": f"Bearer {_groq_key}",
-                             "Content-Type": "application/json"},
-                    method="POST"
-                )
-                _ctx3 = _ssl3.create_default_context()
-                with _ur3.urlopen(_req3, context=_ctx3, timeout=25) as _r3:
-                    _d3 = _js3.loads(_r3.read())
-                    _ot = _d3["choices"][0]["message"]["content"].strip()
-                    logger.info(f"market_outlook Groq response: {len(_ot)} chars")
-                    if _ot and len(_ot) > 5:
-                        _outlook_parts.append(_ot)
-            except Exception as _oe3:
-                logger.warning(f"market_outlook v3 error: {_oe3}")
+                })
+                _hdrs4 = {
+                    "Authorization": f"Bearer {_groq_key}",
+                    "Content-Type": "application/json"
+                }
+                async with _aio4.ClientSession() as _sess4:
+                    async with _sess4.post(
+                        "https://api.groq.com/openai/v1/chat/completions",
+                        data=_b4, headers=_hdrs4, timeout=_aio4.ClientTimeout(total=25)
+                    ) as _r4:
+                        if _r4.status == 200:
+                            _d4 = await _r4.json()
+                            _ot4 = _d4["choices"][0]["message"]["content"].strip()
+                            logger.info(f"market_outlook Groq: {len(_ot4)} chars")
+                            if _ot4 and len(_ot4) > 5:
+                                _outlook_parts.append(_ot4)
+                        else:
+                            logger.warning(f"market_outlook HTTP {_r4.status}")
+            except Exception as _oe4:
+                logger.warning(f"market_outlook aiohttp error: {_oe4}")
 
         # بناء النص النهائي
         _parts_out = [
@@ -3880,7 +3884,9 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # إصلاح #236: ربط /chart ↔ /signal للتكامل التحليلي
         _signal_hint = f"\n💡 للتحليل الشامل متعدد المصادر: /signal {symbol}" if symbol else ""
         # CHART_FORMAT_fix: بناء الرسالة النهائية بتنسيق منظم
-        _analysis_clean = analysis.strip()
+        # chart_pricenow_hide: إخفاء PRICE_NOW marker من النص المعروض للمستخدم
+        import re as _re_pnh
+        _analysis_clean = _re_pnh.sub(r"PRICE_NOW:[\d.]+\n?", "", analysis).strip()
         # NYSE_hours_fix: تنبيه خارج ساعات NYSE في /analyze
         try:
             _sm_an2 = context.bot_data.get("subscription_manager")

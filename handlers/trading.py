@@ -35,6 +35,35 @@ async def _reply(update: Update, text: str, **kwargs):
     return _FakeMsg()
 from core.database      import db
 
+
+import re as _re_sec
+import hashlib as _hashlib_sec
+
+# security_fixes: Validation و Security utilities (#5098, #5104, #5106, #5107)
+_SAFE_SYMBOL_RE = _re_sec.compile(r"^[A-Z0-9]{2,20}$")
+_SAFE_DIRECTION = {"buy", "sell", "long", "short"}
+_ALLOWED_LEVERAGE = {1, 2, 3, 5, 10, 20, 50, 100}
+_CALLBACK_PATTERN = _re_sec.compile(
+    r"^[a-z]+_(real|virtual|spot|flong|fshort)_[A-Z0-9]{2,20}"
+    r"_(buy|sell|long|short|confirm|cancel|close)_[\d.]+(?:_lev\d+)?$"
+)
+
+def _safe_symbol(s: str) -> str:
+    s = s.upper().strip()
+    if not _SAFE_SYMBOL_RE.match(s):
+        raise ValueError(f"رمز غير صالح: {s}")
+    return s
+
+def _safe_leverage(lev: int) -> int:
+    if lev not in _ALLOWED_LEVERAGE:
+        lev = min(_ALLOWED_LEVERAGE, key=lambda x: abs(x - lev))
+    return lev
+
+def _log_connect(ex_name: str, api_key: str, testnet: bool) -> str:
+    key_hash = _hashlib_sec.sha256(api_key.encode()).hexdigest()[:8] if api_key else "none"
+    return f"live connect: {ex_name.upper()} | key_hash={key_hash} | testnet={testnet}"
+
+
 def _sig() -> str:
     return "\n\n─────────────────\n📊 رائد التداول الذكي"
 
@@ -318,8 +347,7 @@ async def cmd_live(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # log للتشخيص (بدون إظهار القيم الحساسة)
             logger.info(
                 f"live connect: {ex_name.upper()} | "
-                f"key={api_key[:8]}... | "
-                f"pass_len={len(passphrase)} | testnet={testnet}"
+                f"key_hash={__import__('hashlib').sha256(api_key.encode()).hexdigest()[:8]} | testnet={testnet}"
             )
 
             # فحص: هل المستخدم مسموح له؟
