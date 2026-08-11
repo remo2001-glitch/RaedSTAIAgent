@@ -2928,10 +2928,11 @@ async def cmd_outlook(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 with _ur3.urlopen(_req3, context=_ctx3, timeout=25) as _r3:
                     _d3 = _js3.loads(_r3.read())
                     _ot = _d3["choices"][0]["message"]["content"].strip()
-                    if _ot and len(_ot) > 30:
+                    logger.info(f"market_outlook Groq response: {len(_ot)} chars")
+                    if _ot and len(_ot) > 5:
                         _outlook_parts.append(_ot)
             except Exception as _oe3:
-                logger.warning(f"market_outlook v3: {_oe3}")
+                logger.warning(f"market_outlook v3 error: {_oe3}")
 
         # بناء النص النهائي
         _parts_out = [
@@ -2943,6 +2944,7 @@ async def cmd_outlook(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if _outlook_parts:
             _parts_out.extend(_outlook_parts)
         else:
+            logger.warning("market_outlook: استخدام fallback — Groq لم يُجِب")
             _parts_out += [
                 "🏦 *BlackRock:* يُركز على تنويع المحافظ مع ميل للأصول الحقيقية في ظل التضخم.",
                 "📊 *Vanguard:* يوصي بالاستثمار طويل الأجل في مؤشرات متنوعة مع تقليل التكاليف.",
@@ -3900,10 +3902,10 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         full = _clean_md(full)
         if len(full) > 4000:
-            await msg.edit_text(full[:4000], parse_mode="Markdown")
-            await _get_message(update, context).reply_text(full[4000:], parse_mode="Markdown")
+            await msg.edit_text(full[:4000])
+            await _get_message(update, context).reply_text(full[4000:])
         else:
-            await msg.edit_text(full, parse_mode="Markdown")
+            await msg.edit_text(full)
 
     except Exception as e:
         logger.error(f"cmd_chart: {e}")
@@ -3912,8 +3914,7 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🔄 *بدائل متاحة الآن:*\n"
             "• /analyze — تحليل عميق شامل\n"
             "• /signal  — إشارة + مستويات دخول\n"
-            "• /quicksignal — تحليل سريع",
-            parse_mode=ParseMode.MARKDOWN
+            "• /quicksignal — تحليل سريع"
         )
 
 
