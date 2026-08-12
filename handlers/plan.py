@@ -42,6 +42,15 @@ def _fmt_price(price: float) -> str:
     else:                return f"${price:.10f}"
 
 logger = logging.getLogger(__name__)
+
+# auditing_agent: طبقة التدقيق الإلزامية
+try:
+    from core.auditing_agent import audit_content, audit_financial_content
+    _AUDITING_PLAN = True
+except ImportError:
+    def audit_content(c, source="default"): return True, c
+    def audit_financial_content(c, source="plan"): return True, c
+    _AUDITING_PLAN = False
 DEFAULT_SYMBOLS = ["BTC", "ETH", "BNB", "SOL"]
 
 
@@ -1488,7 +1497,12 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("✅ أتفق مع الخطة", callback_data="plan_agree"),
             InlineKeyboardButton("💬 لدي ملاحظة",   callback_data="plan_comment"),
         ]])
-        await msg.edit_text(_clean("\n".join(lines)), parse_mode=ParseMode.MARKDOWN, reply_markup=_fb_kb)
+        # auditing_agent: تدقيق /plan_week قبل الإرسال
+        _pw_text = _clean("\n".join(lines))
+        _pw_approved, _pw_text = audit_financial_content(_pw_text, source="plan")
+        if not _pw_approved:
+            logger.warning("auditing_agent: /plan_week مرفوض → fallback")
+        await msg.edit_text(_pw_text, parse_mode=ParseMode.MARKDOWN, reply_markup=_fb_kb)
 
     except Exception as e:
         logger.error(f"cmd_plan_week: {e}")

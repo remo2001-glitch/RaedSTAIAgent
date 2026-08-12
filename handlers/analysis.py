@@ -82,6 +82,18 @@ _AMBIGUOUS_SYMBOLS = {
 
 logger = logging.getLogger(__name__)
 
+# auditing_agent: طبقة التدقيق الإلزامية
+try:
+    from core.auditing_agent import audit_content, audit_financial_content, audit_outlook_content
+    _AUDITING_ENABLED = True
+except ImportError:
+    # fallback إذا لم يكن الملف موجوداً
+    def audit_content(c, source="default"): return True, c
+    def audit_financial_content(c, source="signal"): return True, c
+    def audit_outlook_content(c): return True, c
+    _AUDITING_ENABLED = False
+    logger.warning("auditing_agent: غير متاح — تخطي التدقيق")
+
 # NYSE_TOKENS: الأصول المُرمَّزة المرتبطة بسوق NYSE/NASDAQ
 # NYSE_TOKENS: جميع الأصول المُرمَّزة المرتبطة بـ NYSE/NASDAQ
 # يشمل الرمز الأصلي والرمز المُرمَّز (X-prefix)
@@ -2387,6 +2399,10 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if _btc_corr_txt:
             parts.append(_clean_md(_btc_corr_txt.strip()))
         full_text = "\n\n".join(parts) + warning
+        # auditing_agent: تدقيق /signal قبل الإرسال
+        _sig_approved, full_text = audit_financial_content(full_text, source="signal")
+        if not _sig_approved:
+            logger.warning("auditing_agent: /signal مرفوض → fallback")
         # تطوير #188 (Phase 2): إلحاق فقرة الزوج الإضافية إن وُجدت
         _pair_addon = await build_pair_addon_lines(resolution, engine.data_layer)
         if _pair_addon:
@@ -2946,7 +2962,14 @@ async def cmd_outlook(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
 
         if _outlook_parts:
-            _parts_out.extend(_outlook_parts)
+            # auditing_agent: تدقيق مخرجات /outlook قبل الإرسال
+            _raw_outlook = "\n".join(_outlook_parts)
+            _approved, _audited = audit_outlook_content(_raw_outlook)
+            if _approved:
+                _parts_out.extend([_audited])
+            else:
+                logger.warning("auditing_agent: /outlook مرفوض → fallback")
+                _parts_out.extend([_audited])  # fallback موثوق
         else:
             logger.warning("market_outlook: استخدام fallback — Groq لم يُجِب")
             _parts_out += [
@@ -3571,6 +3594,10 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
         parts += ["", "⚠️ هذا التحليل استرشادي — القرار للمستخدم"]
         full = _clean_md("\n".join(parts))
+        # auditing_agent: تدقيق /analyze قبل الإرسال
+        _an_approved, full = audit_financial_content(full, source="analyze")
+        if not _an_approved:
+            logger.warning("auditing_agent: /analyze مرفوض → fallback")
 
         if len(full) > 4000:
             await msg.edit_text(full[:4000], parse_mode="Markdown")
