@@ -36,6 +36,7 @@ async def _reply(update: Update, text: str, **kwargs):
 from core.database      import db
 
 
+from decimal import Decimal as _Decimal, ROUND_HALF_UP as _ROUND_HALF_UP
 import re as _re_sec
 import hashlib as _hashlib_sec
 
@@ -62,6 +63,94 @@ def _safe_leverage(lev: int) -> int:
 def _log_connect(ex_name: str, api_key: str, testnet: bool) -> str:
     key_hash = _hashlib_sec.sha256(api_key.encode()).hexdigest()[:8] if api_key else "none"
     return f"live connect: {ex_name.upper()} | key_hash={key_hash} | testnet={testnet}"
+
+
+# ═══════════════════════════════════════════════
+# C7: Rate Limiter — يمنع حجب API Key من OKX
+# ═══════════════════════════════════════════════
+import asyncio as _asyncio_rl, time as _time_rl
+
+class _RateLimiter:
+    """Rate limiter لطلبات OKX API (10 req/sec max)"""
+    def __init__(self, max_calls: int = 10, period: float = 1.0):
+        self._max = max_calls
+        self._period = period
+        self._calls: list = []
+        self._lock = _asyncio_rl.Lock()
+
+    async def acquire(self):
+        async with self._lock:
+            now = _time_rl.monotonic()
+            self._calls = [t for t in self._calls if now - t < self._period]
+            if len(self._calls) >= self._max:
+                sleep_t = self._period - (now - self._calls[0])
+                if sleep_t > 0:
+                    await _asyncio_rl.sleep(sleep_t)
+                self._calls = self._calls[1:]
+            self._calls.append(_time_rl.monotonic())
+
+_api_rate_limiter = _RateLimiter(max_calls=8, period=1.0)  # 8 req/sec (OKX limit: 10)
+
+
+# ═══════════════════════════════════════════════
+# C8: Circuit Breaker — يمنع cascade failures
+# ═══════════════════════════════════════════════
+class _CircuitBreaker:
+    """Circuit Breaker لحماية من Flash Crash و API failures"""
+    CLOSED = "CLOSED"    # يعمل بشكل طبيعي
+    OPEN   = "OPEN"      # محجوب بعد عدة فشل
+    HALF   = "HALF_OPEN" # يختبر الاتصال
+
+    def __init__(self, max_failures: int = 5, reset_timeout: float = 60.0):
+        self.state = self.CLOSED
+        self.failures = 0
+        self.max_failures = max_failures
+        self.reset_timeout = reset_timeout
+        self._open_time: float = 0
+
+    def record_success(self):
+        self.failures = 0
+        self.state = self.CLOSED
+
+    def record_failure(self):
+        self.failures += 1
+        if self.failures >= self.max_failures:
+            self.state = self.OPEN
+            self._open_time = _time_rl.monotonic()
+
+    def is_open(self) -> bool:
+        if self.state == self.OPEN:
+            if _time_rl.monotonic() - self._open_time > self.reset_timeout:
+                self.state = self.HALF
+                return False
+            return True
+        return False
+
+_exchange_breaker = _CircuitBreaker(max_failures=5, reset_timeout=60.0)
+
+def _calc_pnl(buy_price: float, sell_price: float, qty: float) -> float:
+    """حساب PnL بـ Decimal لدقة مالية (#5118/#I1)"""
+    try:
+        bp  = _Decimal(str(buy_price))
+        sp  = _Decimal(str(sell_price))
+        q   = _Decimal(str(qty))
+        pnl = ((sp - bp) * q).quantize(_Decimal("0.0001"), rounding=_ROUND_HALF_UP)
+        return float(pnl)
+    except Exception:
+        return (sell_price - buy_price) * qty  # fallback
+
+def _calc_pnl_pct(entry: float, current: float) -> float:
+    """حساب نسبة PnL % بدقة"""
+    if not entry or entry <= 0:
+        return 0.0
+    try:
+        e = _Decimal(str(entry))
+        c = _Decimal(str(current))
+        pct = ((c - e) / e * 100).quantize(_Decimal("0.01"), rounding=_ROUND_HALF_UP)
+        return float(pct)
+    except Exception:
+        return (current - entry) / entry * 100 if entry else 0.0
+
 
 
 def _sig() -> str:
@@ -1047,8 +1136,9 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     final_size = actual_bal * 0.9
                 elif actual_bal < final_size * 1.1:
                     balance_warn = f"\n💡 الرصيد المتاح: ${actual_bal:,.2f} (سيُستخدم {final_size/actual_bal*100:.0f}%)"
-            except Exception:
-                pass
+            except Exception as _e_bal:
+                logger.debug(f"balance hint: {_e_bal}")
+                # عدم إيقاف التنفيذ - هذا فقط تحسين للـ UI
 
             # إعادة حساب السعر والمستويات
             ep      = price * (1+0.1/100) if is_buy else price * (1-0.1/100)
@@ -1431,7 +1521,11 @@ async def handle_trade_callback(update: Update,
                     # تحذير: يستخدم معظم الرصيد
                     size_usd = actual_balance * 0.9  # استخدام 90% كحد أقصى
             except Exception as _be:
-                logger.warning(f"balance check: {_be}")
+                logger.error(f"balance check failed: {_be}")
+                await msg.edit_text(
+                    "⚠️ تعذّر التحقق من الرصيد — تم إلغاء الأمر لحماية أموالك"
+                )
+                return
 
             is_buy_ord = (side == "Buy")
             if limit_p > 0:
@@ -1785,7 +1879,7 @@ async def cmd_vtrades(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if pd: cur_price = float(pd.get("price", cur_price))
             except: pass
 
-        live_pnl = (cur_price - pos["avg_price"]) * pos["quantity"]
+        live_pnl = _calc_pnl(pos["avg_price"], cur_price, pos["quantity"])
         pnl_pct  = live_pnl / max(pos["cost"], 1) * 100
         sign     = "+" if live_pnl >= 0 else ""
         emoji    = "📈" if live_pnl >= 0 else "📉"
@@ -1983,6 +2077,19 @@ async def cmd_security(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ══ /admin ════════════════════════════════════════════════════════════════════
 
 async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # security_fix C4-C6: Admin authorization check
+    _caller_id = update.effective_user.id if update.effective_user else 0
+    _admin_ids = set()
+    try:
+        _cfg = context.bot_data.get("raed_engine")
+        if _cfg:
+            _admin_str = str(_cfg.config.get("ADMIN_USER_ID", "6747412518"))
+            _admin_ids = {int(x.strip()) for x in _admin_str.split(",") if x.strip().isdigit()}
+    except Exception:
+        _admin_ids = {6747412518}
+    if _caller_id not in _admin_ids:
+        await update.message.reply_text("⛔ هذا الأمر للمشرفين فقط.")
+        return
     stats = await db.get_stats()
     user_counts = stats["users"]
     msg = (
@@ -2845,7 +2952,7 @@ async def cb_goto_vtrades(update, context):
                     pd = await engine.data_layer.get_price(sym.replace("USDT",""))
                     if pd: cur_price = float(pd.get("price", cur_price))
                 except: pass
-            live_pnl = (cur_price - pos["avg_price"]) * pos["quantity"]
+            live_pnl = _calc_pnl(pos["avg_price"], cur_price, pos["quantity"])
             pnl_pct  = live_pnl / max(pos["cost"], 1) * 100
             sign     = "+" if live_pnl >= 0 else ""
             emoji    = "📈" if live_pnl >= 0 else "📉"
