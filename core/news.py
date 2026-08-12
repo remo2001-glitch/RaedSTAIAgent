@@ -503,7 +503,7 @@ class NewsEngine:
         if not self.groq_key:
             logger.warning("⚠️ GROQ_API_KEY غير موجود — تحليل ذاتي")
             return self._rule_based_analysis(news_items)
-        logger.info(f"🔑 Groq key: {self.groq_key[:4]}...{self.groq_key[-4:]} (طول={len(self.groq_key)})")
+        logger.info("🔑 Groq key: ****...****")
 
         import html as _html
         headlines = "\n".join(
@@ -611,7 +611,7 @@ class NewsEngine:
             )
 
             # تشغيل في executor لعدم حجب event loop
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_event_loop()  # TODO: استبدل بـ asyncio.get_running_loop() في Python 3.10+
             def _do_request():
                 ctx = ssl.create_default_context()
                 with urllib.request.urlopen(req, context=ctx, timeout=25) as resp:
@@ -1073,7 +1073,7 @@ class NewsEngine:
         try:
             b64_image = base64.b64encode(image_data).decode("utf-8")
             ctx  = ssl.create_default_context()
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_event_loop()  # TODO: استبدل بـ asyncio.get_running_loop() في Python 3.10+
 
             # سؤال مباشر جداً — إجابة كلمة واحدة فقط
             detect_prompt = (
@@ -1178,7 +1178,7 @@ class NewsEngine:
                 "مهم: اذكر الأرقام الدقيقة من الشارت. لا تستخدم ** أو _ أو # أو markdown."
             )
             ctx  = ssl.create_default_context()
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_event_loop()  # TODO: استبدل بـ asyncio.get_running_loop() في Python 3.10+
 
             # T30_fix: تعريف symbol_name للـ prompt
             symbol_name = symbol.upper() if symbol else "الأصل المعروض"

@@ -1206,7 +1206,7 @@ class DataLayer:
             with urllib.request.urlopen(req, context=ctx, timeout=20) as r:
                 return json.loads(r.read().decode("utf-8"))
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_event_loop()  # TODO: استبدل بـ asyncio.get_running_loop() في Python 3.10+
 
         for req_num in range(requests_needed):
             try:

@@ -151,14 +151,19 @@ class RaedEngine:
         self.microstructure.session = self._session
         self.news_engine.session    = self._session
 
-        # Scheduler
+        # Scheduler — I6: error handling مُضاف
         if send_fn:
-            self._send_fn = send_fn  # حفظ للاستخدام في _run_4h_scan
-            self.scheduler = Scheduler(send_fn)
-            self.scheduler.register_weekly(self._generate_weekly_report)
-            self.scheduler.register_monthly(self._generate_monthly_report)
-            self.scheduler.register_scan(self._run_4h_scan)
-            self.scheduler.start()
+            try:
+                self._send_fn = send_fn  # حفظ للاستخدام في _run_4h_scan
+                self.scheduler = Scheduler(send_fn)
+                self.scheduler.register_weekly(self._generate_weekly_report)
+                self.scheduler.register_monthly(self._generate_monthly_report)
+                self.scheduler.register_scan(self._run_4h_scan)
+                self.scheduler.start()
+                logger.info("✅ Scheduler started")
+            except Exception as _sch_err:
+                logger.error(f"❌ Scheduler فشل في التشغيل: {_sch_err}")
+                self.scheduler = None
 
         # تشغيل Order Monitor إذا Live Trading مفعّل
         if self.live_trading and self.order_manager:
