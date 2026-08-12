@@ -344,9 +344,13 @@ def _format_forecast_ar(symbol: str, price: float, fc: dict, days: int = 30) -> 
     base = fc.get("base_case", price)
     bear = fc.get("bear_case", price)
 
-    bull_pct = (bull/price - 1)*100
-    base_pct = (base/price - 1)*100
-    bear_pct = (bear/price - 1)*100
+    # T2: zero check قبل القسمة
+    if not price or price <= 0:
+        bull_pct = base_pct = bear_pct = 0.0
+    else:
+        bull_pct = (bull/price - 1)*100
+        base_pct = (base/price - 1)*100
+        bear_pct = (bear/price - 1)*100
 
     lines = [
         "",
