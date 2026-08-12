@@ -25,6 +25,15 @@ from typing import Dict, List, Optional, Any
 
 logger = logging.getLogger(__name__)
 
+# auditing_agent: طبقة التدقيق الإلزامية
+try:
+    from core.auditing_agent import audit_content, audit_financial_content
+    _AUDITING_REVIEW = True
+except ImportError:
+    def audit_content(c, source="default"): return True, c
+    def audit_financial_content(c, source="review"): return True, c
+    _AUDITING_REVIEW = False
+
 # ═══════════════════════════════════════════════════════════════
 # ذاكرة Redis المستمرة بين الجلسات
 # ═══════════════════════════════════════════════════════════════
@@ -727,4 +736,4 @@ async def cmd_review(update, context):
         )
     except Exception as e:
         logger.error(f"cmd_review: {e}")
-        await msg.edit_text(f"❌ خطأ في المراجعة: {e}")
+        await msg.edit_text("❌ خطأ مؤقت في التقرير — حاول مجدداً")
