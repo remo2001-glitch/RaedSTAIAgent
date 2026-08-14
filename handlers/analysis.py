@@ -1642,6 +1642,10 @@ async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as _ce:
             logger.debug(f"news contradiction check: {_ce}")
 
+        # auditing_agent: تدقيق /news قبل الإرسال
+        _news_approved, text = audit_content(text, source="news")
+        if not _news_approved:
+            logger.warning("auditing_agent: /news مرفوض → fallback")
         await msg.edit_text(text, parse_mode=ParseMode.MARKDOWN,
                             disable_web_page_preview=True)
     except Exception as e:
@@ -1862,7 +1866,12 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if btc_adv.get("available"):
             _src += " + BGeometrics"
         lines += ["", f"{_src} | 🤖 رائد"]
-        await msg.edit_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+        # auditing_agent: تدقيق /onchain قبل الإرسال
+        _onchain_text = "\n".join(lines)
+        _oc_approved, _onchain_text = audit_content(_onchain_text, source="onchain")
+        if not _oc_approved:
+            logger.warning("auditing_agent: /onchain مرفوض → fallback")
+        await msg.edit_text(_onchain_text, parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         logger.error(f"cmd_onchain: {e}")
         await msg.edit_text("❌ خطأ في جلب بيانات On-Chain. حاول لاحقاً")
@@ -2931,7 +2940,7 @@ async def cmd_outlook(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         {"role": "system", "content": "أجب بالعربية فقط. لا تستخدم كلمات إنجليزية."},
                         {"role": "user", "content": _prompt_out}
                     ],
-                    "max_tokens": 600,
+                    "max_tokens": 900,
                     "temperature": 0.7
                 })
                 _hdrs4 = {
@@ -2986,7 +2995,6 @@ async def cmd_outlook(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• Vanguard → معيار العائد المتوقع للمحفظة",
             "• Morningstar → تحليل مستقل للمخاطر",
             "",
-            "⚠️ رأي استرشادي — القرار النهائي للمستخدم",
             "🤖 رائد التداول الذكي",
         ]
 
@@ -3820,15 +3828,28 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # chart_nyse_fix v3: تنبيه NYSE بعد تحليل Qwen3 (analysis متاح الآن)
         _chart_sym_for_warn = _chart_price_sym or symbol or ""
         if not _chart_sym_for_warn and analysis:
-            # بحث مباشر عن اسم الأصل في نص Qwen3
+            # chart_nyse_fix v3.1: بحث محسَّن في نص Qwen3
             _kw_list = ["XSPY","XSPCX","XQQQ","XXLE","XAAPL","XGOOGL","XAMD",
-                        "XMETA","XNVDA","XTSLA","XMSFT","XAVGO","XSKHY",
+                        "XMETA","XNVDA","XTSLA","XMSFT","XAVGO","XSKHY","XISRG",
                         "BTC","ETH","SOL","BNB","XRP","BICO","LAYER","GRASS"]
             _an_upper = analysis.upper()
+            # 1. بحث مباشر في القائمة
             for _kw in _kw_list:
                 if _kw in _an_upper:
                     _chart_sym_for_warn = _kw
                     break
+            # 2. كشف تلقائي: أي رمز X-prefix في نص Qwen3
+            if not _chart_sym_for_warn:
+                import re as _re_nsf
+                _sym_m = _re_nsf.search(r'\b(X[A-Z]{2,8})/USDT\b', analysis.upper())
+                if _sym_m:
+                    _chart_sym_for_warn = _sym_m.group(1)
+            # 3. من caption إذا كان موجوداً
+            if not _chart_sym_for_warn and caption:
+                import re as _re_cap
+                _cap_m = _re_cap.search(r'\b([A-Z]{2,10})\b', caption.upper())
+                if _cap_m:
+                    _chart_sym_for_warn = _cap_m.group(1)
         if _chart_sym_for_warn:
             _pre_market_warn_nyse = _get_market_hours_warning(_chart_sym_for_warn, _tz_chart)
             if _pre_market_warn_nyse:
