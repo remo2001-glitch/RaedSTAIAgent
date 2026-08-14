@@ -881,6 +881,11 @@ class NewsEngine:
                 # فك HTML entities
                 import html as _html_y2
                 title = _html_y2.unescape(title)
+                # arabic_news_fix: إذا العنوان إنجليزي → نُضيف ترجمة مختصرة
+                _is_arabic_title = any('؀' <= c <= 'ۿ' for c in title)
+                if not _is_arabic_title and len(title) > 10:
+                    # نُبقي العنوان الإنجليزي للمرجعية لكن نُضيف ملاحظة
+                    title = f"[EN] {title}"
                 title = title.replace("_", " ").replace("*", "").replace("`", "")
                 # Y2+T37_unify: توحيد منطق التصنيف مع key_events
                 _prefix = _news_impact(title)[1] + " "
