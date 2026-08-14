@@ -689,8 +689,11 @@ def _build_professional_block(
             # signal_logic_fix: fib (وليس fib_levels) هو المتغير الصحيح هنا
             _fib_low = 0
             try:
+                # fib["levels"] يحتوي مفاتيح كـ "0.0", "0.236"...
                 if fib and isinstance(fib, dict):
-                    _fib_low = fib.get("f0", 0) or 0  # مستوى 0.0 = القاع
+                    _fib_lvls = fib.get("levels", {})
+                    _fib_low = float(_fib_lvls.get("0.0", 0) or
+                                     _fib_lvls.get(0.0, 0) or 0)
             except Exception:
                 _fib_low = 0
             if _fib_low and _demand_level < _fib_low:
@@ -975,7 +978,15 @@ def _build_professional_block(
     _sl_base = abs(price - (pro_sl if pro_sl > 0 else price * (1 - _eff_atr * 1.2))) / max(price, 1e-9) * 100
 
     # ── مصفوفة القرار ──
-    if _rsi_blocked:
+    # signal_logic_fix: overbought_wait → [WAIT] + 0% بغض النظر عن conf
+    _is_overbought_wait = (
+        hasattr(regime, 'action') and regime.action == "overbought_wait"
+    )
+
+    if _is_overbought_wait:
+        _decision_label = "[WAIT] — مراقبة، لا دخول حتى تصحيح RSI"
+        _pos_size_rule  = "0% — RSI في ذروة شراء، انتظر تصحيح تحت 60"
+    elif _rsi_blocked:
         _decision_label = f"[WAIT] — RSI خارج نطاق الباقة ({rsi:.0f})"
         _pos_size_rule  = "0% — RSI يجب أن يكون بين {_t_rsi_min}% و{_t_rsi_max}%"
         if hasattr(regime, 'action'):
@@ -2876,6 +2887,10 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as _t18e:
             logger.debug(f"T18_fix: {_t18e}")
 
+        # auditing_agent: تدقيق /liquidity قبل الإرسال
+        _liq_approved, text = audit_content(text, source="liquidity")
+        if not _liq_approved:
+            logger.warning("auditing_agent: /liquidity مرفوض → fallback")
         await msg.edit_text(text, parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         logger.error(f"cmd_liquidity: {e}")
