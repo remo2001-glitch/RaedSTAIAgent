@@ -673,7 +673,8 @@ def _build_professional_block(
         if _fib_res_cond and _fib_res_cond > price:
             # شرط 3 = Reclaim الدعم (مستوى أدنى من المقاومة)
             _sup_display = _fmt_price(_fib_sup_cond) if _fib_sup_cond else _fmt_price(price * 0.98)
-            _cond3 = f"3. ثبات واستقرار فوق {_sup_display} (الدعم القريب)"  # T29_fix
+            # signal_logic_fix: "ثبات" ليس كافياً → شروط قابلة للقياس
+            _cond3 = f"3. إغلاق 4H فوق {_sup_display} + حجم 1.3x+ + CVD محايد/ايجابي"  # signal_logic_fix
         else:
             _cond3 = "3. ظهور شمعة ارتداد قوية (Bullish Engulfing أو Hammer)"
         entry_conds = [
@@ -682,11 +683,17 @@ def _build_professional_block(
             _cond3,
         ]
         if ns > 0:
-            # إصلاح التكرار: Demand Zone = مستوى أعمق من الدعم القريب
+            # signal_logic_fix: Demand Zone لا تقع أسفل مستوى Fibonacci 0.0
             _demand_level = ns * 0.98  # 2% أعمق من الدعم
+            # تحقق: إذا كان fib_low معرَّفاً → Demand Zone يجب أن يكون فوقه
+            _fib_low = fib_levels.get(0.0, 0) if isinstance(fib_levels, dict) else 0
+            if _fib_low and _demand_level < _fib_low:
+                _demand_level = _fib_low * 1.005  # 0.5% فوق القاع
             entry_conds.append(f"4. وصول Demand Zone {_fmt_price(_demand_level)} (دعم أعمق)")
+        # signal_logic_fix: CVD شرط أساسي للدخول
+        entry_conds.append(f"5. CVD يتحول إلى محايد/إيجابي (تأكيد ضغط الشراء)")
         if adx > 40:
-            entry_conds.append("5. MACD إيجابي أو تقاطع صاعد")
+            entry_conds.append("6. MACD إيجابي أو تقاطع صاعد")
 
     # إصلاح #325: R/R ديناميكي — ذروة البيع تُعطي هدفاً أوسع
     # منطق مالي: RSI=13 تاريخياً يسبق ارتداداً 10-20%
@@ -1250,7 +1257,7 @@ def _build_professional_block(
     for flag in _conf_flags:
         parts.append(f"  ✓ {flag}")
     if not _conf_flags:
-        parts.append("  • لا تأكيدات بعد — يمكن الدخول بحجم مصغَّر فقط")
+        parts.append("  • لا تأكيدات — انتظر 3/5 شروط قبل أي دخول")
 
     # 6-B. Checklist الاستعداد (مؤشرات داعمة + تحذيرات)
     # T26_fix: Divergence = تحذير واضح لا مجرد check
