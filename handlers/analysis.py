@@ -1012,9 +1012,13 @@ def _build_professional_block(
             except Exception:
                 pass
     elif _conf_score < 75:
-        # #3237_fix: حجم NORMAL = نصف max بحد أقصى 20% للماسي
-        _normal_cap = min(_t_max_pos, 20)  # cap عند 20% في NORMAL
-        _decision_label = f"[NORMAL] — حجم {_normal_cap//2}–{_normal_cap}%"
+        # signal_logic_fix: 0/4 تأكيدات → WAIT حتى لو conf مرتفع
+        if _flags_found < 2:
+            _decision_label = "[WAIT] — انتظر تأكيد 2/4 مؤشرات قبل الدخول"
+            _pos_size_rule  = "0% — لا تأكيدات كافية للدخول"
+        else:
+            _normal_cap = min(_t_max_pos, 20)
+            _decision_label = f"[NORMAL] — حجم {_normal_cap//2}–{_normal_cap}%"
         _pos_norm  = min(float(_normal_cap), round(_t_risk / max(_sl_base / 100, 0.01) * 100, 1))
         _pos_size_rule = f"{max(_normal_cap//2, min(_normal_cap, round(_pos_norm)))}% — ثقة متوسطة"
     else:
@@ -1268,6 +1272,23 @@ def _build_professional_block(
         f"• ⚠️ Worst-Case: كسر {_fmt_price(wc_bd1)} → {_fmt_price(wc_bd2)} (خسارة ~{wc_loss:.1f}%)",
     ])
 
+    # signal_logic_fix: سيناريوهات صاعد/هابط/إلغاء
+    _fib_res_nxt = fib.get("nearest_resistance", 0) if isinstance(fib, dict) else 0
+    _sl_scen = pro_sl if pro_sl > 0 else (price * 0.93)
+    _tp1_scen = pro_tp1 if pro_tp1 > 0 else (price * 1.07)
+    _tp2_scen = pro_tp2 if pro_tp2 > 0 else (price * 1.13)
+    _bull_tgt = _fmt_price(_fib_res_nxt) if _fib_res_nxt else _fmt_price(price * 1.05)
+    parts.extend([
+        "",
+        "*📋 السيناريوهات:*",
+        (f"🟢 صاعد: إغلاق 4H فوق {_bull_tgt} + حجم 1.3x+ + CVD ايجابي"
+         f" → هدف {_fmt_price(_tp1_scen)} ثم {_fmt_price(_tp2_scen)}"),
+        (f"🔴 هابط: كسر {_fmt_price(ns)} بإغلاق 4H + حجم بيع مرتفع"
+         f" → {_fmt_price(ns * 0.97)} أكثر أهمية"),
+        (f"❌ إلغاء: Entry لا يُفعَّل بمجرد الوصول"
+         f" — يشترط شمعة رفض أو استرداد. كسر {_fmt_price(_sl_scen)} = إلغاء الفكرة"),
+        "",
+    ])
     # 6. إصلاح #204/#206: قسمان منفصلان بتسميات واضحة
     # 6-A. تأكيدات الدخول الحاسمة (تؤثر على حجم الصفقة عبر _confirmed/_flags_found)
     parts.extend(["", "*🔑 تأكيدات الدخول (تُحدِّد حجم الصفقة — الحد الأدنى: 2 من 4)*"])
@@ -1293,18 +1314,23 @@ def _build_professional_block(
     # T27_fix: Whale > 1.0 = Long صاعد، < 0.5 = Short هابط
     _whale_line = ""
     if _whale_ratio >= 1.3:
-        _whale_line = f"☑ Whale Ratio {_whale_ratio:.2f} 🟢 (أغلبية Long — صاعد)"
+        _whale_line = f"☑ Whale Ratio {_whale_ratio:.2f} 🟢 (أغلبية Long — قد يكون تحوطاً)"
     elif _whale_ratio > 0 and _whale_ratio <= 0.7:
         _whale_line = f"⚠️ Whale Ratio {_whale_ratio:.2f} 🔴 (أغلبية Short — هابط)"
     else:
         _whale_line = f"□ Whale Ratio {_whale_ratio:.2f} ⚪ (محايد)"
 
-    # T29_fix: Reclaim فقط إذا السعر كان تحت المستوى وعاد فوقه
+    # signal_logic_fix: تحقق دقيق من السعر vs الدعم
     _reclaim_line = ""
     if ns > 0:
-        _above = price >= ns * 0.995
-        _reclaim_line = (f"☑ السعر فوق الدعم {_fmt_price(ns)}" if _above
-                         else f"□ إغلاق فوق الدعم {_fmt_price(ns)}")
+        _price_diff_pct = (price - ns) / ns * 100
+        if price >= ns:
+            _reclaim_line = f"☑ السعر فوق الدعم {_fmt_price(ns)} (+{_price_diff_pct:.1f}%)"
+        elif price >= ns * 0.99:
+            _reclaim_line = (f"⚠️ السعر أسفل الدعم {_fmt_price(ns)} "
+                             f"بـ {abs(_price_diff_pct):.1f}% — يحتاج إعادة اختبار")
+        else:
+            _reclaim_line = f"□ السعر تحت الدعم {_fmt_price(ns)} (كسر محتمل)"
     else:
         _reclaim_line = "□ دعم غير محدد"
 
@@ -1433,8 +1459,8 @@ def _calc_atr_raw(candles: list, period: int = 14) -> float:
 def _get_market_phase_ar(phase: str) -> str:
     """ترجمة Market Phase للعربية."""
     return {
-        "Accumulation":   "🔵 تراكم (Accumulation)",
-        "Distribution":   "🟠 توزيع (Distribution)",
+        "Accumulation":   "🔵 تراكم (Accumulation) — فرضية",
+        "Distribution":   "🟠 توزيع (Distribution) — فرضية",
         "Markup":         "🟢 صعود (Markup)",
         "Markdown":       "🔴 هبوط (Markdown)",
         "Consolidation":  "🟡 تعزيز (Consolidation)",
@@ -2898,6 +2924,9 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _liq_approved, text = audit_content(text, source="liquidity")
         if not _liq_approved:
             logger.warning("auditing_agent: /liquidity مرفوض → fallback")
+        _liq_approved, text = audit_content(text, source="liquidity")
+        if not _liq_approved:
+            logger.warning("auditing_agent: /liquidity مرفوض")
         await msg.edit_text(text, parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         logger.error(f"cmd_liquidity: {e}")
@@ -3582,7 +3611,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"💰 السعر: {_fmt_price(price)} ({change_sign}{change_24h:.2f}%)",
             f"📊 RSI: {rsi_lbl} | Fear & Greed: {fear_val}",
             f"🌍 السوق: {regime_desc}",
-            f"📉 EMA50: {'✅ فوق' if not ema_bearish else '❌ تحت'} | حجم: {_fmt_volume(volume_24h)}" if volume_24h > 0 else f"📉 EMA50: {'✅ فوق' if not ema_bearish else '❌ تحت'}",
+            f"📉 EMA50 (يومي={_fmt_price(ema50_val)}): {'✅ فوق' if not ema_bearish else '❌ تحت'} | حجم: {_fmt_volume(volume_24h)}" if volume_24h > 0 else f"📉 EMA50: {'✅ فوق' if not ema_bearish else '❌ تحت'}",
             "━━━━━━━━━━━━━━━━━━",
             analysis,
         ]
