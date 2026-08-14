@@ -685,8 +685,14 @@ def _build_professional_block(
         if ns > 0:
             # signal_logic_fix: Demand Zone لا تقع أسفل مستوى Fibonacci 0.0
             _demand_level = ns * 0.98  # 2% أعمق من الدعم
-            # تحقق: إذا كان fib_low معرَّفاً → Demand Zone يجب أن يكون فوقه
-            _fib_low = fib_levels.get(0.0, 0) if isinstance(fib_levels, dict) else 0
+            # تحقق: إذا كان fib معرَّفاً → Demand Zone يجب أن يكون فوق مستوى 0.0
+            # signal_logic_fix: fib (وليس fib_levels) هو المتغير الصحيح هنا
+            _fib_low = 0
+            try:
+                if fib and isinstance(fib, dict):
+                    _fib_low = fib.get("f0", 0) or 0  # مستوى 0.0 = القاع
+            except Exception:
+                _fib_low = 0
             if _fib_low and _demand_level < _fib_low:
                 _demand_level = _fib_low * 1.005  # 0.5% فوق القاع
             entry_conds.append(f"4. وصول Demand Zone {_fmt_price(_demand_level)} (دعم أعمق)")
@@ -3836,9 +3842,11 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _chart_sym_for_warn = _chart_price_sym or symbol or ""
         if not _chart_sym_for_warn and analysis:
             # chart_nyse_fix v3.1: بحث محسَّن في نص Qwen3
-            _kw_list = ["XSPY","XSPCX","XQQQ","XXLE","XAAPL","XGOOGL","XAMD",
+            _kw_list = ["XSPY","XSPCX","XQQQ","XTQQQ","XXLE","XAAPL","XGOOGL","XAMD",
                         "XMETA","XNVDA","XTSLA","XMSFT","XAVGO","XSKHY","XISRG",
+                        "XGLD","XSLV","XDIA","XIWM","XHYG","XAMZN","XBABA",
                         "BTC","ETH","SOL","BNB","XRP","BICO","LAYER","GRASS"]
+            # chart_nyse_fix: X-prefix تلقائي — أي رمز يبدأ بـ X هو أصل مُرمَّز
             _an_upper = analysis.upper()
             # 1. بحث مباشر في القائمة
             for _kw in _kw_list:
@@ -3851,11 +3859,16 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _sym_m = _re_nsf.search(r'\b(X[A-Z]{2,8})/USDT\b', analysis.upper())
                 if _sym_m:
                     _chart_sym_for_warn = _sym_m.group(1)
-            # 3. من caption إذا كان موجوداً
+            # 3. من caption — بحث عن X-prefix أولاً
             if not _chart_sym_for_warn and caption:
                 import re as _re_cap
-                _cap_m = _re_cap.search(r'\b([A-Z]{2,10})\b', caption.upper())
-                if _cap_m:
+                # X-prefix في caption مباشرة
+                _cap_x = _re_cap.search(r'\b(X[A-Z]{2,8})\b', caption.upper())
+                if _cap_x:
+                    _chart_sym_for_warn = _cap_x.group(1)
+                else:
+                    _cap_m = _re_cap.search(r'\b([A-Z]{2,10})\b', caption.upper())
+                if not _chart_sym_for_warn and _cap_m:
                     _chart_sym_for_warn = _cap_m.group(1)
         if _chart_sym_for_warn:
             _pre_market_warn_nyse = _get_market_hours_warning(_chart_sym_for_warn, _tz_chart)
