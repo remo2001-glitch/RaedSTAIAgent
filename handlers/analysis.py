@@ -767,14 +767,12 @@ def _build_professional_block(
         symbol.upper() in {"SPCX","AMZN","AAPL","GOOGL","META","AMD",
                            "NFLX","SPY","ORCL","AVGO","MSFT","COIN","NVDA"}
     )
-    if _is_x_asset and sl_pct > 10.0:
-        # إعادة حساب pro_sl بحد أقصى 10%
+    if _is_x_asset and sl_pct > 7.0:
+        pro_sl = price * 0.93
+        sl_pct = 7.0
+    elif not _is_x_asset and sl_pct > 10.0:
         pro_sl = price * 0.90
         sl_pct = 10.0
-    elif not _is_x_asset and sl_pct > 15.0:
-        # حد أقصى 15% للعملات العادية
-        pro_sl = price * 0.85
-        sl_pct = 15.0
     tp_pct  = abs(pro_tp - pro_entry) / max(pro_entry, 1e-9) * 100
     hold    = 3 if adx > 40 else 5
 
@@ -1158,17 +1156,23 @@ def _build_professional_block(
     # 1. Confidence Score — إصلاح #8: لا نُكرر التفصيل (موجود في "مصادر الإشارة" أعلاه)
     # تطوير #209: الرافعة المقترحة من النظام
     _lev = getattr(signal, "suggested_leverage", 1)
+    _is_wait_decision = "[WAIT]" in _decision_label
+    if _is_wait_decision:
+        _lev = 1
     _lev_note = {
         1: "🛡️ 1x — حماية قصوى",
         2: "⚡ 2x — محافظ",
         3: "⚡ 3x — معتدل",
         5: "🔥 5x — ثقة عالية، سوق صاعد",
     }.get(_lev, f"{_lev}x")
+    _lev_line = (f"• الرافعة المقترحة: {_lev_note}"
+                 if not _is_wait_decision
+                 else "• الرافعة: لا رافعة — انتظر تأكيد الدخول أولاً")
     parts.extend([
         "",
         f"*🎯 Confidence Score: {_conf_score}%*",
         f"• القرار: *{_decision_label}*",
-        f"• الرافعة المقترحة: {_lev_note}",
+        _lev_line,
     ])
 
     # 2. SMC Block
@@ -2891,6 +2895,9 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _liq_approved, text = audit_content(text, source="liquidity")
         if not _liq_approved:
             logger.warning("auditing_agent: /liquidity مرفوض → fallback")
+        _liq_approved, text = audit_content(text, source="liquidity")
+        if not _liq_approved:
+            logger.warning("auditing_agent: /liquidity مرفوض → fallback")
         await msg.edit_text(text, parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         logger.error(f"cmd_liquidity: {e}")
@@ -3853,8 +3860,10 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                     pass
                         break
 
-        # chart_nyse_fix v3: تنبيه NYSE بعد تحليل Qwen3 (analysis متاح الآن)
-        _chart_sym_for_warn = _chart_price_sym or symbol or ""
+        # chart_nyse_fix v4: fallback شامل
+        _chart_sym_for_warn = _chart_price_sym or symbol or _cap_sym or ""
+        if "/" in _chart_sym_for_warn:
+            _chart_sym_for_warn = _chart_sym_for_warn.split("/")[0].strip()
         if not _chart_sym_for_warn and analysis:
             # chart_nyse_fix v3.1: بحث محسَّن في نص Qwen3
             _kw_list = ["XSPY","XSPCX","XQQQ","XTQQQ","XXLE","XAAPL","XGOOGL","XAMD",
