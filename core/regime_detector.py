@@ -138,6 +138,13 @@ class RegimeDetector:
         action = "trade_normal"
         rsi_val = metrics.get("rsi", 50)
         _action_basis = ""  # إصلاح #149: سبب القرار للشفافية/التشخيص
+
+        # signal_logic_fix: RSI>70 → ذروة شراء → انتظر تصحيح
+        # لا "تداول بحجم طبيعي" عند ذروة الشراء
+        if rsi_val > 70 and action == "trade_normal":
+            action = "overbought_wait"
+            _action_basis = f" (RSI={rsi_val:.0f}>70 ذروة شراء)"
+
         if regime == Regime.HIGH_VOLATILITY:
             action = "reduce_size"
         elif regime == Regime.BEAR_TREND:
@@ -157,7 +164,7 @@ class RegimeDetector:
         # إذا RSI في ذروة بيع (< 30) → تحذير انعكاس بغض النظر عن الاتجاه
         if rsi_val < 30:
             action = "wait_reversal"
-            _action_basis = ""
+            _action_basis = f" (RSI={rsi_val:.0f}<30 ذروة بيع)"
         metrics["action_basis"] = _action_basis
 
         # تحديد Market Phase (Wyckoff-inspired)
@@ -438,12 +445,16 @@ def _mp_ar(phase: str) -> str:
 def _action_ar(action: str) -> str:
     return {
         "trade_normal":   "✅ تداول بحجم طبيعي",
-        "reduce_size":    "⚠️ تقليل الحجم 50%",
+        "reduce_size":    "⚠️ تقليل الحجم 50% (الثقة منخفضة)",
         "avoid":          "🚫 تجنب الدخول الآن",
         "wait_reversal":  "⏳ انتظر — RSI في ذروة بيع (احتمال ارتداد)",
         "reduce_exposure": "📉 قلل التعرض للسوق",
         # إصلاح #103: للارتداد المؤكَّد (counter_trend_bounce + 🟢شراء)
         "bounce_entry_confirmed": "⚡ ارتداد مؤكَّد — Scalp بحجم محدود ووقف صارم",
+        # signal_logic_fix: مراقبة بدون دخول حتى تأكيد 3/5 شروط
+        "wait_confirmation": "🔍 مراقبة — لا دخول حتى تأكيد 3/5 شروط",
+        # signal_logic_fix: RSI>70 مع تأكيدات غير كافية
+        "overbought_wait":  "⚠️ ذروة شراء — انتظر تصحيح RSI تحت 60 ثم ارتداد",
     }.get(action, action)
 
 
