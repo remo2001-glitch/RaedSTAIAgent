@@ -95,16 +95,19 @@ def _eng(context):
     return context.bot_data.get("raed_engine")
 
 def _get_tier(engine, user_id: int) -> str:
-    """باقة المستخدم"""
+    """باقة المستخدم — يستخدم state_manager.get_tier الرسمي"""
     try:
         from core.state_manager import state_manager as _sm
-        sub = _sm.get_subscription(user_id)
-        return (sub or {}).get("tier", "free").lower()
+        tier = _sm.get_tier(user_id)
+        return (tier or "free").lower()
     except Exception:
         return "free"
 
 def _tier_perms(tier: str) -> dict:
-    """صلاحيات الباقة"""
+    """صلاحيات الباقة — يشمل admin كـ diamond"""
+    # admin = نفس صلاحيات diamond
+    if tier == "admin":
+        tier = "diamond"
     return TIER_PERMISSIONS.get(tier, {})
 
 def _is_tokenized(symbol: str) -> bool:
