@@ -467,6 +467,14 @@ def build_app() -> Application:
     plan_handlers.register(app)
     trading_handlers.register(app)
 
+    # ── /trade Spot Bot ──
+    try:
+        from handlers.trade import register as _trade_register
+        _trade_register(app)
+        logger.info("✅ /trade Spot Bot مُسجَّل")
+    except Exception as _te:
+        logger.warning(f"/trade: {_te}")
+
     # ── /review للمدير — المراجعة الأسبوعية الشاملة ──
     try:
         from core.weekly_review import cmd_review as _cmd_review
