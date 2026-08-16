@@ -85,6 +85,51 @@ def _get_message_p(update, context=None):
 
 
 
+async def callback_plan_exec(update, context):
+    """
+    plan_execute_v1: معالجة زر تنفيذ صفقة من الخطة الأسبوعية/الشهرية
+    صيغة: plan_exec:{symbol}:{price}
+    """
+    from telegram.ext import ContextTypes as _CT
+    query   = update.callback_query
+    await query.answer()
+    data    = query.data  # plan_exec:BTC:63000.0000
+    parts   = data.split(":")
+    if len(parts) < 3:
+        await query.edit_message_text("❌ بيانات غير صالحة"); return
+
+    symbol  = parts[1].upper()
+    try:
+        price = float(parts[2])
+    except ValueError:
+        await query.edit_message_text("❌ سعر غير صالح"); return
+
+    user_id = update.effective_user.id
+    engine  = context.bot_data.get("raed_engine")
+    if not engine:
+        await query.edit_message_text("⚠️ النظام لم يُهيَّأ بعد"); return
+
+    # تحويل لـ /execute عبر context
+    await query.edit_message_text(
+        f"⏳ جاري تقييم {symbol} للتنفيذ من الخطة..."
+    )
+
+    # استدعاء cmd_execute مع البيانات
+    context.args = [symbol, "buy", "0"]  # 0 = حجم من الاستراتيجية
+    context.user_data["_exec_reply_fn"] = query.message.reply_text
+    context.user_data["_exec_edit_fn"]  = query.message.edit_text
+    context.user_data["_plan_price"]    = price  # سعر مرجعي من الخطة
+
+    try:
+        from handlers.trading import cmd_execute as _cmd_ex
+        await _cmd_ex(update, context)
+    except Exception as _ex_err:
+        logger.error(f"callback_plan_exec: {_ex_err}")
+        await query.message.reply_text(
+            f"❌ خطأ في تنفيذ {symbol}: {str(_ex_err)[:100]}"
+        )
+
+
 async def callback_planmkt(update, context):
     """تطوير #223: معالجة اختيار Spot/Futures للخطة الأسبوعية/الشهرية.
     صيغة: planmkt_{weekly|month}_{spot|futures}_{args}"""
@@ -886,11 +931,26 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "⚠️ خطة استرشادية — القرار النهائي للمستخدم",
             "🤖 رائد التداول الذكي",
         ]
-        # T3: أزرار تفاعل
-        _fb_kb = InlineKeyboardMarkup([[
+        # plan_execute_v1: أزرار تنفيذ لكل رمز في الخطة
+        _exec_buttons = []
+        for _sym_pw in symbols[:4]:  # أقصى 4 رموز
+            try:
+                _px_pw = await engine.data_layer.get_price(_sym_pw)
+                _p_pw  = float((_px_pw or {}).get("price", 0))
+                if _p_pw > 0:
+                    _exec_buttons.append([
+                        InlineKeyboardButton(
+                            f"⚡ تنفيذ {_sym_pw}",
+                            callback_data=f"plan_exec:{_sym_pw}:{_p_pw:.4f}"
+                        )
+                    ])
+            except Exception:
+                pass
+        _exec_buttons.append([
             InlineKeyboardButton("✅ أتفق مع الخطة", callback_data="plan_agree"),
             InlineKeyboardButton("💬 لدي ملاحظة",   callback_data="plan_comment"),
-        ]])
+        ])
+        _fb_kb = InlineKeyboardMarkup(_exec_buttons)
         await msg.edit_text(
             _clean("\n".join(lines)),
             parse_mode=ParseMode.MARKDOWN,
@@ -1884,10 +1944,13 @@ def register(app):
     app.add_handler(CommandHandler("approve",    cmd_approve))
     app.add_handler(CommandHandler("reject",     cmd_reject))
     # Callbacks للخطط
-    app.add_handler(_CQH(cb_plan_agree,   pattern=r"^plan_agree$"))
-    app.add_handler(_CQH(cb_plan_comment, pattern=r"^plan_comment$"))
-    app.add_handler(_CQH(cb_plan_general, pattern=r"^plan_(w|m)_general$"))
-    app.add_handler(_CQH(cb_plan_custom,  pattern=r"^plan_(w|m)_custom$"))
+    app.add_handler(_CQH(cb_plan_agree,       pattern=r"^plan_agree$"))
+    app.add_handler(_CQH(cb_plan_comment,     pattern=r"^plan_comment$"))
+    app.add_handler(_CQH(cb_plan_general,     pattern=r"^plan_(w|m)_general$"))
+    app.add_handler(_CQH(cb_plan_custom,      pattern=r"^plan_(w|m)_custom$"))
+    # plan_execute_v1: تنفيذ صفقة من الخطة
+    app.add_handler(_CQH(callback_plan_exec,  pattern=r"^plan_exec:"))
+    app.add_handler(_CQH(callback_planmkt,    pattern=r"^planmkt_"))
     # إصلاح #780: MessageHandler لإدخال العملات
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND,
