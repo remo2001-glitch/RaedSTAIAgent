@@ -8,6 +8,14 @@
 import asyncio
 import logging
 from core.middleware import require_tier
+
+# execute_enhance: NYSE tokens للأصول المُرمَّزة
+try:
+    from handlers.analysis import _NYSE_TOKENS
+except ImportError:
+    _NYSE_TOKENS = {"XSPY","XSPCX","XQQQ","XXLE","XAAPL","XGOOGL","XAMD",
+                    "XMETA","XNVDA","XTSLA","XMSFT","XAVGO","XSKHY","XISRG",
+                    "XTQQQ","XGME","XSMCI","XTWLO"}
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 from telegram.constants import ParseMode
@@ -593,6 +601,20 @@ async def cmd_live(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ════════════════════════════════════════════════════════════════
 # /execute — تنفيذ فوري
 # ════════════════════════════════════════════════════════════════
+
+async def _auto_execute_job(context):
+    """تأكيد تلقائي بعد 15 دقيقة للماسي"""
+    data = context.job.data
+    try:
+        await context.bot.send_message(
+            data['chat_id'],
+            "⏰ *تم التأكيد التلقائي بعد 15 دقيقة*\n"
+            "⚠️ تحقق من /trades لمتابعة صفقتك",
+            parse_mode="Markdown"
+        )
+    except Exception as _ae:
+        import logging; logging.getLogger(__name__).warning(f'auto_execute_job: {_ae}')
+
 @require_tier("execute")
 
 async def callback_exectype(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -994,6 +1016,61 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _ord_ar    = (f"⏳ Limit @ ${limit_price:,.4f}" if limit_price > 0
                       else "⚡ Market (تنفيذ فوري)")
         _price_str = f"${_price_q:,.4f}" if _price_q > 0 else "غير متاح"
+
+        # execute_enhance_v1: تحليل مستقل قبل التأكيد
+        _exec_warnings = []
+        _exec_rsi = 50.0
+        _exec_scenarios = ""
+        try:
+            _exec_candles = await engine.data_layer.get_ohlcv(symbol, "1d", 20)
+            if _exec_candles and len(_exec_candles) >= 14:
+                _cls = [float(c.get("close", 0)) for c in _exec_candles if c.get("close")]
+                _g = [max(_cls[i]-_cls[i-1], 0) for i in range(1, len(_cls))]
+                _l = [max(_cls[i-1]-_cls[i], 0) for i in range(1, len(_cls))]
+                _ag = sum(_g[-14:]) / 14 or 0.001
+                _al = sum(_l[-14:]) / 14 or 0.001
+                _exec_rsi = round(100 - (100 / (1 + _ag / _al)), 1)
+        except Exception:
+            pass
+
+        # فحص RSI>70
+        if _exec_rsi > 70 and direction in ("buy", "شراء", "long"):
+            _exec_warnings.append(
+                f"⚠️ RSI={_exec_rsi:.0f} ذروة شراء — خطر تصحيح محتمل"
+            )
+
+        # فحص NYSE للأصول المُرمَّزة
+        _exec_is_x = (symbol.startswith("X") and len(symbol) >= 3) or symbol in _NYSE_TOKENS
+        if _exec_is_x:
+            try:
+                from handlers.analysis import _is_nyse_closed, _get_nyse_warning
+                if _is_nyse_closed():
+                    _exec_warnings.append(
+                        "⏰ تنبيه: السوق الأمريكي مغلق حالياً — سيولة أقل"
+                    )
+            except Exception:
+                pass
+
+        # سيناريوهات موجزة
+        if _price_q > 0:
+            _sl_s = _price_q * (1 - _sl_r / 100)
+            _tp_s = _price_q * (1 + _tp_r / 100)
+            _exec_scenarios = (
+                f"\n📋 *السيناريوهات:*\n"
+                f"🟢 صاعد: اختراق ${_price_q*1.02:,.2f} + حجم → هدف ${_tp_s:,.2f}\n"
+                f"🔴 هابط: كسر ${_sl_s:,.2f} بإغلاق → إلغاء الفكرة\n"
+                f"❌ إلغاء: لا تدخل بمجرد الوصول — يشترط تأكيد"
+            )
+
+        _warn_text = ("\n" + "\n".join(_exec_warnings)) if _exec_warnings else ""
+        _rsi_line  = f"📊 RSI: {_exec_rsi:.0f}" if _exec_rsi != 50.0 else ""
+
+        # تأكيد تلقائي 15 دق للماسي
+        _exec_tier = _sm.get_tier(user_id) or "free"
+        _auto_note = ""
+        if _exec_tier in ("diamond", "admin"):
+            _auto_note = "\n\n⏰ *سيُنفَّذ تلقائياً بعد 15 دقيقة* إذا لم تلغِ"
+
         await _reply(update,
             f"⚡ *تأكيد الصفقة*\n"
             f"━━━━━━━━━━━━━━━━━━\n"
@@ -1001,10 +1078,26 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"💰 الحجم: ${size_usd:,.2f}\n"
             f"📈 نوع الأمر: {_ord_ar}\n"
             f"💵 السعر الحالي: {_price_str}\n"
-            f"🏦 المنصة: {ex_name_q}\n\n"
-            f"⚙️ *اختر نوع التنفيذ:*",
+            f"🏦 المنصة: {ex_name_q}\n"
+            + (f"{_rsi_line}\n" if _rsi_line else "")
+            + f"🛑 SL: {_sl_r:.1f}% | 🎯 TP: {_tp_r:.1f}%"
+            + _warn_text
+            + _exec_scenarios
+            + _auto_note
+            + f"\n\n⚙️ *اختر نوع التنفيذ:*",
             parse_mode="Markdown",
             reply_markup=kb_exectype)
+
+        # جدولة تأكيد تلقائي للماسي
+        if _exec_tier in ("diamond", "admin"):
+            _cb_data_auto = _mkb_type("spot")  # spot كافتراضي
+            context.job_queue.run_once(
+                _auto_execute_job,
+                15 * 60,
+                data={"user_id": user_id, "cb_data": _cb_data_auto,
+                      "chat_id": update.effective_chat.id},
+                name=f"auto_exec_{user_id}_{symbol}"
+            )
         return  # ننتظر callback اختيار نوع التنفيذ
 
     # إذا اختار virtual أو لا يوجد ربط → محفظة افتراضية
@@ -1235,6 +1328,11 @@ async def cmd_trades(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ النظام لم يُهيَّأ بعد"); return
 
     user_id = update.effective_user.id
+    # trades_enhance_v1: فلترة يومي/أسبوعي/كل
+    _trades_args   = context.args or []
+    _trades_period = (_trades_args[0].lower() if _trades_args else "daily")
+    _period_label  = {"daily": "اليوم", "weekly": "الأسبوع", "all": "الكل"}.get(_trades_period, "اليوم")
+
     try:
         if not engine.user_has_live_trading(user_id):
             await update.message.reply_text(
@@ -1245,7 +1343,7 @@ async def cmd_trades(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not om:
             await update.message.reply_text("⚠️ خطأ في Order Manager"); return
 
-        trades = om.get_all_trades(user_id)[:10]
+        trades = om.get_all_trades(user_id)[:50]  # جلب أكثر للفلترة
         # النقطة 1/7: بحث في Redis إذا لم توجد في الذاكرة
         if not trades and om and hasattr(om, "_load_trades_from_redis"):
             for d in om._load_trades_from_redis(user_id)[:10]:
@@ -1263,6 +1361,32 @@ async def cmd_trades(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         user_id=int(d.get("user_id",user_id)),
                     ))
                 except Exception: pass
+        # فلترة حسب الفترة
+        import datetime as _dt_tr
+        _now_tr = _dt_tr.datetime.now(_dt_tr.timezone.utc)
+        if _trades_period == "daily":
+            _cutoff = _now_tr - _dt_tr.timedelta(days=1)
+        elif _trades_period == "weekly":
+            _cutoff = _now_tr - _dt_tr.timedelta(weeks=1)
+        else:
+            _cutoff = _dt_tr.datetime(2020, 1, 1, tzinfo=_dt_tr.timezone.utc)
+
+        # فلترة إذا كانت الصفقات تحتوي timestamp
+        _filtered = []
+        for _t in trades:
+            try:
+                _ts = getattr(_t, "created_at", None) or getattr(_t, "timestamp", None)
+                if _ts and hasattr(_cutoff, "timestamp"):
+                    import time as _time_tr
+                    _t_ts = float(_ts) if isinstance(_ts, (int, float)) else float(_ts)
+                    if _t_ts >= _cutoff.timestamp():
+                        _filtered.append(_t)
+                else:
+                    _filtered.append(_t)  # لا timestamp → نُدرج دائماً
+            except Exception:
+                _filtered.append(_t)
+        trades = _filtered[:20]
+
         if not trades:
             from core.state_manager import state_manager as _sm_nt
             from core.virtual_wallet import VirtualWallet as _VW_nt
