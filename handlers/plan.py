@@ -42,6 +42,19 @@ def _fmt_price(price: float) -> str:
     else:                return f"${price:.10f}"
 
 logger = logging.getLogger(__name__)
+# plan_limits: حد العملات حسب الباقة
+_PLAN_ASSET_LIMITS = {
+    "diamond": {"crypto": 10, "tokenized": 10},
+    "admin":   {"crypto": 10, "tokenized": 10},
+    "gold":    {"crypto": 7,  "tokenized": 5},
+    "silver":  {"crypto": 5,  "tokenized": 0},
+    "free":    {"crypto": 3,  "tokenized": 0},
+}
+
+def _get_plan_limit(tier: str, asset_type: str = "crypto") -> int:
+    """حد العملات حسب الباقة ونوع الأصل"""
+    return _PLAN_ASSET_LIMITS.get(tier, _PLAN_ASSET_LIMITS["free"]).get(asset_type, 3)
+
 
 # auditing_agent: طبقة التدقيق الإلزامية
 try:
@@ -128,6 +141,37 @@ async def callback_plan_exec(update, context):
         await query.message.reply_text(
             f"❌ خطأ في تنفيذ {symbol}: {str(_ex_err)[:100]}"
         )
+
+
+async def callback_plan_asset(update, context):
+    """معالجة اختيار نوع الأصول (crypto/tokenized/both) للخطة الأسبوعية/الشهرية."""
+    query   = update.callback_query
+    await query.answer()
+    data    = query.data  # plan_w_asset:crypto أو plan_m_asset:both
+    parts   = data.split(":")
+    if len(parts) < 2:
+        await query.edit_message_text("❌ بيانات غير صالحة"); return
+
+    plan_type  = "week" if "plan_w_" in data else "month"
+    asset_type = parts[1]  # crypto | tokenized | both
+
+    # حفظ نوع الأصول في user_data
+    context.user_data["_plan_asset_type"] = asset_type
+
+    # الانتقال لاختيار عام/محدد
+    label_w = "الأسبوعية" if plan_type == "week" else "الشهرية"
+    prefix  = f"plan_{plan_type[0]}"  # plan_w أو plan_m
+    asset_label = {"crypto": "💰 عملات رقمية", "tokenized": "📈 أصول مُرمَّزة", "both": "🔀 الاثنان"}.get(asset_type, "")
+
+    buttons = InlineKeyboardMarkup([[
+        InlineKeyboardButton("📊 عام (حسب باقتي)", callback_data=f"{prefix}_general"),
+        InlineKeyboardButton("🎯 عملات محددة",     callback_data=f"{prefix}_custom"),
+    ]])
+    await query.edit_message_text(
+        f"📅 *الخطة {label_w}* — {asset_label}\n\n"
+        "هل تريد خطة عامة لأهم الأصول،\n"
+        "أم تحليل عملات محددة؟",
+        parse_mode="Markdown", reply_markup=buttons)
 
 
 async def callback_planmkt(update, context):
@@ -933,7 +977,7 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         # plan_execute_v1: أزرار تنفيذ لكل رمز في الخطة
         _exec_buttons = []
-        for _sym_pw in symbols[:4]:  # أقصى 4 رموز
+        for _sym_pw in symbols[:10]:  # أقصى 10 رموز حسب الباقة
             try:
                 _px_pw = await engine.data_layer.get_price(_sym_pw)
                 _p_pw  = float((_px_pw or {}).get("price", 0))
@@ -992,31 +1036,44 @@ async def _run_planmonth(update, context, msg=None):
 
 @require_tier("planweek")
 async def cmd_planweek_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """T3: نقطة دخول /planweek — يسأل عام أم محدد."""
-    buttons = InlineKeyboardMarkup([[
-        InlineKeyboardButton("📊 عام (حسب باقتي)", callback_data="plan_w_general"),
-        InlineKeyboardButton("🎯 عملات محددة",     callback_data="plan_w_custom"),
-    ]])
+    """نقطة دخول /planweek — يسأل نوع الأصول أولاً ثم عام/محدد."""
+    _uid_e  = update.effective_user.id if update.effective_user else 0
+    _tier_e = _sm.get_tier(_uid_e) or "silver"
+    _lim_c  = _get_plan_limit(_tier_e, "crypto")
+    _lim_t  = _get_plan_limit(_tier_e, "tokenized")
+    _info   = (
+        f"ℹ️ حدود باقتك ({_tier_e}):\n"
+        f"• عملات رقمية: حتى {_lim_c}\n"
+        + (f"• أصول مُرمَّزة: حتى {_lim_t}" if _lim_t > 0 else "• أصول مُرمَّزة: غير متاحة")
+    )
+    _btns = [[InlineKeyboardButton("💰 عملات رقمية", callback_data="plan_w_asset:crypto")]]
+    if _lim_t > 0:
+        _btns[0].append(InlineKeyboardButton("📈 أصول مُرمَّزة", callback_data="plan_w_asset:tokenized"))
+        _btns.append([InlineKeyboardButton("🔀 الاثنان معاً", callback_data="plan_w_asset:both")])
     await _get_message_p(update, context).reply_text(
-        "📅 *الخطة الأسبوعية*\n\n"
-        "هل تريد خطة عامة لأهم الأصول حسب باقتك،\n"
-        "أم تحليل عملات محددة؟\n\n"
-        "_للعملات المحددة: أرسل اسماءها بعد الاختيار_",
-        parse_mode="Markdown", reply_markup=buttons)
+        f"📅 *الخطة الأسبوعية*\n\n{_info}\n\nما نوع الأصول التي تريد تحليلها؟",
+        parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(_btns))
 
 
 @require_tier("planmonth")
 async def cmd_planmonth_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """T3: نقطة دخول /planmonth — يسأل عام أم محدد."""
-    buttons = InlineKeyboardMarkup([[
-        InlineKeyboardButton("📊 عام (حسب باقتي)", callback_data="plan_m_general"),
-        InlineKeyboardButton("🎯 عملات محددة",     callback_data="plan_m_custom"),
-    ]])
+    """نقطة دخول /planmonth — يسأل نوع الأصول أولاً ثم عام/محدد."""
+    _uid_e  = update.effective_user.id if update.effective_user else 0
+    _tier_e = _sm.get_tier(_uid_e) or "silver"
+    _lim_c  = _get_plan_limit(_tier_e, "crypto")
+    _lim_t  = _get_plan_limit(_tier_e, "tokenized")
+    _info   = (
+        f"ℹ️ حدود باقتك ({_tier_e}):\n"
+        f"• عملات رقمية: حتى {_lim_c}\n"
+        + (f"• أصول مُرمَّزة: حتى {_lim_t}" if _lim_t > 0 else "• أصول مُرمَّزة: غير متاحة")
+    )
+    _btns = [[InlineKeyboardButton("💰 عملات رقمية", callback_data="plan_m_asset:crypto")]]
+    if _lim_t > 0:
+        _btns[0].append(InlineKeyboardButton("📈 أصول مُرمَّزة", callback_data="plan_m_asset:tokenized"))
+        _btns.append([InlineKeyboardButton("🔀 الاثنان معاً", callback_data="plan_m_asset:both")])
     await _get_message_p(update, context).reply_text(
-        "📅 *الخطة الشهرية*\n\n"
-        "هل تريد خطة عامة لأهم الأصول حسب باقتك،\n"
-        "أم تحليل عملات محددة؟",
-        parse_mode="Markdown", reply_markup=buttons)
+        f"📅 *الخطة الشهرية*\n\n{_info}\n\nما نوع الأصول التي تريد تحليلها؟",
+        parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(_btns))
 
 
 async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1046,15 +1103,19 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _use_futures_pw = (_mkttype_pw == "futures")
 
     args    = context.args or []
+    # tier_pw_fix: تعريف _tier_pw مسبقاً لتجنب UnboundLocalError
+    _tier_pw = _sm.get_tier(update.effective_user.id) or "silver"
     # إصلاح #971: تعريف مسبق لجميع المتغيرات
     entry_syms = []
     candidates = []
     allocation = None
-    _pair_resolutions = {}  # تطوير #188 (Phase 2): symbol -> PairResolution
+    _pair_resolutions = {}
     if args:
-        _raw_syms2 = [a.upper() for a in args[:7]]
+        # plan_limits: حد حسب الباقة
+        _limit_w = _get_plan_limit(_tier_pw, "crypto")
+        _raw_syms2 = [a.upper() for a in args[:_limit_w]]
         # تطوير #188 (Phase 2): دعم أزواج BTC/ETH (ماسي+ فقط)
-        _tier_pw   = _sm.get_tier(update.effective_user.id)
+        _tier_pw   = _sm.get_tier(update.effective_user.id) or "silver"
         symbols, _resols_pw, _display_syms_pw = await _resolve_custom_symbols(
             _raw_syms2, _tier_pw, engine.data_layer)
         _pair_resolutions = dict(zip(symbols, _resols_pw))
@@ -1951,6 +2012,8 @@ def register(app):
     # plan_execute_v1: تنفيذ صفقة من الخطة
     app.add_handler(_CQH(callback_plan_exec,  pattern=r"^plan_exec:"))
     app.add_handler(_CQH(callback_planmkt,    pattern=r"^planmkt_"))
+    # plan_asset: اختيار نوع الأصول
+    app.add_handler(_CQH(callback_plan_asset, pattern=r"^plan_[wm]_asset:"))
     # إصلاح #780: MessageHandler لإدخال العملات
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND,

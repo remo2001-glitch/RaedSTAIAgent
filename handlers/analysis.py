@@ -4106,25 +4106,18 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id_q = update.effective_user.id if update.effective_user else 0
     tier_q    = _sm.get_tier(user_id_q)
 
-    # XSKHY_quicksignal_fix v2: early return للسوق المغلق قبل أي استدعاء
+    # XSKHY_fix v3: تحليل 24/7 — التحذير فقط بدون رفض التحليل
+    _kse_exec_warn = ""
     if raw_arg.upper() in {"XSKHY", "SKHY"}:
         try:
             _sm_kse = context.bot_data.get("subscription_manager")
-            _tz_kse = int((_sm_kse.get_user_data(user_id_q) or {}).get("tz_offset", 3)) if _sm_kse else 3
+            _tz_kse = int((_sm_kse.get_user_data(user_id_q) or {}).get("tz_offset", 3) if _sm_kse else 3)
         except Exception:
             _tz_kse = 3
-        _kse_warn = _get_market_hours_warning(raw_arg, _tz_kse)
-        _msg_kse = await _get_message(update, context).reply_text("⏳")
-        if _kse_warn:
-            await _msg_kse.edit_text(
-                _kse_warn, parse_mode=ParseMode.MARKDOWN)
-        else:
-            await _msg_kse.edit_text(
-                f"⚠️ *{raw_arg}* — بيانات السوق غير متوفرة حالياً\n"
-                f"• حاول لاحقاً",
-                parse_mode=ParseMode.MARKDOWN)
-        return
-
+        _kse_warn_txt = _get_market_hours_warning(raw_arg, _tz_kse)
+        if _kse_warn_txt:
+            # لا نوقف التحليل — نحفظ التحذير لإضافته عند التنفيذ
+            _kse_exec_warn = _kse_warn_txt
     # تطوير #221: سؤال نوع السوق (Spot/Futures) إن لم يُحدَّد مسبقاً
     # إصلاح #237-A: الأصول المُرمَّزة (أسهم/معادن/سلع) → Futures تلقائياً بدون سؤال
     _mkttype_qs = context.user_data.pop("_mkttype", None)
