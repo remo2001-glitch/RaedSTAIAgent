@@ -979,15 +979,20 @@ def _build_professional_block(
     _sl_base = abs(price - (pro_sl if pro_sl > 0 else price * (1 - _eff_atr * 1.2))) / max(price, 1e-9) * 100
 
     # ── مصفوفة القرار ──
-    # signal_logic_fix: RSI>70 → [WAIT] دائماً بغض النظر عن regime أو conf
+    # signal_logic_fix: RSI>=70 → [WAIT] دائماً (70 بالضبط = ذروة شراء)
     _is_overbought_wait = (
-        rsi > 70
+        rsi >= 70
         or (hasattr(regime, 'action') and regime.action == "overbought_wait")
     )
 
     if _is_overbought_wait:
         _decision_label = "[WAIT] — مراقبة، لا دخول حتى تصحيح RSI"
         _pos_size_rule  = "0% — RSI في ذروة شراء، انتظر تصحيح تحت 60"
+        # إجراء_fix: تجاوز نص "تقليل الحجم 50%" بنص موحَّد مع القرار
+        try:
+            object.__setattr__(regime, 'action', 'overbought_wait')
+        except Exception:
+            pass
     elif _rsi_blocked:
         _decision_label = f"[WAIT] — RSI خارج نطاق الباقة ({rsi:.0f})"
         _pos_size_rule  = "0% — RSI يجب أن يكون بين {_t_rsi_min}% و{_t_rsi_max}%"
