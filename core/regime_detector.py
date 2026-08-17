@@ -425,7 +425,10 @@ class RegimeDetector:
             f"• Fear & Greed: {m.get('fear_greed',50)} | هيمنة BTC: {m.get('btc_dominance',50):.0f}%\n\n"
             f"🎯 *الاستراتيجية الموصى بها*\n"
             f"• {strategies_txt}\n"
-            f"• الإجراء: {_action_ar(result.action)}{m.get('action_basis','')}"
+            # signal_logic_fix: عند RSI>=70 → نص الإجراء يُظهر ذروة الشراء لا "تقليل 50%"
+            + (f"• الإجراء: {_action_ar('overbought_wait')} (RSI={m.get('rsi',50):.0f}>70 ذروة شراء)"
+               if m.get("rsi", 50) >= 70 else
+               f"• الإجراء: {_action_ar(result.action)}{m.get('action_basis','')}")
             + _rsi_warning(m.get("rsi", 50), result.regime)
             + _adx_warning(m.get("adx", 0))
         )
