@@ -1823,7 +1823,9 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 lines.append(f"• Open Interest: {_oi_chg:+.1f}% {_oi_sig}")
             if _whale_sig:
                 _wr_txt = f" ({_whale_r:.2f})" if _whale_r > 0 else ""
-                lines.append(f"• Whale Ratio{_wr_txt}: {_whale_sig}")
+                # whale_consistency_fix: توحيد مع /signal
+                _whale_note_on = " — قد يكون تحوطاً" if "Long" in _whale_sig else ""
+                lines.append(f"• Whale Ratio{_wr_txt}: {_whale_sig}{_whale_note_on}")
 
         # تطوير جديد: مؤشرات BTC on-chain متقدمة من BGeometrics
         # (MVRV Z-Score, SOPR, Exchange Netflow, Puell Multiple)
@@ -2229,6 +2231,16 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 logger.info(f"XSKHY_fix v3: تحليل مستمر رغم إغلاق KRX")
                 # لا return هنا — يكمل التحليل
+            # XSKHY_msg_fix: رسالة واضحة للأصول الكورية بدلاً من "غير مدرج"
+            _is_kse_sym = symbol.upper() in {"XSKHY", "SKHY"}
+            if _is_kse_sym:
+                await msg.edit_text(
+                    f"🕐 *{_err_sym}* — السوق الكوري مغلق حالياً\n"
+                    f"• ساعات التداول: 00:00-06:30 UTC (09:00-15:30 KST)\n"
+                    f"• البيانات الفنية غير متاحة خارج ساعات التداول\n"
+                    f"• أعد المحاولة خلال ساعات التداول",
+                    parse_mode=ParseMode.MARKDOWN)
+                return
             await msg.edit_text(
                 (
                     f"⚠️ *{_err_sym}* غير مدرج في OKX حالياً\n"
@@ -2831,7 +2843,9 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
             deriv_lines.append(f"• Open Interest: {_oi_chg:+.1f}% {_oi_sig}")
         if _whale_sig:
             _wr_txt = f" ({_whale_r:.2f})" if _whale_r > 0 else ""
-            deriv_lines.append(f"• Whale Ratio (Long/Short){_wr_txt}: {_whale_sig}")
+            # whale_consistency_fix: توحيد التعليق مع /signal
+            _whale_note = " — قد يكون تحوطاً" if "Long" in _whale_sig else ""
+            deriv_lines.append(f"• Whale Ratio (Long/Short){_wr_txt}: {_whale_sig}{_whale_note}")
 
         if deriv_lines:
             text += "\n\n📐 *مشتقات*\n" + "\n".join(deriv_lines)
