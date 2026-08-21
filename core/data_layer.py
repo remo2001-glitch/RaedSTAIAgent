@@ -406,7 +406,8 @@ def _cg_id(symbol: str) -> str:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # CryptoQuant Integration
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-_CQ_API_KEY  = os.getenv("CRYPTOQUANT_API_KEY", "")
+import os as _os_cq  # cq_os_fix: os قد لا يكون مستورداً هنا
+_CQ_API_KEY  = _os_cq.getenv("CRYPTOQUANT_API_KEY", "")
 _CQ_BASE_URL = "https://api.cryptoquant.com/v1"
 _CQ_HEADERS  = {"Authorization": f"Bearer {_CQ_API_KEY}"} if _CQ_API_KEY else {}
 
