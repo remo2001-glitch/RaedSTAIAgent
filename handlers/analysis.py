@@ -1033,7 +1033,7 @@ def _build_professional_block(
     if _is_overbought_wait:
         _decision_label = "[WAIT] — مراقبة، لا دخول حتى تصحيح RSI"
         _pos_size_rule  = "0% — RSI في ذروة شراء، انتظر تصحيح تحت 60"
-    elif _is_low_volume_wait if "_is_low_volume_wait" in dir() else False:
+    elif locals().get("_is_low_volume_wait", False):
         # vol_wait_fix: حجم ضعيف → WAIT + 0%
         _decision_label = "[WAIT] — حجم ضعيف جداً (< 0.3x)، انتظر سيولة"
         _pos_size_rule  = "0% — حجم < 0.3x، مؤشرات غير موثوقة"
@@ -1237,14 +1237,20 @@ def _build_professional_block(
     # confidence_3d_fix: نظام الثقة 3 درجات — آمن من NameError
     try:
         _conf_trend = min(100, int((conf * 100) * 1.2)) if conf else _conf_score
-        _ema50_safe = ema50_val if "ema50_val" in dir() and ema50_val else 0
+        try:
+            _ema50_safe = float(ema50_val) if ema50_val else 0
+        except Exception:
+            _ema50_safe = 0
         _ema_dist_pct = abs(price - _ema50_safe) / max(_ema50_safe, 1) * 100 if _ema50_safe else 0
         _conf_entry = max(0, _conf_score - (
             30 if rsi >= 70 else 20 if rsi >= 60 else
             10 if _ema_dist_pct > 15 else 0
         ))
         _cvd_risk = 0
-        _vol_safe = vol_ratio if "vol_ratio" in dir() and vol_ratio else 1.0
+        try:
+            _vol_safe = float(vol_ratio) if vol_ratio else 1.0
+        except Exception:
+            _vol_safe = 1.0
         _reversal_risk = min(95, max(5,
             (80 if rsi >= 80 else 60 if rsi >= 70 else 40 if rsi >= 60 else 20) +
             (10 if _vol_safe > 3.0 else 5 if _vol_safe > 1.5 else 0) -
@@ -2549,11 +2555,9 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif "هابط" in _daily_dir and "صاعد" in _4h_dir:
             _tf_note = f"\n📊 الأطر: يومي {_daily_dir} | 4H {_4h_dir}"
 
+        # header_dedup_fix: إزالة التكرار
         parts = [
             _clean_md(engine.signal_layer.format_ar(signal)),
-            # regime وstrategy مدمجان في pro_block — نُضيف حالة السوق فقط
-            _clean_md(engine.signal_layer.format_ar(signal)),
-            # regime وstrategy مدمجان في pro_block — نُضيف حالة السوق فقط
             _clean_md(_regime_fmt + _tf_note),
         ]
         if show_risk:
