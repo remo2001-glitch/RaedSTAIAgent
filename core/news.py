@@ -17,8 +17,15 @@ logger = logging.getLogger(__name__)
 
 # ─── Groq API (مجاني — يحتاج مفتاح فقط من console.groq.com) ─────────────────
 GROQ_API_URL   = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODEL     = "llama3-70b-8192"   # نموذج Groq المتاح
-GROQ_FALLBACK  = "llama3-70b-8192"       # fallback أسرع (لم يُوقَف)
+# groq_model_fix: قائمة fallback تلقائية إذا فشل النموذج الأساسي
+# groq_model_fix: نموذج Groq المتاح
+GROQ_MODELS_LIST = [
+    "openai/gpt-oss-120b",            # الأقوى المتاح
+    "groq/compound",                   # بديل Groq
+    "qwen/qwen3.6-27b",                # بديل Alibaba
+]
+GROQ_MODEL     = GROQ_MODELS_LIST[0]
+GROQ_FALLBACK  = GROQ_MODELS_LIST[1]
 
 # مصادر RSS المجانية الموثوقة
 RSS_SOURCES = [
@@ -575,10 +582,32 @@ class NewsEngine:
     async def _call_groq(self, prompt: str, model: str,
                           json_mode: bool = True) -> Optional[Dict]:
         """
-        استدعاء Groq API.
+        استدعاء Groq API مع fallback تلقائي للنماذج.
         json_mode=False: يُعيد نصاً حراً مُغلَّفاً في {"text": "..."}
-        إصلاح #274: analyze_symbol يستخدم json_mode=False
         """
+        # groq_retry_fix: قائمة النماذج بترتيب الأولوية
+        _models_to_try = [model] + [m for m in GROQ_MODELS_LIST if m != model]
+        _last_error = None
+        for _try_model in _models_to_try:
+            try:
+                result = await self._call_groq_single(_try_model, prompt, json_mode)
+                if result:
+                    if _try_model != model:
+                        logger.info(f"Groq fallback: نجح {_try_model}")
+                    return result
+            except Exception as _e:
+                _last_error = _e
+                _e_str = str(_e)
+                if "decommissioned" in _e_str or "404" in _e_str or "400" in _e_str:
+                    logger.warning(f"Groq {_try_model} غير متاح — جرب التالي")
+                    continue
+                raise
+        logger.error(f"Groq: فشلت جميع النماذج — {_last_error}")
+        return None
+
+    async def _call_groq_single(self, model: str, prompt: str,
+                                 json_mode: bool = True) -> Optional[Dict]:
+        """استدعاء Groq API بنموذج محدد."""
         logger.info(f"Groq: استدعاء {model} | key={'✅' if self.groq_key else '❌ مفقود'}")
         try:
             import urllib.request
@@ -751,7 +780,7 @@ class NewsEngine:
 
         source = analysis.get("source", "—")
         source_label = (
-            "🤖 Groq/Llama 3.3 70B" if "llama-3.3" in source
+            "🤖 Groq/GPT-OSS 120B" if "gpt-oss" in source
             else "🤖 Groq/Llama"    if "groq" in source
             else "📊 تحليل ذاتي"   if "rule" in source
             else source
