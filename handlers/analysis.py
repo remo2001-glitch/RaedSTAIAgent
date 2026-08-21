@@ -2528,6 +2528,12 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _scorer_footer = ""
         if _SCORER_ENABLED:
             try:
+                # ema_bearish_fix: ema_bearish قد لا يكون مُعرَّفاً في cmd_signal
+                _sig_ema_bearish = False
+                try:
+                    _sig_ema_bearish = price < pro_entry * 0.98  # تقريب آمن
+                except Exception:
+                    pass
                 _si = build_signal_input(
                     symbol       = symbol,
                     price        = price,
@@ -2544,7 +2550,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     market_open  = not bool(_nyse_warn_sig),
                     rsi          = rsi,
                     has_build_error = False,
-                    trend_contradiction = ema_bearish and _mp.lower() == "markup",
+                    trend_contradiction = _sig_ema_bearish and _mp.lower() == "markup",
                     asset_class  = ("synthetic_weak" if _is_x_asset and vol_ratio < 0.5
                                    else "synthetic_ok" if _is_x_asset
                                    else "spot_liquid"),
@@ -3099,7 +3105,7 @@ async def cmd_outlook(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 import aiohttp as _aio4, json as _js4
                 _b4 = _js4.dumps({
-                    "model": "llama-3.3-70b-versatile",
+                    "model": "llama-3.1-70b-versatile",
                     "messages": [
                         {"role": "system", "content": "أجب بالعربية فقط. لا تستخدم كلمات إنجليزية."},
                         {"role": "user", "content": _prompt_out}
