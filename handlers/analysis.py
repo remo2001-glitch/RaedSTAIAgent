@@ -1245,7 +1245,11 @@ def _build_professional_block(
         10 if _ema_dist_pct > 15 else 0
     ))
     # 3. خطر التصحيح: يرتفع مع RSI مرتفع + CVD سلبي + حجم climax
-    _cvd_risk = abs(float(_onchain.get("cvd_pct", 0) or 0)) if _onchain else 0
+    _cvd_risk = 0
+    try:
+        _cvd_risk = abs(float(_onchain.get("cvd_pct", 0) or 0)) if "_onchain" in dir() and _onchain else 0
+    except Exception:
+        _cvd_risk = 0
     _reversal_risk = min(95, max(5,
         (80 if rsi >= 80 else 60 if rsi >= 70 else 40 if rsi >= 60 else 20) +
         (10 if vol_ratio > 3.0 else 5 if vol_ratio > 1.5 else 0) +
@@ -1821,15 +1825,17 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = await update.message.reply_text("🔗 جاري جلب بيانات On-Chain...")
     try:
-        data, fear, funding, oi, whale, btc_adv = await asyncio.gather(
+        data, fear, funding, oi, whale, btc_adv, cq_data = await asyncio.gather(
             engine.data_layer.get_onchain(),
             engine.data_layer.get_fear_greed(),
             engine.data_layer.get_funding_rate("BTC"),
             engine.data_layer.get_open_interest("BTC"),
             engine.data_layer.get_whale_ratio("BTC"),
             engine.data_layer.get_btc_onchain_advanced(),
+            engine.data_layer.get_cq_onchain("BTC"),  # CryptoQuant
             return_exceptions=True
         )
+        cq_data = cq_data if isinstance(cq_data, dict) else {"available": False}
         btc_adv = btc_adv if isinstance(btc_adv, dict) else {"available": False}
         funding = funding if isinstance(funding, dict) else {}
         oi      = oi      if isinstance(oi,      dict) else {}
@@ -1911,6 +1917,32 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # تطوير جديد: مؤشرات BTC on-chain متقدمة من BGeometrics
         # (MVRV Z-Score, SOPR, Exchange Netflow, Puell Multiple)
+        # CryptoQuant data display
+        if cq_data.get("available"):
+            lines += ["", "🔗 *مؤشرات CryptoQuant*"]
+            cq_mvrv = cq_data.get("mvrv", 0)
+            cq_sopr = cq_data.get("sopr", 0)
+            if cq_mvrv:
+                _mvrv_lbl = ("⚠️ مرتفع جداً" if cq_mvrv > 3.5
+                             else "🟡 مرتفع" if cq_mvrv > 2.0
+                             else "🟢 منخفض (فرصة)" if cq_mvrv < 1.0
+                             else "⚪ طبيعي")
+                lines.append(f"• MVRV Ratio: {cq_mvrv:.2f} — {_mvrv_lbl}")
+            if cq_sopr:
+                _sopr_lbl = ("📈 أرباح تُحقَّق" if cq_sopr > 1.05
+                             else "📉 دعم محتمل" if cq_sopr < 0.97
+                             else "⚪ تعادل")
+                lines.append(f"• SOPR: {cq_sopr:.3f} — {_sopr_lbl}")
+            if cq_data.get("exchange_flow_signal"):
+                lines.append(f"• Exchange Flow: {cq_data['exchange_flow_signal']}")
+            if cq_data.get("whale_tx_count", 0) > 0:
+                _wt = cq_data["whale_tx_count"]
+                lines.append(f"• معاملات كبيرة (Whale): {_wt}{' 🐋 نشاط مرتفع' if _wt > 200 else ''}")
+            if cq_data.get("nvt", 0):
+                lines.append(f"• NVT Ratio: {cq_data['nvt']:.1f}")
+            if cq_data.get("miner_outflow", 0):
+                lines.append(f"• Miner Outflow: {cq_data['miner_outflow']:,.0f} BTC")
+
         if btc_adv.get("available"):
             lines += ["", "📊 *مؤشرات BTC المتقدمة (BGeometrics)*"]
             if "mvrv_zscore" in btc_adv:
@@ -2505,7 +2537,11 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _regime_fmt
             )
         # multi_tf_fix: إضافة تصنيف متعدد الأطر
-        _4h_dir = "🟢 صاعد" if _sig_4h and len(_sig_4h) >= 5 and float(_sig_4h[-1].get("close",0)) > float(_sig_4h[0].get("close",0)) else "🔴 هابط"
+        # sig_4h_fix: _sig_4h قد لا يكون مُعرَّفاً في جميع المسارات
+        try:
+            _4h_dir = "🟢 صاعد" if _sig_4h and len(_sig_4h) >= 5 and float(_sig_4h[-1].get("close",0)) > float(_sig_4h[0].get("close",0)) else "🔴 هابط"
+        except Exception:
+            _4h_dir = "🟡 محايد"
         _daily_dir = ("🟢 صاعد" if regime.description_ar and "صاعد" in regime.description_ar
                       else "🔴 هابط" if regime.description_ar and "هابط" in regime.description_ar
                       else "🟡 محايد")
@@ -3169,7 +3205,7 @@ async def cmd_outlook(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 import aiohttp as _aio4, json as _js4
                 _b4 = _js4.dumps({
-                    "model": "llama-3.1-70b-versatile",
+                    "model": "llama3-70b-8192",
                     "messages": [
                         {"role": "system", "content": "أجب بالعربية فقط. لا تستخدم كلمات إنجليزية."},
                         {"role": "user", "content": _prompt_out}
