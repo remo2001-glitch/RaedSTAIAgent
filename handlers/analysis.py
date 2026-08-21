@@ -82,6 +82,14 @@ _AMBIGUOUS_SYMBOLS = {
 
 logger = logging.getLogger(__name__)
 
+# signal_scorer: نظام تقييم جودة الإشارات
+try:
+    from core.signal_scorer import evaluate_signal, build_signal_input, SignalInput
+    _SCORER_ENABLED = True
+except ImportError:
+    _SCORER_ENABLED = False
+    logger.warning("signal_scorer غير متاح")
+
 # auditing_agent: طبقة التدقيق الإلزامية
 try:
     from core.auditing_agent import audit_content, audit_financial_content, audit_outlook_content
@@ -2515,7 +2523,40 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # FA: إضافة BTC correlation إذا وُجد
         if _btc_corr_txt:
             parts.append(_clean_md(_btc_corr_txt.strip()))
-        full_text = "\n\n".join(parts) + warning
+        full_text = _scorer_header + "\n\n".join(parts) + warning + _scorer_footer
+        # signal_scorer: تقييم جودة الإشارة
+        _scorer_header = ""
+        _scorer_footer = ""
+        if _SCORER_ENABLED:
+            try:
+                _si = build_signal_input(
+                    symbol       = symbol,
+                    price        = price,
+                    pro_sl       = pro_sl,
+                    pro_tp       = pro_tp1 if hasattr(pro_tp1, '__float__') else pro_tp,
+                    pro_entry    = pro_entry,
+                    sl_pct       = sl_pct,
+                    tp_pct       = tp_pct,
+                    atr_pct      = atr_pct,
+                    vol_ratio    = vol_ratio,
+                    confidence   = _conf_score / 100,
+                    confirmations= _flags_found,
+                    is_synthetic = _is_x_asset,
+                    market_open  = not bool(_nyse_warn_sig),
+                    rsi          = rsi,
+                    has_build_error = False,
+                    trend_contradiction = ema_bearish and _mp.lower() == "markup",
+                    asset_class  = ("synthetic_weak" if _is_x_asset and vol_ratio < 0.5
+                                   else "synthetic_ok" if _is_x_asset
+                                   else "spot_liquid"),
+                    has_tp       = pro_tp > 0,
+                )
+                _score_result = evaluate_signal(_si)
+                _scorer_header = f"\n{_score_result['header']}\n"
+                _scorer_footer = f"\n\n{_score_result['footer']}"
+            except Exception as _sc_e:
+                logger.debug(f"signal_scorer: {_sc_e}")
+
         # auditing_agent: تدقيق /signal قبل الإرسال
         _sig_approved, full_text = audit_financial_content(full_text, source="signal")
         if not _sig_approved:
@@ -3753,6 +3794,35 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
         parts += ["", "⚠️ هذا التحليل استرشادي — القرار للمستخدم"]
         full = _clean_md("\n".join(parts))
+
+        # signal_scorer: تقييم جودة التحليل
+        if _SCORER_ENABLED:
+            try:
+                _is_x_an = symbol.upper().startswith("X") and len(symbol) > 2
+                _has_err_an = "NameError" in full or "تعذّر بناء التحليل" in full
+                _si_an = build_signal_input(
+                    symbol=symbol, price=price,
+                    pro_sl=locals().get("pro_sl",0),
+                    pro_tp=locals().get("pro_tp",0),
+                    pro_entry=locals().get("pro_entry",price),
+                    sl_pct=locals().get("sl_pct",0),
+                    tp_pct=locals().get("tp_pct",0),
+                    atr_pct=locals().get("_atr_an",2.0),
+                    vol_ratio=locals().get("_vol_ratio_an",1.0),
+                    confidence=locals().get("_conf_an",0.4),
+                    confirmations=locals().get("_flags_found_an",0),
+                    is_synthetic=_is_x_an,
+                    market_open=not bool(locals().get("_nyse_warn_an","")),
+                    rsi=locals().get("rsi",50),
+                    has_build_error=_has_err_an,
+                    asset_class="synthetic_weak" if _is_x_an else "spot_liquid",
+                    has_tp=True,
+                )
+                _sc_an = evaluate_signal(_si_an)
+                full = _sc_an["header"] + "\n\n" + full + "\n\n" + _sc_an["footer"]
+            except Exception as _sc_ae:
+                logger.debug(f"signal_scorer /analyze: {_sc_ae}")
+
         # auditing_agent: تدقيق /analyze قبل الإرسال
         _an_approved, full = audit_financial_content(full, source="analyze")
         if not _an_approved:
@@ -4102,6 +4172,53 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # chart_pricenow_hide: إخفاء PRICE_NOW marker من النص المعروض للمستخدم
         import re as _re_pnh
         _analysis_clean = _re_pnh.sub(r"PRICE_NOW:[\d.]+\n?", "", analysis).strip()
+
+        # chart_rr_fix: حساب R/R الفعلي من التحليل وإضافة تحذير
+        _chart_rr_notes = []
+        try:
+            _nums = {}
+            for _key, _pat in [
+                ("entry",  r"(?:الدخول|نقطة الدخول)[^\d]*([\d,]+\.?\d*)"),
+                ("sl",     r"(?:وقف الخسارة|stop.loss)[^\d]*([\d,]+\.?\d*)"),
+                ("tp1",    r"(?:هدف.*?الأول|TP1)[^\d]*([\d,]+\.?\d*)"),
+                ("tp2",    r"(?:هدف.*?الثاني|TP2)[^\d]*([\d,]+\.?\d*)"),
+            ]:
+                _m = _re_pnh.search(_pat, _analysis_clean, _re_pnh.IGNORECASE)
+                if _m:
+                    _nums[_key] = float(_m.group(1).replace(",",""))
+            if all(k in _nums for k in ["entry","sl","tp1"]):
+                _risk = abs(_nums["entry"] - _nums["sl"])
+                _rew1 = abs(_nums["tp1"] - _nums["entry"])
+                if _risk > 0:
+                    _rr1 = _rew1 / _risk
+                    if _rr1 < 1.0:
+                        _chart_rr_notes.append(
+                            f"⚠️ R/R الفعلي = {_rr1:.2f}:1 (TP1) — أقل من 1:1، لا حافة إحصائية")
+                    elif _rr1 < 2.0:
+                        _chart_rr_notes.append(
+                            f"⚠️ R/R = {_rr1:.1f}:1 (TP1) — دون 2:1 المثالي")
+                    if "tp2" in _nums:
+                        _rew2 = abs(_nums["tp2"] - _nums["entry"])
+                        _rr2 = _rew2 / _risk
+                        if _rr2 >= 2.0:
+                            _chart_rr_notes.append(f"✅ R/R = {_rr2:.1f}:1 (TP2) — مقبول")
+        except Exception as _rr_e:
+            logger.debug(f"chart_rr_fix: {_rr_e}")
+
+        # chart_rsi_fix: تصحيح تسمية RSI6
+        _analysis_clean = _re_pnh.sub(
+            r"RSI(\d+).*?على الإطار الزمني (\d+) ساعات",
+            lambda m: f"RSI{m.group(1)} ({m.group(1)} فترة على الإطار الحالي)",
+            _analysis_clean
+        )
+        _analysis_clean = _re_pnh.sub(
+            r"فريم (\d+) ساعات",
+            r"\1 فترات على الإطار الحالي",
+            _analysis_clean
+        )
+
+        if _chart_rr_notes:
+            _analysis_clean += "\n\n" + "\n".join(_chart_rr_notes)
         # NYSE_hours_fix: تنبيه خارج ساعات NYSE في /analyze
         try:
             _sm_an2 = context.bot_data.get("subscription_manager")
