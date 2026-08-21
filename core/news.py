@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 # ─── Groq API (مجاني — يحتاج مفتاح فقط من console.groq.com) ─────────────────
 GROQ_API_URL   = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL     = "llama3-70b-8192"   # نموذج Groq المتاح
-GROQ_FALLBACK  = "llama-3.1-8b-instant"       # fallback أسرع (لم يُوقَف)
+GROQ_FALLBACK  = "llama3-70b-8192"       # fallback أسرع (لم يُوقَف)
 
 # مصادر RSS المجانية الموثوقة
 RSS_SOURCES = [
