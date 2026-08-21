@@ -402,6 +402,39 @@ def _cg_id(symbol: str) -> str:
     return sym.lower()
 
 
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# CryptoQuant Integration
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+_CQ_API_KEY  = os.getenv("CRYPTOQUANT_API_KEY", "")
+_CQ_BASE_URL = "https://api.cryptoquant.com/v1"
+_CQ_HEADERS  = {"Authorization": f"Bearer {_CQ_API_KEY}"} if _CQ_API_KEY else {}
+
+# مخطط الرموز لـ CryptoQuant
+_CQ_SYMBOL_MAP = {
+    "BTC": "btc", "ETH": "eth", "XRP": "xrp", "BNB": "bnb",
+    "SOL": "sol", "ADA": "ada", "AVAX": "avax", "DOGE": "doge",
+    "LINK": "link", "DOT": "dot", "TRX": "trx", "MATIC": "matic",
+    "LTC": "ltc", "UNI": "uni", "ATOM": "atom",
+}
+
+def _cq_sym(symbol: str) -> str:
+    """تحويل الرمز لـ CryptoQuant format"""
+    s = symbol.upper().replace("/USDT","").replace("/BTC","")
+    return _CQ_SYMBOL_MAP.get(s, s.lower())
+
+async def _fetch_cq(endpoint: str, params: dict = None) -> Optional[dict]:
+    """جلب بيانات من CryptoQuant API"""
+    if not _CQ_API_KEY:
+        return None
+    try:
+        url = f"{_CQ_BASE_URL}/{endpoint}"
+        result = await _fetch(url, headers=_CQ_HEADERS, params=params or {})
+        return result
+    except Exception as e:
+        logger.debug(f"CryptoQuant API: {e}")
+        return None
+
 # OKX_ALIASES_fix: قاموس الأسماء الخاصة في OKX (case-sensitive)
 # بعض الأصول تستخدم أسماء مختلفة في OKX API عن الرمز المتعارف عليه
 _OKX_SPOT_ALIASES: dict = {
@@ -2388,6 +2421,88 @@ class DataLayer:
                     and c.get("symbol","").upper() not in stables]
         _store(key, filtered, "news")
         return filtered
+
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # CryptoQuant Methods
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    async def get_cq_onchain(self, symbol: str = "BTC") -> dict:
+        """جلب بيانات on-chain من CryptoQuant"""
+        sym = _cq_sym(symbol)
+        result = {"available": False, "symbol": symbol.upper()}
+        if not _CQ_API_KEY:
+            return result
+
+        # MVRV
+        try:
+            _d = await _fetch_cq(f"{sym}/market-data/mvrv-ratio", {"window": "day", "limit": 1})
+            if _d and _d.get("data"):
+                result["mvrv"] = float(_d["data"][-1].get("mvrv_ratio", 0) or 0)
+        except Exception: pass
+
+        # SOPR
+        try:
+            _d = await _fetch_cq(f"{sym}/market-data/sopr", {"window": "day", "limit": 1})
+            if _d and _d.get("data"):
+                result["sopr"] = float(_d["data"][-1].get("sopr", 0) or 0)
+        except Exception: pass
+
+        # Exchange Net Flow
+        try:
+            _d = await _fetch_cq(f"{sym}/exchange-flows/netflow", {"window": "day", "limit": 1, "exchange": "all"})
+            if _d and _d.get("data"):
+                _net = float(_d["data"][-1].get("netflow_total", 0) or 0)
+                result["exchange_netflow"] = _net
+                result["exchange_flow_signal"] = (
+                    "🔴 تدفق للمنصات — ضغط بيع" if _net > 0
+                    else "🟢 سحب من المنصات — إيجابي"
+                )
+        except Exception: pass
+
+        # Miner Outflow
+        try:
+            _d = await _fetch_cq(f"{sym}/miner-flows/outflow", {"window": "day", "limit": 1, "miner": "all"})
+            if _d and _d.get("data"):
+                result["miner_outflow"] = float(_d["data"][-1].get("outflow_total", 0) or 0)
+        except Exception: pass
+
+        # Whale Tx Count
+        try:
+            _d = await _fetch_cq(f"{sym}/transactions/transfers-count-large", {"window": "day", "limit": 1})
+            if _d and _d.get("data"):
+                result["whale_tx_count"] = int(_d["data"][-1].get("transfers_count_large", 0) or 0)
+        except Exception: pass
+
+        # NVT
+        try:
+            _d = await _fetch_cq(f"{sym}/network-data/nvt", {"window": "day", "limit": 1})
+            if _d and _d.get("data"):
+                result["nvt"] = float(_d["data"][-1].get("nvt", 0) or 0)
+        except Exception: pass
+
+        result["available"] = bool([k for k in result if k not in ("available","symbol")])
+        return result
+
+    async def get_cq_market_signal(self, symbol: str = "BTC") -> str:
+        """إشارة سوق مختصرة من CryptoQuant للاستخدام في /signal"""
+        data = await self.get_cq_onchain(symbol)
+        if not data.get("available"):
+            return ""
+        signals = []
+        mvrv = data.get("mvrv", 0)
+        if mvrv > 3.5:   signals.append(f"⚠️ MVRV={mvrv:.2f} — تقييم مرتفع جداً")
+        elif mvrv > 2.0: signals.append(f"🟡 MVRV={mvrv:.2f} — تقييم مرتفع")
+        elif 0 < mvrv < 1.0: signals.append(f"🟢 MVRV={mvrv:.2f} — تقييم منخفض (فرصة)")
+        sopr = data.get("sopr", 0)
+        if sopr > 1.05:  signals.append(f"📈 SOPR={sopr:.3f} — أرباح تُحقَّق")
+        elif 0 < sopr < 0.97: signals.append(f"📉 SOPR={sopr:.3f} — دعم محتمل")
+        if data.get("exchange_flow_signal"):
+            signals.append(data["exchange_flow_signal"])
+        if data.get("whale_tx_count", 0) > 200:
+            signals.append(f"🐋 معاملات كبيرة: {data['whale_tx_count']}")
+        return "\n".join(signals)
+
 
 
 # ─── Helpers ──────────────────────────────────────────────────
