@@ -3206,7 +3206,7 @@ async def cmd_outlook(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 import aiohttp as _aio4, json as _js4
                 _b4 = _js4.dumps({
-                    "model": "llama3-70b-8192",
+                    "model": "openai/gpt-oss-120b",
                     "messages": [
                         {"role": "system", "content": "أجب بالعربية فقط. لا تستخدم كلمات إنجليزية."},
                         {"role": "user", "content": _prompt_out}
