@@ -389,6 +389,9 @@ _CG_MAP = {
 }
 def _cg_id(symbol: str) -> str:
     sym = symbol.upper()
+    # cg_xprefix_fix: X-prefix assets (أصول مُرمَّزة) غير موجودة في CoinGecko
+    if sym.startswith("X") and len(sym) > 2 and sym not in ("XRP", "XLM", "XMR", "XTZ", "XEM", "XDC", "XAUT"):
+        return ""  # فارغ = تجاوز CoinGecko
     # 1. فحص _CG_MAP المحلي أولاً
     if sym in _CG_MAP:
         return _CG_MAP[sym]
@@ -669,6 +672,8 @@ class DataLayer:
 
     async def _price_coingecko(self, symbol: str) -> Optional[Dict]:
         cg   = _cg_id(symbol)
+        if not cg:  # cg_xprefix_fix: X-prefix أو أصل غير موجود في CoinGecko
+            return None
         data = await _fetch(
             self.session,
             "https://api.coingecko.com/api/v3/simple/price",
