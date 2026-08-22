@@ -630,6 +630,16 @@ class DataLayer:
             logger.error(f"get_price({quote}) فشل لـ {symbol}")
             return None
 
+        # spy_xspy_fix: SPY وأشباهه يُحوَّل لـ X-prefix على OKX
+        _spy_map = {
+            "SPY": "XSPY", "QQQ": "XQQQ", "XLE": "XXLE",
+            "AAPL": "XAAPL", "NVDA": "XNVDA", "MSFT": "XMSFT",
+            "AMZN": "XAMZN", "GOOGL": "XGOOGL", "TSLA": "XTSLA",
+            "SPCX": "XSPCX", "RKLB": "XRKLB",
+        }
+        if symbol.upper() in _spy_map:
+            symbol = _spy_map[symbol.upper()]
+
         # OKX أولاً — سريع وغير محجوب على Railway
         result = await self._price_okx(symbol)
         if result and result.get("price", 0) > 0:
