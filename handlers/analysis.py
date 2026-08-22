@@ -1062,7 +1062,7 @@ def _build_professional_block(
     elif _conf_score < _t_entry:
         _decision_label = f"[LOW] — حجم {max(1,_t_max_pos//4)}–{_t_max_pos//2}% فقط"
         # vol_leverage_fix: لا رافعة إذا حجم < 0.5x في [LOW]
-        if vol_ratio < 0.5:
+        if _vol_ratio < 0.5:
             _lev_line = "• الرافعة: لا رافعة — حجم ضعيف (< 0.5x)"
         _pos_low  = min(_t_max_pos // 2, round(_t_risk * 0.5 / max(_sl_base / 100, 0.01) * 100, 1))
         _pos_size_rule = f"{max(1, min(_t_max_pos//2, round(_pos_low)))}% — ثقة منخفضة"
@@ -1248,7 +1248,7 @@ def _build_professional_block(
         ))
         _cvd_risk = 0
         try:
-            _vol_safe = float(vol_ratio) if vol_ratio else 1.0
+            _vol_safe = float(_vol_ratio) if "_vol_ratio" in dir() else 1.0
         except Exception:
             _vol_safe = 1.0
         _reversal_risk = min(95, max(5,
@@ -1311,9 +1311,9 @@ def _build_professional_block(
     if _cvd_sig:
         # cvd_volume_fix: تحذير تلقائي إذا CVD سلبي مع Volume مرتفع
         _cvd_note = ""
-        if _cvd_pct < -50 and vol_ratio > 2.0:
+        if _cvd_pct < -50 and _vol_ratio > 2.0:
             _cvd_note = " — ⚠️ تعارض: حجم مرتفع مع بيع سوقي (short squeeze محتمل)"
-        elif _cvd_pct < -20 and vol_ratio > 1.3:
+        elif _cvd_pct < -20 and _vol_ratio > 1.3:
             _cvd_note = " — تحذير: ضغط بيعي رغم الحجم المرتفع"
         deriv_lines.append(f"• CVD (100 صفقة): {_cvd_sig} ({_cvd_pct:+.1f}%){_cvd_note}")
     if deriv_lines:
