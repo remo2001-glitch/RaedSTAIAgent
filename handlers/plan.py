@@ -749,9 +749,14 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # إصلاح #307: إذا فشل OHLCV → retry بـ 50 شمعة
             if len(candles) < 30:
                 try:
+                    # xasset_ohlcv_fix: X-prefix → spot mkttype
+                    _is_x_sym = sym.upper().startswith("X") and len(sym) > 2
                     _retry = await asyncio.wait_for(
-                        engine.data_layer.get_ohlcv(sym, "1d", 50),
-                        timeout=10.0
+                        engine.data_layer.get_ohlcv(
+                            sym, "1d", 50,
+                            **({"mkttype": "spot"} if _is_x_sym else {})
+                        ),
+                        timeout=15.0
                     )
                     candles = _retry if isinstance(_retry, list) else []
                 except Exception:
@@ -840,7 +845,13 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "━━━━━━━━━━━━━━━━━━",
             # T7_fix: استخدام display names (XGOOGL وليس GOOGL)
             f"العملات: {', '.join(_display_syms_pm if '_display_syms_pm' in dir() else symbols)}",
-            f"السوق: {regime.description_ar}",
+            # regime_3way_fix: تصنيف ثلاثي
+            f"السوق: {regime.description_ar}"
+            + (" — ⚠️ RSI={:.0f} ذروة شراء، لا مطاردة السعر".format(_rsi_btc)
+               if _rsi_btc >= 70
+               else " — 🟡 نطاق عرضي، انتظر تأكيد"
+               if "جانبي" in regime.description_ar or "تذبذب" in regime.description_ar
+               else ""),
             f"الثقة: {regime.confidence:.0%}",
             "",
         ]
@@ -1616,7 +1627,10 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ]
             elif _buy_signals and _rsi_pw < 30:
                 week_lines = [
-                    f"• أسبوع 1: انتظار تأكيد — RSI يرتد فوق 30 ({_rsi_lbl})",
+                    # rsi_logic_fix: RSI مرتفع لا يعني "ارتداد فوق 30"
+                    (f"• أسبوع 1: لا دخول — RSI = {_rsi_pw:.0f} ذروة شراء، انتظر تصحيح تحت 60"
+                     if _rsi_pw >= 70
+                     else f"• أسبوع 1: مراقبة — RSI = {_rsi_pw:.0f} ({_rsi_lbl})"),
                     f"• أسبوع 2: دخول تدريجي في {_buy_names} عند ارتداد RSI فوق 35",
                     f"• أسبوع 3: Fear & Greed < 25 → {'🟢 ابدأ التجميع التدريجي' if _fg_pw < 25 else 'انتظر تأكيد ارتداد'} ({_fg_lbl})",
                     "• أسبوع 4: تقييم القاع — قرار الدخول الكامل",
@@ -1626,7 +1640,9 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 week_lines = [
                     (f"• أسبوع 1: 🟡 تجميع محدود 3-5% عند الدعم — Fear={_fg_pw} < 20 (خوف شديد = فرصة)"
                      if _fg_pw < 20
-                     else f"• أسبوع 1: لا دخول — RSI يرتد فوق 30 ({_rsi_lbl})"),
+                     else (f"• أسبوع 1: لا دخول — RSI = {_rsi_pw:.0f} ذروة شراء"
+                           if _rsi_pw >= 70
+                           else f"• أسبوع 1: مراقبة — RSI = {_rsi_pw:.0f}")),
                     "• أسبوع 2: دخول تدريجي عند ارتداد RSI فوق 35",
                     f"• أسبوع 3: Fear & Greed < 25 → {'🟢 ابدأ التجميع التدريجي' if _fg_pw < 25 else 'انتظر تأكيد ارتداد'} ({_fg_lbl})",
                     "• أسبوع 4: تقييم القاع — قرار الدخول الكامل",

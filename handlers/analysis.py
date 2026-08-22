@@ -1077,13 +1077,16 @@ def _build_professional_block(
         # signal_logic_fix: 0/4 تأكيدات → WAIT حتى لو conf مرتفع
         _normal_cap = min(_t_max_pos, 20)  # normal_cap_fix: تعريف مسبق
         if _flags_found < 2:
+            # confirm_size_fix: 0/4 تأكيدات → 0% حجم دائماً
             _decision_label = "[WAIT] — انتظر تأكيد 2/4 مؤشرات قبل الدخول"
             _pos_size_rule  = "0% — لا تأكيدات كافية للدخول"
+            _pos_norm = 0.0
         else:
             _decision_label = f"[NORMAL] — حجم {_normal_cap//2}–{_normal_cap}%"
-        _pos_norm  = min(float(_normal_cap), round(_t_risk / max(_sl_base / 100, 0.01) * 100, 1))
-        _pos_size_rule = f"{max(_normal_cap//2, min(_normal_cap, round(_pos_norm)))}% — ثقة متوسطة"
-    else:
+        if _flags_found >= 2:
+            _pos_norm  = min(float(_normal_cap), round(_t_risk / max(_sl_base / 100, 0.01) * 100, 1))
+        if _flags_found >= 2:
+            _pos_size_rule = f"{max(_normal_cap//2, min(_normal_cap, round(_pos_norm)))}% — ثقة متوسطة"
         _decision_label = f"[HIGH] — حجم {_t_max_pos}%"
         _pos_high  = min(float(_t_max_pos), round(_t_risk * 1.3 / max(_sl_base / 100, 0.01) * 100, 1))
         _pos_size_rule = f"{min(_t_max_pos, round(_pos_high))}% — ثقة عالية"
