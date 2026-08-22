@@ -20,9 +20,9 @@ GROQ_API_URL   = "https://api.groq.com/openai/v1/chat/completions"
 # groq_model_fix: قائمة fallback تلقائية إذا فشل النموذج الأساسي
 # groq_model_fix: نموذج Groq المتاح
 GROQ_MODELS_LIST = [
-    "openai/gpt-oss-120b",            # الأقوى المتاح
-    "groq/compound",                   # بديل Groq
-    "qwen/qwen3.6-27b",                # بديل Alibaba
+    "groq/compound",                   # نموذج Groq الأساسي (يعمل عبر API)
+    "qwen/qwen3.6-27b",               # بديل Alibaba (بدون json_mode)
+    "openai/gpt-oss-120b",            # بديل OpenAI OSS (بدون json_mode)
 ]
 GROQ_MODEL     = GROQ_MODELS_LIST[0]
 GROQ_FALLBACK  = GROQ_MODELS_LIST[1]
@@ -598,6 +598,15 @@ class NewsEngine:
             except Exception as _e:
                 _last_error = _e
                 _e_str = str(_e)
+                # json_mode_fallback_fix: إذا فشل json_mode → أعد بدون json
+                if json_mode and ("json_validate_failed" in _e_str or "Failed to generate JSON" in _e_str or "Failed to validate JSON" in _e_str):
+                    try:
+                        result = await self._call_groq_single(_try_model, prompt, False)
+                        if result:
+                            logger.info(f"Groq json→text fallback: نجح {_try_model}")
+                            return result
+                    except Exception:
+                        pass
                 if "decommissioned" in _e_str or "404" in _e_str or "400" in _e_str:
                     logger.warning(f"Groq {_try_model} غير متاح — جرب التالي")
                     continue
