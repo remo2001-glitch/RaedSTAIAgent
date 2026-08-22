@@ -1536,7 +1536,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if _has_old and hasattr(engine.news_engine, "groq_key") and engine.news_engine.groq_key:
                 import urllib.request, urllib.error, json as _jg, ssl as _slg
                 _body_gr = _jg.dumps({
-                    "model": "openai/gpt-oss-120b",
+                    "model": "groq/compound",
                     "messages": [{
                         "role": "system",
                         "content": "أجب بالعربية فقط. أعطِ قائمة بالأحداث الاقتصادية المهمة القادمة خلال 7 أيام."
