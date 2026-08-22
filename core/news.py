@@ -769,7 +769,7 @@ class NewsEngine:
             "market_impact_ar": "لا تأثير واضح على السوق",
             "confidence":      0.3,
             "risk_flags":      [],
-            "source":          "none",
+            "source":          f"groq/{GROQ_MODEL.split("/")[-1]}",
         }
 
     # ═══════════════════════════════════════════════════════════
