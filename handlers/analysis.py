@@ -728,10 +728,16 @@ def _build_professional_block(
     # FIN2b: استخدام ATR الفعلي للمنطق المالي (بدلاً من ATR المُقيَّد)
     _eff_atr = _atr_raw_dec if _fin_corrupted else atr_dec
 
+    # إصلاح #291 (tp_pct_base_fix): pro_tp كان يُحسَب من price الحالي بينما
+    # pro_sl يُحسَب من pro_entry — نفس القاعدة المستخدمة لاحقاً لعرض
+    # tp_pct/sl_pct (النسب من pro_entry). هذا التضارب كان يُضخِّم TP% المعروض
+    # فعلياً (لأن pro_tp كان يُقاس من نقطة أعلى من الدخول الحقيقي عند
+    # Pullback entry)، وبالتبعية يُضخِّم R/R المعروض بشكل غير واقعي.
+    # الإصلاح: pro_tp يُحسَب من pro_entry دائماً — مثل pro_sl تماماً.
     if direction == "short" and conf >= 0.65:
         pro_entry = price * (1 + _eff_atr * 0.2)
-        pro_tp    = price * (1 - _eff_atr * 2.0)
         pro_sl    = price * (1 + _eff_atr * 1.2)
+        pro_tp    = pro_entry * (1 - _eff_atr * 2.0)   # tp_pct_base_fix
         pro_dir   = "Short"
     else:
         pro_entry = ns if ns > 0 and ns < price * 0.99 else price * (1 - _eff_atr * 0.4)
@@ -744,8 +750,8 @@ def _build_professional_block(
             _tp_mult, _sl_mult = 2.5, 1.0
         else:
             _tp_mult, _sl_mult = 1.8, 1.2   # افتراضي
-        pro_tp  = price * (1 + _eff_atr * _tp_mult)
         pro_sl  = pro_entry * (1 - _eff_atr * _sl_mult)
+        pro_tp  = pro_entry * (1 + _eff_atr * _tp_mult)   # tp_pct_base_fix
         pro_dir = "Long"
 
     # SL_Fib_fix: استخدام أقرب مستوى Fibonacci كـ SL إذا كان أفضل (أقرب وأمثل)
@@ -2356,7 +2362,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             engine.data_layer.get_fear_greed(),
             engine.data_layer.get_news(currencies=symbol),
             engine.data_layer.get_btc_dominance(),
-            engine.data_layer.get_ohlcv_4h(symbol, 50),
+            engine.data_layer.get_ohlcv_4h(symbol, 50, mkttype=_mkt_arg_sig),  # cache_collision_4h_fix
             return_exceptions=True
         )
         candles  = candles  if isinstance(candles, list) else []
@@ -3657,7 +3663,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     engine.data_layer.get_open_interest(symbol),
                     engine.data_layer.get_funding_rate(symbol),
                     engine.data_layer.get_whale_ratio(symbol),
-                    engine.data_layer.get_ohlcv_4h(symbol, 50),
+                    engine.data_layer.get_ohlcv_4h(symbol, 50, mkttype=_mkt_arg_an),  # cache_collision_4h_fix
                     engine.data_layer.get_onchain(),
                     return_exceptions=True,
                 ), timeout=15.0
@@ -4758,11 +4764,16 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # quicksignal_entry_fix: توضيح نوع الأمر
             # quicksignal_entry_fix: توضيح نوع الأمر
             # quicksignal_entry_type_fix: نوع الأمر مع مسافة صحيحة
+            # إصلاح #292 (limit_label_fix): كان الشرط يعتمد على بادئة الإيموجي
+            # (🔴/🟢) فقط، فيفوت اتجاهات "🟡 شراء محتاط" و"🟠 بيع محتاط" رغم أن
+            # نقطة الدخول فيها فعلياً أعلى/أقل من السعر الحالي (Limit فعلي).
+            # الإصلاح: الاعتماد فقط على موقع entry من price، بغض النظر عن لون
+            # الاتجاه — هذا هو المعيار الصحيح لتحديد Limit Buy مقابل Limit Sell.
             f"• نقطة الدخول: {_fmt_price(entry, quote)}  ← النسب محسوبة من هنا"
             + (" — 🔴 Limit Sell (انتظر ارتداداً للدخول)"
-               if entry > price * 1.001 and direction.startswith("🔴")
+               if entry > price * 1.001
                else " — 🟢 Limit Buy (انتظر تراجعاً للدخول)"
-               if entry < price * 0.999 and direction.startswith("🟢")
+               if entry < price * 0.999
                else ""),
             f"• هدف 1:       {_fmt_price(tp1, quote)} ({(tp1/max(entry,1e-9)-1)*100:+.1f}%)",
             f"• هدف 2:       {_fmt_price(tp2, quote)} ({(tp2/max(entry,1e-9)-1)*100:+.1f}%)",
