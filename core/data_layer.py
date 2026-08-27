@@ -1586,17 +1586,24 @@ class DataLayer:
             logger.debug(f"open_interest ({symbol}): {e}")
         return result
 
-    async def get_ohlcv_4h(self, symbol: str, limit: int = 100) -> List[Dict]:
+    async def get_ohlcv_4h(self, symbol: str, limit: int = 100,
+                            mkttype: str = "spot") -> List[Dict]:
         """
         المرحلة 2: جلب بيانات 4H من OKX لـ SMC حقيقي.
         يُستخدم لـ RSI Divergence وOrder Blocks وBOS/ChoCH.
+        إصلاح #290 (cache_collision_4h_fix): mkttype يُميِّز كاش Spot عن
+        Futures لنفس الرمز — نفس منطق #258 في get_price/get_ohlcv، لكن كان
+        مفقوداً هنا فكان يُرجِع بيانات 4H من سوق خاطئ (أو فارغة) عند التبديل
+        بين Spot/Futures لنفس الرمز، وكان أيضاً لا يجلب شيئاً للأصول المُرمَّزة
+        (تُطلَب حصرياً على Futures/Perpetual) لأن instId كان يفترض Spot دائماً.
         """
         symbol = _clean_symbol(symbol)   # BTCUSDT → BTC
-        key = f"ohlcv4h:{symbol}:{limit}"
+        key = f"ohlcv4h:{symbol}:{limit}:{mkttype}"
         if cached := _cached(key, "ohlcv"):
             return cached
         try:
-            inst_id = f"{symbol.upper()}-USDT"
+            inst_id = (f"{symbol.upper()}-USDT-SWAP" if mkttype == "futures"
+                       else f"{symbol.upper()}-USDT")
             data = await _fetch(
                 self.session,
                 f"https://www.okx.com/api/v5/market/history-candles?instId={inst_id}&bar=4H&limit={limit}",
