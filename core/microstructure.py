@@ -525,13 +525,27 @@ class MicrostructureLayer:
                 bid_count = len(buy_walls)
                 lines.append(f"• أعلى أمر شراء (Bid): ${top_bid['price']:,.2f} — ${top_bid['value_usd']/1e6:.2f}M | {bid_count} أمر")
             else:
-                lines.append("• أعلى أمر شراء (Bid): لا جدران كبيرة — السوق سائل")
+                # wall_fallback_fix (#298): "لا جدران كبيرة" وحدها بلا أي سعر
+                # لا تفيد المستخدم عملياً — نعرض أفضل سعر شراء كمرجع عملي
+                # بدلاً من رسالة عامة بلا أرقام (شائع في الأسواق العميقة
+                # كـBTC حيث لا يوجد مستوى واحد يتجاوز عتبة "الجدار")
+                _bp = getattr(profile, "bid_price", 0) or 0
+                lines.append(
+                    f"• أعلى أمر شراء (Bid): لا جدران كبيرة — أفضل سعر شراء ${_bp:,.2f}"
+                    if _bp > 0 else
+                    "• أعلى أمر شراء (Bid): لا جدران كبيرة — السوق سائل"
+                )
             if sell_walls:
                 top_ask   = sell_walls[0]
                 ask_count = len(sell_walls)
                 lines.append(f"• أدنى أمر بيع (Ask):  ${top_ask['price']:,.2f} — ${top_ask['value_usd']/1e6:.2f}M | {ask_count} أمر")
             else:
-                lines.append("• أدنى أمر بيع (Ask):  لا جدران كبيرة — السوق سائل")
+                _ap = getattr(profile, "ask_price", 0) or 0
+                lines.append(
+                    f"• أدنى أمر بيع (Ask):  لا جدران كبيرة — أفضل سعر بيع ${_ap:,.2f}"
+                    if _ap > 0 else
+                    "• أدنى أمر بيع (Ask):  لا جدران كبيرة — السوق سائل"
+                )
 
             # إصلاح #136/#196: جدران حقيقية فقط + ضغط من imbalance
             bw_real  = getattr(walls, "buy_walls",  []) or []

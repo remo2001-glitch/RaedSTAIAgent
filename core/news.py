@@ -527,6 +527,11 @@ class NewsEngine:
 - ركز فقط على الأخبار المرتبطة بـ: العملات الرقمية، الأسواق المالية، الاقتصاد الكلي، اللوائح التنظيمية، التكنولوجيا المالية
 - تجاهل الأخبار غير ذات الصلة (تقنية عامة، ترفيه، رياضة، أخبار اجتماعية)
 - إذا لم تجد أخباراً ذات صلة، أعد sentiment=neutral وأشر لذلك في summary_ar
+- company_name_fix (#301): عند ذكر أسماء شركات/كيانات في summary_ar أو
+  key_events أو market_impact_ar، اكتب الاسم بالإنجليزية الأصلية بين قوسين
+  إذا لم يكن له اسم عربي شائع ومعروف (مثال: "شركة Strategy (MicroStrategy)"
+  وليس "ميتاستراتجى" أو أي تحويل صوتي مُخترَع) — لا تخترع نقحرة عربية لاسم
+  علم؛ استخدم الاسم الإنجليزي كما هو عند الشك
 
 الأخبار المُراد تحليلها:
 {headlines}
@@ -578,6 +583,66 @@ class NewsEngine:
 
         # Fallback نهائي: rule-based
         return self._rule_based_analysis(news_items)
+
+    async def _translate_titles_batch(self, titles: List[str]) -> List[str]:
+        """
+        news_translate_groq_fix (#300): الترجمة السابقة (_translate_news_title)
+        قائمة على قاموس كلمات مفتاحية + regex، تفشل مع العناوين المعقدة أو
+        التي تحوي أسماء أعلام (Charles Schwab, IREN, Strategy/MSTR...)، وعند
+        الترجمة الجزئية غير المقروءة كانت تُعيد العنوان الإنجليزي كاملاً كحل
+        احتياطي — وهو السبب الرئيسي لظهور عناوين إنجليزية كاملة (بادئة [EN])
+        في قسم "📡 أخبار إضافية" رغم وجود دالة "ترجمة".
+        الإصلاح: طلب واحد لـ Groq يترجم كل العناوين المتبقية دفعة واحدة
+        (كفاءة — لا نُكرر النداء لكل عنوان)، مع القاموس القديم fallback فقط
+        عند غياب مفتاح Groq أو فشل الطلب.
+        """
+        if not titles:
+            return []
+        if not self.groq_key:
+            return [_translate_news_title(t) for t in titles]
+
+        import html as _html_tt
+        numbered = "\n".join(f"{i+1}. {_html_tt.unescape(t)}" for i, t in enumerate(titles))
+        prompt = f"""ترجم عناوين الأخبار التالية إلى العربية الفصحى بأسلوب
+إخباري احترافي مختصر ومقروء بالكامل. حافظ على أسماء الشركات/الأشخاص وأسماء
+العملات كما هي أو بنسخها العربي المعروف (مثال: Bitcoin ← بيتكوين،
+Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنجليزية في الترجمة.
+
+العناوين:
+{numbered}
+
+أعد ردك بصيغة JSON فقط بدون أي نص خارجه، وعدد عناصر translations يجب أن
+يطابق تماماً عدد العناوين ({len(titles)}):
+{{"translations": ["<ترجمة العنوان 1>", "<ترجمة العنوان 2>"]}}"""
+
+        import aiohttp as _aio_tt
+        _temp_session = None
+        if not self.session:
+            _temp_session = _aio_tt.ClientSession(
+                headers={"User-Agent": "Mozilla/5.0 Chrome/124.0"},
+                timeout=_aio_tt.ClientTimeout(total=20),
+            )
+            self.session = _temp_session
+        try:
+            result = await self._call_groq(prompt, GROQ_MODEL)
+            if not result:
+                result = await self._call_groq(prompt, GROQ_FALLBACK)
+            if result:
+                _trs = result.get("translations")
+                if isinstance(_trs, list) and len(_trs) == len(titles):
+                    return [
+                        (str(t).strip() or _translate_news_title(o))
+                        for t, o in zip(_trs, titles)
+                    ]
+                logger.warning(f"news_translate_groq_fix: عدد ترجمات غير مطابق ({len(_trs) if isinstance(_trs, list) else 'N/A'}/{len(titles)})")
+        except Exception as e:
+            logger.debug(f"_translate_titles_batch: {e}")
+        finally:
+            if _temp_session:
+                await _temp_session.close()
+                self.session = None
+        # fallback نهائي: القاموس القديم لكل عنوان
+        return [_translate_news_title(t) for t in titles]
 
     async def _call_groq(self, prompt: str, model: str,
                           json_mode: bool = True) -> Optional[Dict]:
@@ -775,7 +840,7 @@ class NewsEngine:
     # ═══════════════════════════════════════════════════════════
     # 4. تنسيق التقرير
     # ═══════════════════════════════════════════════════════════
-    def format_ar(self, items: List[Dict], analysis: Dict) -> str:
+    async def format_ar(self, items: List[Dict], analysis: Dict) -> str:
         # T19_fix: تنسيق احترافي مُحسَّن
         sent_label, _ = SENTIMENT_LABELS.get(
             analysis.get("sentiment", "neutral"),
@@ -897,6 +962,7 @@ class NewsEngine:
             _ke_s = str(_ke).lower()
             _raw_titles_shown.add(_ke_s[:40])
         extra = []
+        _extra_raw = []
         for item in items:
             t_orig = str(item.get("title", ""))
             # إصلاح #192: تخطي الأخبار غير الكريبتو
@@ -910,11 +976,14 @@ class NewsEngine:
                 any(_w in _raw_titles_shown for _w in _t_orig_low.split()[:4] if len(_w) > 5)
             )
             if not _is_dup:
-                t = _translate_news_title(t_orig)  # ترجمة M#59
-                extra.append(t)
+                _extra_raw.append(t_orig)
                 _raw_titles_shown.add(_t_orig_low[:40])
-            if len(extra) >= 4:
+            if len(_extra_raw) >= 4:
                 break
+        # news_translate_groq_fix (#300): ترجمة دفعية واحدة عبر Groq بدل
+        # القاموس الحرفي — يحل مشكلة العناوين المعقدة/أسماء الأعلام التي
+        # كانت تظهر إنجليزية بالكامل رغم وجود "ترجمة"
+        extra = await self._translate_titles_batch(_extra_raw) if _extra_raw else []
 
         if extra:
             lines += ["", "📡 *أخبار إضافية*"]
@@ -925,6 +994,7 @@ class NewsEngine:
                 import html as _html_y2
                 title = _html_y2.unescape(title)
                 # arabic_news_fix: إذا العنوان إنجليزي → نُضيف ترجمة مختصرة
+                # (يبقى كـ fallback أخير نادر إذا فشل Groq والقاموس معاً)
                 _is_arabic_title = any('؀' <= c <= 'ۿ' for c in title)
                 if not _is_arabic_title and len(title) > 10:
                     # نُبقي العنوان الإنجليزي للمرجعية لكن نُضيف ملاحظة
