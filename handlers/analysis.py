@@ -633,7 +633,14 @@ def _build_professional_block(
     # conf_reason_fix: حفظ conf الأصلي للعرض الصحيح بعد الرفع
     _conf_for_reason = conf  # سيُحدَّث لاحقاً إذا رُفعت الثقة
     if conf < _threshold:
-        reasons.append(f"• الثقة {conf:.0%} أقل من الحد {_threshold:.0%}")
+        # conf_rounding_fix (#296): عند تقارب conf والعتبة (مثال: 0.549 <
+        # 0.550) يُقرِّبهما .0% لنفس الرقم فيظهر "55% أقل من الحد 55%" وهو
+        # متناقض ظاهرياً رغم صحة المقارنة الرياضية. نستخدم منزلة عشرية واحدة
+        # فقط في هذه الحالة الحدّية لتوضيح الفارق الفعلي.
+        if round(conf * 100) == round(_threshold * 100):
+            reasons.append(f"• الثقة {conf:.1%} أقل من الحد {_threshold:.1%}")
+        else:
+            reasons.append(f"• الثقة {conf:.0%} أقل من الحد {_threshold:.0%}")
     elif _scenario == "counter_trend_bounce" and _vol_ratio < 0.8:
         reasons.append(
             f"• الثقة {conf:.0%} تجاوزت {_threshold:.0%} — لكن الحجم {_vol_ratio:.1f}x "
@@ -815,10 +822,12 @@ def _build_professional_block(
     if atr_pct > 0 and sl_pct < atr_pct * 1.5:
         _risk_warnings.append(f"⚠️ SL ضيق ({sl_pct:.1f}%) < 1.5x ATR ({atr_pct*1.5:.1f}%) — خطر إيقاف مبكر")
     # 2. R/R < 2.0 → ضعيف
-    if pro_sl > 0 and sl_pct > 0:
-        _rr_ratio = tp_pct / sl_pct if sl_pct > 0 else 0
-        if 0 < _rr_ratio < 2.0:
-            _risk_warnings.append(f"⚠️ R/R = {_rr_ratio:.1f} ضعيف (يُفضَّل ≥ 2.0)")
+    # rr_dup_fix (#293): كان يُحسَب هنا من tp_pct/sl_pct (المبنية على pro_tp
+    # "الظل" الداخلي) بينما الرقم المعروض فعلياً للمستخدم في "📍 مناطق الدخول
+    # والخروج" (R/R: أو R/R الواقعي:) يُحسَب لاحقاً من tp1_v/entry_agg/pro_sl
+    # — رقمان مختلفان لنفس الصفقة. الإصلاح: تأجيل هذا التحذير إلى ما بعد حساب
+    # الرقم الفعلي المعروض (rr_real/_rr_calc) بدلاً من حسابه هنا بشكل منفصل.
+    _rr_warning_pending = True
     # 3. حجم < 0.3x على X-asset خارج ساعاته → مؤشرات غير موثوقة
     _vol_ratio_check = tech.get("vol_ratio", 1.0) if isinstance(tech, dict) else 1.0
     if _vol_ratio_check < 0.3:
@@ -986,11 +995,15 @@ def _build_professional_block(
         _new_reasons_pro = []
         for _r in reasons:
             if "أقل من الحد" in _r:
-                _new_reasons_pro.append(
-                    f"• الثقة {conf:.0%} أقل من الحد {_threshold:.0%}"
-                    if conf < _threshold else
-                    f"• الثقة {conf:.0%} (مرفوعة من التأكيدات +{_boost_pro}%)"
-                )
+                # conf_rounding_fix (#296): نفس معالجة تقارب التقريب أعلاه
+                if conf < _threshold and round(conf * 100) == round(_threshold * 100):
+                    _new_reasons_pro.append(f"• الثقة {conf:.1%} أقل من الحد {_threshold:.1%}")
+                else:
+                    _new_reasons_pro.append(
+                        f"• الثقة {conf:.0%} أقل من الحد {_threshold:.0%}"
+                        if conf < _threshold else
+                        f"• الثقة {conf:.0%} (مرفوعة من التأكيدات +{_boost_pro}%)"
+                    )
             else:
                 _new_reasons_pro.append(_r)
         reasons = _new_reasons_pro
@@ -1218,6 +1231,18 @@ def _build_professional_block(
         _reward = max(tp1_v - price, 1e-9)
         rr_real = round(min(_reward / _risk, 5.0), 1)
         _rr_adjusted_note = " (مُعدَّل تلقائياً لضمان 1:1)"
+
+    # rr_dup_fix (#293): تحذير R/R الآن يُبنى من نفس الرقم المعروض فعلياً
+    # للمستخدم (rr_real إذا التأكيدات مكتملة، وإلا _rr_calc التقديري) —
+    # بدلاً من قيمة "ظل" منفصلة كانت تُنتج رقماً مختلفاً عن المعروض.
+    if _rr_warning_pending:
+        _rr_shown = None
+        if _confirmed and tp1_v > 0 and tp1_v != price:
+            _rr_shown = rr_real
+        elif tp1_v > 0 and pro_entry > 0 and pro_sl > 0:
+            _rr_shown = abs(tp1_v - pro_entry) / max(abs(pro_entry - pro_sl), 1e-9)
+        if _rr_shown is not None and 0 < _rr_shown < 2.0:
+            _risk_warnings.append(f"⚠️ R/R = {_rr_shown:.1f} ضعيف (يُفضَّل ≥ 2.0)")
 
     # Worst-Case
     # إصلاح #95: ضمان أن مستويات Worst-Case أعمق من (أو تساوي) SL المعروض،
@@ -1612,8 +1637,13 @@ def _get_market_phase_ar(phase: str) -> str:
     return {
         "Accumulation":   "🔵 تراكم (Accumulation) — فرضية",
         "Distribution":   "🟠 توزيع (Distribution) — فرضية",
-        # market_phase_fix: Markup يُظهَر كـ "فرضية" إذا كانت مؤشرات 4H سلبية
-        "Markup":         "🟢 صعود (Markup) — فرضية إذا 4H هابط",
+        # market_phase_fix (سابقاً): كان "Markup" يُظهِر دائماً "— فرضية إذا
+        # 4H هابط" كنص ثابت بغض النظر عن حالة 4H الفعلية، مما يُنتج تناقضاً
+        # ظاهرياً حتى عند توافق 4H الفعلي مع الاتجاه الصاعد.
+        # mtf_static_caveat_fix (#295): إزالة النص الثابت — التأكيد/التعارض
+        # الفعلي مع 4H يُعرَض ديناميكياً عبر _mtf_confirm (mtf_neutral_fix)
+        # بناءً على بيانات 4H الحقيقية، فلا حاجة لتكرار افتراض ثابت هنا.
+        "Markup":         "🟢 صعود (Markup)",
         "Markdown":       "🔴 هبوط (Markdown)",
         "Consolidation":  "🟡 تعزيز (Consolidation)",
     }.get(phase, "⚪ غير محدد")
@@ -1827,7 +1857,7 @@ async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-        text = engine.news_engine.format_ar(items, analysis)
+        text = await engine.news_engine.format_ar(items, analysis)
         text = _clean_md(text) if text else ""
         if not text:
             text = "📰 لا توجد أخبار متاحة حالياً. حاول لاحقاً."
@@ -2093,10 +2123,15 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lines += ["", "📋 *السيناريوهات*"]
             if _bull_conditions:
                 lines.append(f"🟢 صاعد: {' + '.join(_bull_conditions[:2])}")
+            else:
+                # onchain_scenario_balance_fix (#299): كان يُعرَض سيناريو
+                # هابط فقط بدون توضيح أن الجانب الصاعد فُحِص فعلاً ولم يتحقق —
+                # هذا يوضّح أن الفحص شامل (كلا الاتجاهين) وليس أحادياً بالتصميم
+                lines.append("⚪ صاعد: لا مؤشرات تراكم/صعود حالياً")
             if _bear_conditions:
                 lines.append(f"🔴 هابط: {' + '.join(_bear_conditions[:2])}")
-            if not _bull_conditions and not _bear_conditions:
-                lines.append("⚪ محايد: انتظار محفز واضح")
+            else:
+                lines.append("⚪ هابط: لا مؤشرات ضغط/انعكاس حالياً")
 
         _src = "📡 المصدر: DeFiLlama + OKX"
         if btc_adv.get("available"):
@@ -2513,13 +2548,19 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _c4h_rsi = _calc_rsi_from_closes(_c4h_cls) if len(_c4h_cls) >= 14 else 0
                 _c4h_ema20 = sum(_c4h_cls[-20:]) / 20 if len(_c4h_cls) >= 20 else 0
                 _c4h_trend = "🟢 صاعد" if _c4h_cls[-1] > _c4h_ema20 else "🔴 هابط"
-                # تعارض 4H مع الإشارة
+                # mtf_neutral_fix (#294): كانت الحالة else تفترض ثنائية
+                # long/short فقط، فتُصنِّف أي اتجاه غير "long" (بما فيه
+                # "neutral" — وهو شائع جداً، ⚪ محايد) على أنه "هابط" افتراضياً
+                # حتى لو كان 4H صاعداً فعلاً — وهو سبب ظهور "⚠️ تعارض: إشارة
+                # هابط لكن 4H = 🟢 صاعد" بشكل شبه ثابت على إشارات محايدة
+                # (OKB وXSPY وXSPCX). الإصلاح: معالجة "neutral" بشكل صريح
+                # كحالة ثالثة بدلاً من تركها تسقط في else الثنائي.
                 if signal.direction == "long" and _c4h_cls[-1] < _c4h_ema20:
                     # counter_trend_fix: توضيح أن الشراء ضد الاتجاه
                     _mtf_warns.append(f"⚠️ Counter-Trend: 4H هابط + إشارة شراء — مخاطر أعلى، قلل الحجم")
                 elif signal.direction == "short" and _c4h_cls[-1] > _c4h_ema20:
                     _mtf_warns.append(f"⚠️ Counter-Trend: 4H صاعد + إشارة بيع — مخاطر أعلى، قلل الحجم")
-                else:
+                elif signal.direction in ("long", "short"):
                     # mtf_clarify_fix: فصل الأطر الزمنية
                     _direction_ar = "صاعد" if signal.direction == "long" else "هابط"
                     _mtf_confirm = (
@@ -2527,6 +2568,10 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         if _direction_ar in _c4h_trend
                         else f"⚠️ تعارض: إشارة {_direction_ar} لكن 4H = {_c4h_trend}"
                     )
+                else:
+                    # mtf_neutral_fix: إشارة محايدة → 4H يُعرض كسياق إعلامي
+                    # فقط دون ادعاء تعارض أو تأكيد مع اتجاه غير موجود أصلاً
+                    _mtf_confirm = f"ℹ️ اتجاه 4H: {_c4h_trend} (الإشارة الرئيسية محايدة)"
                 if _c4h_rsi > 0:
                     if _c4h_rsi > 70:
                         _mtf_warns.append(f"⚠️ RSI 4H={_c4h_rsi:.0f} ذروة شراء")
@@ -3106,7 +3151,15 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if _reco:
             text += f"\n\n💡 *التفسير*: {' · '.join(_reco)}"
 
-        # T18_fix v2: Slippage متعدد + قرار صحيح
+        # slippage_consistency_fix (#297): كان يُستخدَم هنا صيغة منفصلة تماماً
+        # عن الصيغة الحقيقية في microstructure._build_profile_from_walls
+        # (التي تُنتج رقم "Slippage متوقع" أعلى التقرير) — الصيغة القديمة
+        # كانت تُعامل (order_size/depth) كنسبة مئوية خام مباشرة بدل ضربها
+        # بالـ spread، فتُنتج قفزات غير واقعية ($1K≈0% ← $10K≈5% ← $50K≈10%)
+        # ومتضاربة مع رقم "Slippage متوقع" الحقيقي المعروض أعلاه لنفس اللحظة.
+        # الإصلاح: نفس منهجية المحرك (نسبة استهلاك العمق × spread × 0.5)،
+        # بنفس الحد الأدنى 0.005% والحد الأقصى 2.0% المستخدَمين في المحرك —
+        # هذا يضمن تناسقاً رياضياً وتدرجاً واقعياً بين الأحجام الثلاثة.
         try:
             # T18a_fix: استخدام mid_price (وليس price) + bid_depth_usd
             _bid_d = getattr(profile, "bid_depth_usd", 0) or 0
@@ -3114,15 +3167,18 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _spread_pct = getattr(profile, "spread_pct", 0) or 0
             _price_liq = getattr(profile, "mid_price", 0) or getattr(profile, "bid_price", 0) or 1
 
-            if _bid_d > 0:
-                _slippage_1k  = round(_spread_pct / 2, 4)
-                _slippage_10k = round(_spread_pct / 2 + (10000 / max(_bid_d, 1)) * 100, 3)
-                _slippage_50k = round(_spread_pct / 2 + (50000 / max(_bid_d, 1)) * 100, 3)
+            if _ask_d > 0:
+                def _slip_for_size(_size: float) -> float:
+                    _s = (_size / max(_ask_d, _size)) * _spread_pct * 0.5
+                    return round(max(0.005, min(_s, 2.0)), 4)
+                _slippage_1k  = _slip_for_size(1000)
+                _slippage_10k = _slip_for_size(10000)
+                _slippage_50k = _slip_for_size(50000)
                 text += (
                     f"\n\n📐 *Slippage المتوقع*"
                     f"\n• $1K: ~{_slippage_1k:.4f}%"
-                    f"\n• $10K: ~{min(_slippage_10k, 5.0):.3f}%"
-                    f"\n• $50K: ~{min(_slippage_50k, 10.0):.3f}%"
+                    f"\n• $10K: ~{_slippage_10k:.4f}%"
+                    f"\n• $50K: ~{_slippage_50k:.4f}%"
                 )
 
             # Volume Profile تقريبي من candles
@@ -3246,9 +3302,42 @@ async def cmd_outlook(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if _groq_key:
             from datetime import datetime as _dt_out, timezone as _tz_out
             _today_out = _dt_out.now(_tz_out.utc).strftime("%Y-%m-%d")
+            # outlook_live_data_fix (#302): كان الـ prompt يطلب "رؤية محدَّثة"
+            # دون تزويد النموذج بأي بيانات فعلية (سعر، هيمنة، Fear&Greed)،
+            # فكان الناتج عاماً/نمطياً حتماً (النموذج لا يملك بيانات حية).
+            # الإصلاح: تمرير بيانات حقيقية من نفس محرك البيانات المستخدَم في
+            # /onchain، وإلزام النموذج صراحة بالإشارة لرقم واحد فعلي على
+            # الأقل لكل مؤسسة بدل عبارات عامة متكررة.
+            _out_fg = _out_btc_dom = _out_btc_chg = None
+            try:
+                _out_fg_d = await engine.data_layer.get_fear_greed()
+                _out_fg = int(_out_fg_d.get("value", 0)) if isinstance(_out_fg_d, dict) else None
+            except Exception:
+                pass
+            try:
+                _out_btc_dom = await engine.data_layer.get_btc_dominance()
+            except Exception:
+                pass
+            try:
+                _out_btc_p = await engine.data_layer.get_price("BTC")
+                _out_btc_chg = float(_out_btc_p.get("change_24h", 0)) if isinstance(_out_btc_p, dict) else None
+            except Exception:
+                pass
+            _live_ctx_lines = [f"التاريخ: {_today_out}"]
+            if _out_fg is not None:
+                _live_ctx_lines.append(f"مؤشر الخوف والطمع الحالي: {_out_fg}/100")
+            if _out_btc_dom:
+                _live_ctx_lines.append(f"هيمنة BTC الحالية: {_out_btc_dom:.1f}%")
+            if _out_btc_chg is not None:
+                _live_ctx_lines.append(f"تغيّر BTC آخر 24 ساعة: {_out_btc_chg:+.2f}%")
+            _live_ctx = "\n".join(_live_ctx_lines)
+
             _prompt_out = (
-                f"اليوم هو {_today_out}.\n"
-                "قدم رؤية موجزة ومحدَّثة (3-4 جمل لكل مؤسسة) لهذه المؤسسات:\n"
+                f"بيانات السوق الحية الآن:\n{_live_ctx}\n\n"
+                "قدم رؤية موجزة (3-4 جمل لكل مؤسسة) لهذه المؤسسات، بحيث تتضمن "
+                "كل فقرة إشارة واحدة فعلية على الأقل مبنية على بيانات السوق "
+                "الحية أعلاه (لا عبارات عامة نمطية مثل 'تقلبات متزايدة' أو "
+                "'تنويع الأصول' بدون ربطها برقم أو حدث فعلي حالي):\n"
                 "🏦 BlackRock: رؤيتهم الحالية للأسواق والأصول الرقمية\n"
                 "📊 Vanguard: توقعات العائد طويل الأجل والتخصيص الأمثل\n"
                 "🔍 Morningstar: تقييمهم المستقل للأسواق والمخاطر\n"
