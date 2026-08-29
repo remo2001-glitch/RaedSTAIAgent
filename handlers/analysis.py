@@ -820,8 +820,12 @@ def _build_professional_block(
     # risk_quality_fix: تحذيرات جودة الصفقة
     _risk_warnings = []
     # 1. SL < 1.5x ATR → ضيق
-    if atr_pct > 0 and sl_pct < atr_pct * 1.5:
-        _risk_warnings.append(f"⚠️ SL ضيق ({sl_pct:.1f}%) < 1.5x ATR ({atr_pct*1.5:.1f}%) — خطر إيقاف مبكر")
+    # sl_warning_dup_fix (#310): نفس مبدأ rr_dup_fix — هذا التحذير كان يُبنى
+    # من sl_pct "الظل" (pro_entry)، بينما "وقف الخسارة" المعروض للمستخدم بعد
+    # إصلاح #307 يُحسَب من entry_agg — رقمان مختلفان لنفس القيمة في نفس
+    # الرسالة (لوحظ في BGB: 4.0% معروضة مقابل 3.4% في هذا التحذير). نؤجل
+    # الفحص لما بعد توفر _sl_pct_disp (الرقم الفعلي المعروض).
+    _sl_warning_pending = atr_pct > 0
     # 2. R/R < 2.0 → ضعيف
     # rr_dup_fix (#293): كان يُحسَب هنا من tp_pct/sl_pct (المبنية على pro_tp
     # "الظل" الداخلي) بينما الرقم المعروض فعلياً للمستخدم في "📍 مناطق الدخول
@@ -1399,6 +1403,11 @@ def _build_professional_block(
     # sl_pct الأصلي (من pro_entry) يبقى كما هو للاستخدام الداخلي (تحذيرات
     # SL/ATR وscorer)، ونضيف نسخة عرض متسقة مع entry_agg الظاهر للمستخدم
     _sl_pct_disp = abs(_entry_for_pct - pro_sl) / max(_entry_for_pct, 1e-9) * 100
+    # sl_warning_dup_fix (#310): الآن نُنجز فحص "SL ضيق" المؤجَّل باستخدام
+    # _sl_pct_disp (نفس الرقم الذي سيظهر في سطر "وقف الخسارة" لاحقاً)، بدل
+    # sl_pct القديم — يضمن تطابق كل ذكر لنسبة SL في نفس الرسالة.
+    if _sl_warning_pending and _sl_pct_disp < atr_pct * 1.5:
+        _risk_warnings.append(f"⚠️ SL ضيق ({_sl_pct_disp:.1f}%) < 1.5x ATR ({atr_pct*1.5:.1f}%) — خطر إيقاف مبكر")
     # إصلاح #8: تسمية دقيقة — "عند الدعم" فقط إذا entry_agg ≈ مستوى الدعم المعروض
     _agg_label = "عند الدعم" if (ns > 0 and abs(entry_agg - ns) / max(ns, 1e-9) < 0.005) else "سحب فني (Pullback)"
     entry_lines = [
@@ -1557,11 +1566,19 @@ def _build_professional_block(
     # لتضارب أرقام قسم "تقييم جودة الإشارة" مع جسم التحليل نفسه (R/R وThقة).
     # الإصلاح: إرجاع القيم الحقيقية صراحة كقاموس ثالث بدل الاعتماد على
     # استخراجها من النص لاحقاً.
+    # scorer_meta_consistency_fix (#309): _signal_meta كانت تُمرِّر sl_pct/
+    # tp_pct "الظل" (المبنيَّين على pro_entry الداخلي)، بينما جسم التحليل
+    # المعروض للمستخدم (بعد إصلاح #307) أصبح يعرض TP%/SL%/R/R من entry_agg.
+    # هذا يعني أن قسم "تقييم جودة الإشارة" (الذي يستهلك _signal_meta) ظل
+    # يحسب R/R من الأساس القديم فينتج رقماً مختلفاً عن المعروض في جسم
+    # التحليل — لوحظ في XMU/XSPY/XSPCX/BGB (تطابق BTC كان صدفة رياضية لأن
+    # pro_entry≈entry_agg هناك تحديداً). الإصلاح: تمرير نسخة entry_agg
+    # المتسقة مع العرض الفعلي، لضمان تطابق R/R وSL% أينما ظهرا في الرسالة.
     _signal_meta = {
-        "pro_entry": pro_entry, "pro_sl": pro_sl, "pro_tp": pro_tp,
+        "pro_entry": entry_agg, "pro_sl": pro_sl, "pro_tp": tp1_v,
         "entry_agg": entry_agg, "entry_cons": entry_cons,
         "tp1_v": tp1_v, "tp2_v": tp2_v,
-        "sl_pct": sl_pct, "tp_pct": tp_pct,
+        "sl_pct": _sl_pct_disp, "tp_pct": tp1_pct,
         "atr_pct": atr_pct, "vol_ratio": _vol_ratio,
         "confidence_pct": _conf_score, "confirmations_met": _flags_found,
         "rsi": rsi, "direction": direction, "is_x_asset": _is_x_asset,
