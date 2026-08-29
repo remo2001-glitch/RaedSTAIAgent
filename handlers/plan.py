@@ -1059,6 +1059,13 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🤖 رائد التداول الذكي",
         ]
         # plan_execute_v2: أزرار من _sym_prices_pw (بدون طلبات جديدة)
+        # sym_prices_order_fix (#321): _sym_prices_pw كان يُستخدَم هنا لكن لا
+        # يُعرَّف فعلياً إلا لاحقاً في الدالة (سطر 1302 تقريباً) — نفس فئة
+        # خلل _rsi_btc السابق (#303): استخدام متغير قبل تعريفه يُسبب
+        # NameError مضموناً في كل استدعاء يصل لهذا الفرع. الإصلاح: نبنيه هنا
+        # مباشرة من candidates (يحوي "price" لكل رمز نجح تحليله) بدل انتظار
+        # حلقة لاحقة لم تكن قد نُفِّذت بعد عند هذه النقطة.
+        _sym_prices_pw = {c["symbol"]: c.get("price", 0) for c in candidates if c.get("symbol")}
         _exec_buttons = []
         for _sym_pw in symbols[:10]:
             _p_pw = _sym_prices_pw.get(_sym_pw, 0)

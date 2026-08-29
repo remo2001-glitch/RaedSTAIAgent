@@ -1617,11 +1617,36 @@ def _split_long_message(text: str, limit: int = 3900) -> list:
 
 async def _send_long_message(msg, update, context, text: str, parse_mode=None):
     """يرسل نصاً طويلاً كعدة رسائل عند الحاجة، بدل قصّ المحتوى أو المخاطرة
-    برفض تيليجرام للرسالة الواحدة الطويلة جداً."""
+    برفض تيليجرام للرسالة الواحدة الطويلة جداً.
+
+    msg_split_markdown_fix (#320): تقسيم نص Markdown عند حدود فقرات عشوائية
+    قد يفصل كياناً (مثال: `*نص عريض*`) بين قطعتين، فيبقى نجمة واحدة غير
+    مُغلَقة في إحداهما — تيليجرام يرفض الرسالة كاملة (BadRequest: Can't
+    parse entities)، وهذا الاستثناء كان يُبتلَع بمعالج الخطأ العام في
+    /analyze فيظهر "⚠️ تعذّر التحليل العميق مؤقتاً" رغم أن التحليل نفسه
+    نجح بالكامل — هذا تراجع (regression) نتج عن إصلاح #317 نفسه. الإصلاح:
+    عند فشل الإرسال بصيغة Markdown، أعد المحاولة بدون parse_mode (نص عادي)
+    بدل فقدان الرسالة بالكامل.
+    """
     chunks = _split_long_message(text)
-    await msg.edit_text(chunks[0], parse_mode=parse_mode)
+
+    async def _safe_send(send_coro_factory, chunk):
+        try:
+            await send_coro_factory(chunk, parse_mode)
+        except Exception as _e:
+            logger.warning(f"_send_long_message: فشل بصيغة Markdown ({_e}) — إعادة المحاولة كنص عادي")
+            try:
+                await send_coro_factory(chunk, None)
+            except Exception as _e2:
+                logger.error(f"_send_long_message: فشلت حتى كنص عادي: {_e2}")
+                raise
+
+    await _safe_send(lambda c, pm: msg.edit_text(c, parse_mode=pm), chunks[0])
     for chunk in chunks[1:]:
-        await _get_message(update, context).reply_text(chunk, parse_mode=parse_mode)
+        await _safe_send(
+            lambda c, pm: _get_message(update, context).reply_text(c, parse_mode=pm),
+            chunk,
+        )
 
 
 def _eng(context):
@@ -4498,6 +4523,21 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                                  "FUNDING RATE", "OVERNIGHT",
                                                  "فيوتشر", "عقد دائم", "عقد مستمر"))
 
+        # tokenized_label_fix (#306 امتداد #322): كان تصنيف Spot/Futures هنا
+        # يعتمد فقط على تخمين كلمات مفتاحية من نص التحليل البصري (Groq) أو
+        # حتى من شارة واجهة تطبيق المنصة نفسها في لقطة الشاشة (OKX قد يعرض
+        # "Spot" على واجهة زوج مُرمَّز مُغلَّف رغم أن آلية رائد الفعلية
+        # للتداول عليه هي Futures/Perpetual حصراً بلا استثناء) — هذا أنتج
+        # "🏪 نوع السوق: ⚡ Spot" خاطئاً لـXSPY رغم القاعدة المعمارية الثابتة.
+        # الإصلاح: فحص حتمي مباشر من اسم الرمز (X-prefix) يتجاوز أي تخمين
+        # نصي، بنفس منطق tokenized_label_fix المطبَّق في /signal و/analyze.
+        _is_x_chart_early = (
+            (symbol.upper().startswith("X") and len(symbol) > 2 if symbol else False) or
+            (_chart_sym_for_warn.upper().startswith("X") and len(_chart_sym_for_warn) > 2 if _chart_sym_for_warn else False)
+        )
+        if _is_x_chart_early:
+            _chart_is_futures = True
+
         _mkt_label = "Futures/Perp" if _chart_is_futures else "Spot"
         sym_label = f" — {symbol}" if symbol else ""
         # إضافة header بمعلومات العملة (M#54)
@@ -4570,37 +4610,18 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         import re as _re_pnh
         _analysis_clean = _re_pnh.sub(r"PRICE_NOW:[\d.]+\n?", "", analysis).strip()
 
-        # chart_rr_fix: حساب R/R الفعلي من التحليل وإضافة تحذير
+        # chart_rr_fix_removed (#323): هذه الطبقة كانت "تتحقق" من R/R عبر
+        # استخراج الأرقام بـregex من نص Groq الحر — لكن الأنماط لم تُميِّز
+        # بين رقم السعر الفعلي ورقم ترقيم القائمة نفسه (مثال: "هدف 1: 790.00"
+        # — النمط [^\d]* يتوقف عند أول رقم يُقابله، فيلتقط "1" من "هدف 1:"
+        # بدل "790.00" الفعلي). النتيجة الموثَّقة: التقط "1" كسعر TP، فأنتج
+        # R/R = 39.9:1 "✅ مقبول" بينما حساب النموذج نفسه (الصحيح) كان 0.54
+        # (ضعيف) لنفس الصفقة — تناقض مالي خطير في نفس الرسالة. بما أن
+        # النموذج نفسه يعرض R/R بشكل صحيح في نص تحليله (البند 8 دائماً)،
+        # وأن استخراج الأرقام من نص حر عبر regex أثبت هشاشته المتكررة في
+        # أكثر من مسار، أُزيلت هذه الطبقة الإضافية بالكامل بدل محاولة رقعها
+        # مجدداً — لا قيمة مضافة من "تحقق" قد يُناقض النموذج برقم خاطئ.
         _chart_rr_notes = []
-        try:
-            _nums = {}
-            for _key, _pat in [
-                ("entry",  r"(?:الدخول|نقطة الدخول)[^\d]*([\d,]+\.?\d*)"),
-                ("sl",     r"(?:وقف الخسارة|stop.loss)[^\d]*([\d,]+\.?\d*)"),
-                ("tp1",    r"(?:هدف.*?الأول|TP1)[^\d]*([\d,]+\.?\d*)"),
-                ("tp2",    r"(?:هدف.*?الثاني|TP2)[^\d]*([\d,]+\.?\d*)"),
-            ]:
-                _m = _re_pnh.search(_pat, _analysis_clean, _re_pnh.IGNORECASE)
-                if _m:
-                    _nums[_key] = float(_m.group(1).replace(",",""))
-            if all(k in _nums for k in ["entry","sl","tp1"]):
-                _risk = abs(_nums["entry"] - _nums["sl"])
-                _rew1 = abs(_nums["tp1"] - _nums["entry"])
-                if _risk > 0:
-                    _rr1 = _rew1 / _risk
-                    if _rr1 < 1.0:
-                        _chart_rr_notes.append(
-                            f"⚠️ R/R الفعلي = {_rr1:.2f}:1 (TP1) — أقل من 1:1، لا حافة إحصائية")
-                    elif _rr1 < 2.0:
-                        _chart_rr_notes.append(
-                            f"⚠️ R/R = {_rr1:.1f}:1 (TP1) — دون 2:1 المثالي")
-                    if "tp2" in _nums:
-                        _rew2 = abs(_nums["tp2"] - _nums["entry"])
-                        _rr2 = _rew2 / _risk
-                        if _rr2 >= 2.0:
-                            _chart_rr_notes.append(f"✅ R/R = {_rr2:.1f}:1 (TP2) — مقبول")
-        except Exception as _rr_e:
-            logger.debug(f"chart_rr_fix: {_rr_e}")
 
         # chart_rsi_fix: تصحيح تسمية RSI6
         _analysis_clean = _re_pnh.sub(
