@@ -566,6 +566,7 @@ def _build_professional_block(
     tech_extra: dict = None,
     tier: str = "silver",        # باقة المستخدم
     is_stock: bool = False,       # هل أصل مُرمَّز؟
+    mtf_status: str = "",         # worst_case_mtf_fix: حالة تأكيد 4H الفعلية
 ) -> str:
     """
     بناء بلوك الإشارة الاحترافية — ملاحظة #33
@@ -583,7 +584,7 @@ def _build_professional_block(
         _ema50_t = float(tech.get("ema50", 0) or 0)
         ema_bearish = (price < _ema50_t) if _ema50_t > 0 else False
     except Exception:
-        ema_bearish = Falsextra
+        ema_bearish = False
     # إصلاح #809/#61(ثانوي): _vol_ratio من technicals['vol_ratio'] مباشرة —
     # getattr(signal,'vol_ratio',...) كان يُعيد دائماً 1.0 الافتراضي لأن
     # SignalResult لا يملك حقل vol_ratio على المستوى الأعلى، فكان السطر
@@ -1240,7 +1241,10 @@ def _build_professional_block(
         if _confirmed and tp1_v > 0 and tp1_v != price:
             _rr_shown = rr_real
         elif tp1_v > 0 and pro_entry > 0 and pro_sl > 0:
-            _rr_shown = abs(tp1_v - pro_entry) / max(abs(pro_entry - pro_sl), 1e-9)
+            # display_pct_consistency_fix (#307): entry_agg بدل pro_entry —
+            # نفس الأساس المستخدم الآن لعرض TP1%/TP2%/SL% للمستخدم، لضمان
+            # أن R/R المعروض يطابق حسابياً ما يراه المستخدم من الأسعار الفعلية
+            _rr_shown = abs(tp1_v - entry_agg) / max(abs(entry_agg - pro_sl), 1e-9)
         if _rr_shown is not None and 0 < _rr_shown < 2.0:
             _risk_warnings.append(f"⚠️ R/R = {_rr_shown:.1f} ضعيف (يُفضَّل ≥ 2.0)")
 
@@ -1380,10 +1384,21 @@ def _build_professional_block(
     # 4. Entry + TP (مع مراعاة #440: لا TP عند WAIT)
     # إصلاح #785: TP% من السعر الحالي للمستخدم وليس من entry
     # tp_pct_from_entry_fix: النسب من Entry الفعلي لا السعر الحالي
-    _entry_for_pct = pro_entry if pro_entry and pro_entry > 0 else price
+    # display_pct_consistency_fix (#307): كانت tp1_pct/tp2_pct/sl_pct
+    # المعروضة تُحسَب من pro_entry (متغير داخلي "ظل" غير معروض للمستخدم
+    # إطلاقاً)، بينما السعر المعروض فعلياً باسم "Entry 1 (Aggressive)" هو
+    # entry_agg — رقم مختلف تماماً (حساب منفصل). هذا يعني أن %+/- المعروضة
+    # بجانب TP1/TP2/SL لا تطابق حسابياً الفرق بين الأسعار المعروضة فعلياً
+    # للمستخدم (لوحظ في XNVDA/XQQQ/XSPY). الإصلاح: نسبة العرض تُحسَب الآن من
+    # entry_agg (السعر المعروض فعلياً) بدل pro_entry الداخلي.
+    _entry_for_pct = entry_agg if entry_agg and entry_agg > 0 else price
     tp1_pct = abs(tp1_v - _entry_for_pct) / max(_entry_for_pct, 1e-9) * 100
         # إصلاح #849: tp2_pct من السعر الحالي
     tp2_pct = abs(tp2_v - _entry_for_pct) / max(_entry_for_pct, 1e-9) * 100 if tp2_v else 0
+    # display_pct_consistency_fix (#307): نفس المبدأ لنسبة SL المعروضة —
+    # sl_pct الأصلي (من pro_entry) يبقى كما هو للاستخدام الداخلي (تحذيرات
+    # SL/ATR وscorer)، ونضيف نسخة عرض متسقة مع entry_agg الظاهر للمستخدم
+    _sl_pct_disp = abs(_entry_for_pct - pro_sl) / max(_entry_for_pct, 1e-9) * 100
     # إصلاح #8: تسمية دقيقة — "عند الدعم" فقط إذا entry_agg ≈ مستوى الدعم المعروض
     _agg_label = "عند الدعم" if (ns > 0 and abs(entry_agg - ns) / max(ns, 1e-9) < 0.005) else "سحب فني (Pullback)"
     entry_lines = [
@@ -1407,7 +1422,8 @@ def _build_professional_block(
     if _has_real_targets:
         _rr_line = f"• R/R الواقعي: 1:{rr_real}{_rr_adjusted_note}"
     elif tp1_v > 0 and pro_entry > 0 and pro_sl > 0:
-        _rr_calc = abs(tp1_v - pro_entry) / max(abs(pro_entry - pro_sl), 1e-9)
+        # display_pct_consistency_fix (#307): نفس التوحيد أعلاه
+        _rr_calc = abs(tp1_v - entry_agg) / max(abs(entry_agg - pro_sl), 1e-9)
         _rr_line = f"• R/R: {_rr_calc:.1f} — انتظر تأكيد 2/4 مؤشرات"
     else:
         _rr_line = "• R/R: يحتاج تحديد Entry/SL/TP"
@@ -1421,7 +1437,7 @@ def _build_professional_block(
         _atr_position_note = f" (المخاطرة: 0.5% = ${_portfolio*_risk_pct/100:.0f})"
 
     entry_lines.extend([
-        f"• وقف الخسارة: {_fmt_price(pro_sl)} ({sl_pct:.1f}%-)",
+        f"• وقف الخسارة: {_fmt_price(pro_sl)} ({_sl_pct_disp:.1f}%-)",
         _rr_line,
         f"• الحجم: {_pos_size_rule}{_atr_position_note}",
     ])
@@ -1437,7 +1453,18 @@ def _build_professional_block(
         f"• ⏰ Time Exit: إذا لا حركة بعد {_time_exit} → أغلق الموضع",
         # risk_quality_fix: عرض تحذيرات الجودة
         *([f"• {w}" for w in _risk_warnings] if _risk_warnings else []),
-        f"• ⚠️ Worst-Case (يحتاج تأكيد إطار أعلى): كسر {_fmt_price(wc_bd1)} → {_fmt_price(wc_bd2)} (خسارة ~{wc_loss:.1f}%)",
+        # worst_case_mtf_fix (#308): كانت "(يحتاج تأكيد إطار أعلى)" نصاً
+        # ثابتاً دائماً، حتى عندما يكون تقرير 4H الفعلي معروضاً بالفعل أسفل
+        # نفس الرسالة (✅ مؤكَّد أو ⚠️ متعارض) — تناقض زمني ظاهري لوحظ في كل
+        # اختبارات /signal (BTC، XNVDA، XQQQ، XSPY). الإصلاح: العبارة الآن
+        # تعكس حالة تأكيد 4H الفعلية الممرَّرة من cmd_signal (mtf_status).
+        (lambda _mtf: (
+            f"• ⚠️ Worst-Case (4H مؤكِّد الاتجاه بالفعل — احتمال ضعيف): كسر {_fmt_price(wc_bd1)} → {_fmt_price(wc_bd2)} (خسارة ~{wc_loss:.1f}%)"
+            if "✅" in _mtf else
+            f"• ⚠️ Worst-Case (4H يعارض حالياً — احتمال أعلى من المعتاد): كسر {_fmt_price(wc_bd1)} → {_fmt_price(wc_bd2)} (خسارة ~{wc_loss:.1f}%)"
+            if "تعارض" in _mtf else
+            f"• ⚠️ Worst-Case (يحتاج تأكيد إطار أعلى): كسر {_fmt_price(wc_bd1)} → {_fmt_price(wc_bd2)} (خسارة ~{wc_loss:.1f}%)"
+        ))(mtf_status),
     ])
 
     # signal_logic_fix: سيناريوهات صاعد/هابط/إلغاء (محمية بـ try/except)
@@ -1521,7 +1548,26 @@ def _build_professional_block(
         f"{'☑' if _fund_pct < -0.01 else '□'} Funding Rate مناسب",
     ])
 
-    return "\n".join(parts), _free_warning
+    # scorer_real_values_fix (#305): كانت القيم الرقمية الحقيقية (pro_entry،
+    # pro_sl، tp1_v، sl_pct، tp_pct، _conf_score، _flags_found...) محبوسة في
+    # النطاق المحلي لهذه الدالة، فكان استدعاء signal_scorer في /analyze
+    # مضطراً لاستخراجها عبر regex من النص المُنسَّق النهائي + محاولات
+    # locals().get() تخمينية تفشل صامتاً وتُرجِع قيماً افتراضية وهمية (مثال:
+    # ثقة 40% ثابتة بغض النظر عن الثقة الفعلية) — هذا هو السبب المباشر
+    # لتضارب أرقام قسم "تقييم جودة الإشارة" مع جسم التحليل نفسه (R/R وThقة).
+    # الإصلاح: إرجاع القيم الحقيقية صراحة كقاموس ثالث بدل الاعتماد على
+    # استخراجها من النص لاحقاً.
+    _signal_meta = {
+        "pro_entry": pro_entry, "pro_sl": pro_sl, "pro_tp": pro_tp,
+        "entry_agg": entry_agg, "entry_cons": entry_cons,
+        "tp1_v": tp1_v, "tp2_v": tp2_v,
+        "sl_pct": sl_pct, "tp_pct": tp_pct,
+        "atr_pct": atr_pct, "vol_ratio": _vol_ratio,
+        "confidence_pct": _conf_score, "confirmations_met": _flags_found,
+        "rsi": rsi, "direction": direction, "is_x_asset": _is_x_asset,
+        "confirmed": _confirmed, "rr_real": rr_real if "rr_real" in dir() else None,
+    }
+    return "\n".join(parts), _free_warning, _signal_meta
 
 DEFAULT_SYMBOLS = ["BTC", "ETH", "BNB", "SOL"]
 
@@ -2595,11 +2641,12 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         fib        = _calc_fibonacci(candles)
         # إصلاح #241-A: تمرير is_perp_asset لإخفاء TVL/Whale للأصول غير الرقمية
         _sig_tech_extra = {"is_perp_asset": _is_perp_sig} if _is_perp_sig else {}
-        pro_block, _free_warning  = _build_professional_block(
+        pro_block, _free_warning, _sig_meta  = _build_professional_block(
             symbol, price, signal, regime, candles, rsi, atr_pct, fib,
             tech_extra=_sig_tech_extra,
             tier=tier2,
-            is_stock=_is_perp_sig)
+            is_stock=_is_perp_sig,
+            mtf_status=_mtf_confirm if "_mtf_confirm" in dir() else "")
         fib_lines  = _fmt_fib_lines(fib, price)
 
         # حذف تقييم المخاطر عند وجود Professional Block (M#51)
@@ -2727,33 +2774,51 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _scorer_footer = ""
         if _SCORER_ENABLED:
             try:
-                # ema_bearish_fix: ema_bearish قد لا يكون مُعرَّفاً في cmd_signal
+                # scorer_real_values_fix (#305): كان هذا الكود يستخدم أسماء
+                # متغيرات (pro_sl, pro_entry, sl_pct, tp_pct, vol_ratio,
+                # _conf_score, _flags_found, _is_x_asset, _mp) غير معرَّفة
+                # إطلاقاً في نطاق cmd_signal (هي محلية لدالة منفصلة تماماً
+                # _build_professional_block) — فكان يفشل بـ NameError في كل
+                # مرة، ويُبتلَع صامتاً عبر except أدناه، فلا يظهر قسم "تقييم
+                # جودة الإشارة" في /signal إطلاقاً رغم وجود الميزة في الكود.
+                # الإصلاح: نستخدم الآن _sig_meta المُعاد فعلياً من
+                # _build_professional_block (القيم الحقيقية المعروضة للمستخدم).
+                _sm_sig = _sig_meta or {}
+                _pro_entry_sig = _sm_sig.get("pro_entry", price)
+                _pro_sl_sig    = _sm_sig.get("pro_sl", 0)
+                _pro_tp_sig    = _sm_sig.get("pro_tp", 0)
+                _sl_pct_sig    = _sm_sig.get("sl_pct", 0)
+                _tp_pct_sig    = _sm_sig.get("tp_pct", 0)
+                _vol_ratio_sig = _sm_sig.get("vol_ratio", 1.0)
+                _conf_pct_sig  = _sm_sig.get("confidence_pct", round(signal.confidence * 100))
+                _confirm_sig   = _sm_sig.get("confirmations_met", 0)
+                _is_x_sig_meta = _sm_sig.get("is_x_asset", False)
                 _sig_ema_bearish = False
                 try:
-                    _sig_ema_bearish = price < pro_entry * 0.98  # تقريب آمن
+                    _sig_ema_bearish = price < _pro_entry_sig * 0.98  # تقريب آمن
                 except Exception:
                     pass
                 _si = build_signal_input(
                     symbol       = symbol,
                     price        = price,
-                    pro_sl       = pro_sl,
-                    pro_tp       = pro_tp if pro_tp and pro_tp > 0 else 0,
-                    pro_entry    = pro_entry,
-                    sl_pct       = sl_pct,
-                    tp_pct       = tp_pct,
+                    pro_sl       = _pro_sl_sig,
+                    pro_tp       = _pro_tp_sig if _pro_tp_sig and _pro_tp_sig > 0 else 0,
+                    pro_entry    = _pro_entry_sig,
+                    sl_pct       = _sl_pct_sig,
+                    tp_pct       = _tp_pct_sig,
                     atr_pct      = atr_pct,
-                    vol_ratio    = vol_ratio,
-                    confidence   = _conf_score / 100,
-                    confirmations= _flags_found,
-                    is_synthetic = _is_x_asset,
+                    vol_ratio    = _vol_ratio_sig,
+                    confidence   = _conf_pct_sig / 100,
+                    confirmations= _confirm_sig,
+                    is_synthetic = _is_x_sig_meta,
                     market_open  = not bool(_nyse_warn_sig),
                     rsi          = rsi,
                     has_build_error = False,
-                    trend_contradiction = _sig_ema_bearish and _mp.lower() == "markup",
-                    asset_class  = ("synthetic_weak" if _is_x_asset and vol_ratio < 0.5
-                                   else "synthetic_ok" if _is_x_asset
+                    trend_contradiction = _sig_ema_bearish,
+                    asset_class  = ("synthetic_weak" if _is_x_sig_meta and _vol_ratio_sig < 0.5
+                                   else "synthetic_ok" if _is_x_sig_meta
                                    else "spot_liquid"),
-                    has_tp       = pro_tp > 0,
+                    has_tp       = _pro_tp_sig > 0,
                 )
                 _score_result = evaluate_signal(_si)
                 _scorer_header = f"\n{_score_result['header']}\n"
@@ -2773,7 +2838,12 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # تطوير #209: ملاحظة Perp للأصول المُرمَّزة
         if _is_perp_sig:
             # TK_label_fix: اعرض نوع السوق الصحيح
-            _mkt_label_display = "Spot" if not _use_futures else "Perpetual"
+            # tokenized_label_fix (#306): كل الأصول المُرمَّزة (X-prefix) على
+            # OKX/Bitget/MEXC موجودة حصراً في Futures/Perpetual — لا يوجد
+            # Spot لها إطلاقاً (قاعدة معمارية ثابتة متفق عليها). كان الشرط
+            # يعتمد خطأً على _use_futures (خيار المستخدم لأزواج الكريبتو
+            # العادية) فيُظهر "Spot" أحياناً رغم أن الأصل Perpetual دائماً.
+            _mkt_label_display = "Perpetual"
             full_text += f"\n\n📌 *{_display_symbol}* — أصل مُرمَّز ({_mkt_label_display}) على OKX"
             # T25b_fix: تحذير Synthetic في /signal
             _is_x_sig = _display_symbol.upper().startswith("X") and len(_display_symbol) > 2
@@ -3952,7 +4022,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         # analyze_crash_fix: try/except حول build_professional_block
         try:
-            pro_block_a, _ = _build_professional_block(
+            pro_block_a, _, _sig_meta_an = _build_professional_block(
                 symbol, price, _sig_a, _reg_a, candles, rsi, _atr_a, fib_a,
                 tech_extra={"is_perp_asset": _is_perp_an} if _is_perp_an else {},
                 tier=tier_an,
@@ -3960,6 +4030,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as _pb_err:
             logger.error(f"build_professional_block CRASH [{type(_pb_err).__name__}]: {_pb_err}", exc_info=True)
             pro_block_a = f"⚠️ تعذّر بناء التحليل التفصيلي: {type(_pb_err).__name__}: {str(_pb_err)[:80]}"
+            _sig_meta_an = {}
         fib_lines_a = _fmt_fib_lines(fib_a, price)
 
         # NYSE_hours_fix: تنبيه ساعات السوق في cmd_analyze
@@ -4017,7 +4088,9 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # إصلاح #250-B: "📌 أصل مُرمَّز" في /analyze كما في /signal
         if _is_perp_an:
             # TK_label_fix: اعرض نوع السوق الصحيح
-            _mkt_label_an_display = "Spot" if not _use_futures_an else "Perpetual"
+            # tokenized_label_fix (#306): نفس الإصلاح — الأصول المُرمَّزة
+            # Perpetual حصراً، لا Spot أبداً
+            _mkt_label_an_display = "Perpetual"
             parts.append(f"📌 {_display_symbol_an} — أصل مُرمَّز ({_mkt_label_an_display}) على OKX")
         # T25_fix: تحذير Synthetic في /analyze
         _is_x_an = _display_symbol_an.upper().startswith("X") and len(_display_symbol_an) > 2
@@ -4045,27 +4118,28 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         full = _clean_md("\n".join(parts))
 
         # signal_scorer: تقييم جودة التحليل في /analyze
+        # scorer_real_values_fix (#305): الكود السابق كان يستخرج SL/TP/Entry
+        # عبر regex من نص التقرير المُنسَّق نهائياً (عرضة لمطابقة رقم خاطئ)،
+        # ويُخمِّن أسماء متغيرات الثقة/الحجم/التأكيدات عبر locals().get() التي
+        # تفشل صامتاً وتُرجِع قيماً افتراضية وهمية ثابتة (مثال: ثقة 40% دائماً
+        # بغض النظر عن الثقة الفعلية، وتأكيدات=0 دائماً) — هذا هو السبب
+        # المباشر لتضارب "تقييم جودة الإشارة" مع جسم التحليل نفسه، ولإمكانية
+        # ظهور PASS رغم قرار [WAIT] الفعلي. الإصلاح: استخدام _sig_meta_an
+        # المُعاد فعلياً من _build_professional_block (نفس القيم المعروضة).
         if _SCORER_ENABLED:
             try:
                 _is_x_an = symbol.upper().startswith("X") and len(symbol) > 2
                 _has_err_an = "NameError" in full or "تعذّر بناء التحليل" in full
-                # استخراج pro_sl/pro_tp/pro_entry من full text إذا لم تكن محددة
-                import re as _re_sc
-                def _extract_price(pattern, text, default=0.0):
-                    m = _re_sc.search(pattern, text)
-                    if m:
-                        try: return float(m.group(1).replace(",",""))
-                        except: pass
-                    return default
-                _an_sl  = _extract_price(r"وقف الخسارة[^\d]*([\d,]+\.?\d*)", full, 0)
-                _an_tp  = _extract_price(r"TP1[^\d]*([\d,]+\.?\d*)", full, 0)
-                _an_ent = _extract_price(r"Entry 1[^\d]*([\d,]+\.?\d*)", full, price)
-                _an_sl_pct  = abs(price - _an_sl) / price * 100 if _an_sl > 0 else 0
-                _an_tp_pct  = abs(_an_tp - _an_ent) / _an_ent * 100 if _an_tp > 0 and _an_ent > 0 else 0
-                # قيم المؤشرات
-                _an_atr  = getattr(locals().get("_atr_an") or locals().get("atr_pct"), "__float__", lambda: 2.0)()
-                _an_conf = getattr(locals().get("_conf_score_a") or locals().get("_conf_an"), "__float__", lambda: 40.0)()
-                _an_vol  = getattr(locals().get("_vol_ratio_an") or locals().get("vol_ratio"), "__float__", lambda: 1.0)()
+                _sm_an = _sig_meta_an or {}
+                _an_ent = _sm_an.get("pro_entry", price)
+                _an_sl  = _sm_an.get("pro_sl", 0)
+                _an_tp  = _sm_an.get("pro_tp", 0)
+                _an_sl_pct = _sm_an.get("sl_pct", 0)
+                _an_tp_pct = _sm_an.get("tp_pct", 0)
+                _an_atr  = _sm_an.get("atr_pct", _atr_a if "_atr_a" in dir() else 2.0)
+                _an_conf = _sm_an.get("confidence_pct", round(_sig_a.confidence * 100) if "_sig_a" in dir() else 40.0)
+                _an_vol  = _sm_an.get("vol_ratio", 1.0)
+                _an_confirm = _sm_an.get("confirmations_met", 0)
                 _an_conf_ok = _an_conf / 100 if _an_conf > 1 else _an_conf
                 _si_an = build_signal_input(
                     symbol=symbol, price=price,
@@ -4074,7 +4148,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     atr_pct=max(_an_atr, 0.1),
                     vol_ratio=_an_vol,
                     confidence=_an_conf_ok,
-                    confirmations=_flags_found if "_flags_found" in dir() else 0,
+                    confirmations=_an_confirm,
                     is_synthetic=_is_x_an,
                     market_open=not bool(_nyse_warn_an) if "_nyse_warn_an" in dir() else True,
                     rsi=rsi if "rsi" in dir() else 50,

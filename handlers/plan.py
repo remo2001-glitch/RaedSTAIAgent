@@ -830,6 +830,15 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     logger.debug(f"plan_month {sym} fallback failed: {_fe}")
 
         ev_mult, ev_reason = engine.event_risk.get_exposure_multiplier()
+
+        # rsi_btc_order_fix (#303): _rsi_btc كان يُستخدَم في بناء "lines" أدناه
+        # (نص وصف السوق) قبل تعريفه فعلياً — كان تعريفه يقع لاحقاً في الملف
+        # (بعد allocation)، مما يُسبِّب UnboundLocalError دائماً عند دخول هذا
+        # المسار (لأن التعريف اللاحق يجعل المتغير محلياً للدالة كاملة، فالسطر
+        # المبكر يحاول قراءته قبل أي تعيين). الإصلاح: حساب _rsi_btc هنا الآن،
+        # قبل أول استخدام له في "lines".
+        _rsi_btc = float((regime.metrics or {}).get("rsi", 50) or 50)
+
         # إصلاح #12: قيمة المحفظة الفعلية للمستخدم بدلاً من القيمة الثابتة
         from core.state_manager import state_manager as _sm_pm
         from core.virtual_wallet import VirtualWallet as _VW_pm
@@ -918,7 +927,7 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _fg_now    = fear_val
         # إصلاح #1072: لا "محقق ✅" — نص وصفي فقط
         _fg_label  = f"Fear = {_fg_now} < 25 ✓" if _fg_now < 25 else f"حالياً {_fg_now} — انتظر < 25"
-        _rsi_btc   = float((regime.metrics or {}).get("rsi", 50) or 50)
+        # rsi_btc_order_fix (#303): _rsi_btc أصبح مُعرَّفاً مسبقاً أعلى الدالة
         _rsi_label = f"RSI = {_rsi_btc:.0f} > 30 ✓" if _rsi_btc > 30 else f"حالياً {_rsi_btc:.0f} — انتظر > 30"
 
         # قراءة قرار allocation الفعلي
