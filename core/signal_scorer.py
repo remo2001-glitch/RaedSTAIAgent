@@ -289,6 +289,19 @@ def evaluate_signal(s: SignalInput) -> dict:
     total = max(0, min(100, total))
     verdict = _verdict_label(total)
 
+    # fin_gate_confirmations_fix (#304): تأكيدات <2/4 تعني عملياً 0% حجم
+    # مركز في كل مكان آخر بالنظام (قاعدة رحال الثابتة: "0/4 تأكيدات → 0%
+    # حجم بغض النظر عن درجة الثقة") — فلا يجوز أن يخرج الحكم "PASS" أو
+    # "CONDITIONAL" (نصائح "يمكن الدخول"/"مقبولة") من درجة رقمية بمعزل عن
+    # هذه القاعدة، بينما محرك التحليل نفسه يمنع الدخول تماماً. سبق ضبط هذا
+    # سابقاً فقط كخصم نقاط (سطر "ز" أعلاه) دون تقييد الحكم النهائي فعلياً.
+    if s.confirmations_met < 2 and verdict in ("PASS", "CONDITIONAL"):
+        reasons.append(
+            f"ح: تأكيدات {s.confirmations_met}/4 دون الحد الأدنى (2) — "
+            "الحكم مُقيَّد لـWATCH ONLY رغم الدرجة الرقمية (قاعدة 0% حجم)"
+        )
+        verdict = "WATCH ONLY"
+
     # تعديل خاص: RSI في ذروة مع WAIT → لا يُخفَّض الحكم
     overbought_note = ""
     if s.is_overbought or s.is_oversold:
