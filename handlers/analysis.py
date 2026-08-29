@@ -2915,12 +2915,15 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # تطوير #209: ملاحظة Perp للأصول المُرمَّزة
         if _is_perp_sig:
             # TK_label_fix: اعرض نوع السوق الصحيح
-            # tokenized_label_fix (#306): كل الأصول المُرمَّزة (X-prefix) على
-            # OKX/Bitget/MEXC موجودة حصراً في Futures/Perpetual — لا يوجد
-            # Spot لها إطلاقاً (قاعدة معمارية ثابتة متفق عليها). كان الشرط
-            # يعتمد خطأً على _use_futures (خيار المستخدم لأزواج الكريبتو
-            # العادية) فيُظهر "Spot" أحياناً رغم أن الأصل Perpetual دائماً.
-            _mkt_label_display = "Perpetual"
+            # tokenized_label_fix (#306) — تصحيح جذري (#330) بناءً على توضيح
+            # صريح: الافتراضي لكل الأصول المُرمَّزة هو التداول الفوري
+            # (Spot) ما لم يطلب المستخدم صراحةً خلاف ذلك (Futures). الإصلاح
+            # السابق (#306) فرض "Perpetual" دائماً بناءً على فهم خاطئ سابق —
+            # تبيَّن أن OKX يُدرِج فعلاً أصولاً مُرمَّزة كثيرة على Spot
+            # (مؤكَّد من check_spot_available ومن لقطات شاشة فعلية)، والقرار
+            # الصحيح هو احترام اختيار المستخدم الفعلي (_use_futures) بدل
+            # افتراض ثابت خاطئ.
+            _mkt_label_display = "Perpetual" if _use_futures else "Spot"
             full_text += f"\n\n📌 *{_display_symbol}* — أصل مُرمَّز ({_mkt_label_display}) على OKX"
             # T25b_fix: تحذير Synthetic في /signal
             _is_x_sig = _display_symbol.upper().startswith("X") and len(_display_symbol) > 2
@@ -4170,9 +4173,9 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # إصلاح #250-B: "📌 أصل مُرمَّز" في /analyze كما في /signal
         if _is_perp_an:
             # TK_label_fix: اعرض نوع السوق الصحيح
-            # tokenized_label_fix (#306): نفس الإصلاح — الأصول المُرمَّزة
-            # Perpetual حصراً، لا Spot أبداً
-            _mkt_label_an_display = "Perpetual"
+            # tokenized_label_fix (#306) — تصحيح جذري (#330): الافتراضي
+            # Spot ما لم يطلب المستخدم Futures صراحة (نفس تصحيح /signal)
+            _mkt_label_an_display = "Perpetual" if _use_futures_an else "Spot"
             parts.append(f"📌 {_display_symbol_an} — أصل مُرمَّز ({_mkt_label_an_display}) على OKX")
         # T25_fix: تحذير Synthetic في /analyze
         _is_x_an = _display_symbol_an.upper().startswith("X") and len(_display_symbol_an) > 2
@@ -4440,7 +4443,7 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _pn_str = analysis[_pn_idx+len(_pn_marker):_pn_end].strip()
                 try:
                     _v = float(_pn_str.replace(",", "").replace("$", ""))
-                    if _v > 0.1:
+                    if _v > 0:  # price_floor_fix (#325): 0.1 كان يرفض أسعاراً حقيقية منخفضة (مثال: XPL=$0.08665)
                         _current_px = _v
                 except Exception:
                     pass
@@ -4453,7 +4456,7 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if _ce < 0: _ce = _ci + 25
                     try:
                         _v = float(analysis[_ci+len(_cpm):_ce].strip().replace(",",""))
-                        if _v > 0.1:
+                        if _v > 0:  # price_floor_fix (#325): 0.1 كان يرفض أسعاراً حقيقية منخفضة (مثال: XPL=$0.08665)
                             _current_px = _v
                     except Exception:
                         pass
@@ -4465,11 +4468,18 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         if _col6 >= 0:
                             _after6 = _line6[_col6+1:].strip()
                             import re as _re_6
-                            _m6 = _re_6.search(r"(\d{2,}(?:\.\d+)?)", _after6)
+                            # price_regex_leading_zero_fix (#324): \d{2,} كان
+                            # يتطلب رقمين متتاليين على الأقل قبل أي نقطة
+                            # عشرية، فيفشل مع أسعار تبدأ برقم واحد قبل النقطة
+                            # (مثال: "0.08850") — يتجاهل "0." ويلتقط "08850"
+                            # فقط، فيتحول عبر float() إلى 8850.0 بدل 0.08850
+                            # (خطأ ×100,000 موثَّق فعلياً في XPL). الإصلاح:
+                            # \d+ (رقم واحد أو أكثر) بدل \d{2,}.
+                            _m6 = _re_6.search(r"(\d+(?:\.\d+)?)", _after6)
                             if _m6:
                                 try:
                                     _v = float(_m6.group(1).replace(",",""))
-                                    if _v > 0.1:
+                                    if _v > 0:  # price_floor_fix (#325): 0.1 كان يرفض أسعاراً حقيقية منخفضة (مثال: XPL=$0.08665)
                                         _current_px = _v
                                 except Exception:
                                     pass
@@ -4523,22 +4533,12 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                                  "FUNDING RATE", "OVERNIGHT",
                                                  "فيوتشر", "عقد دائم", "عقد مستمر"))
 
-        # tokenized_label_fix (#306 امتداد #322): كان تصنيف Spot/Futures هنا
-        # يعتمد فقط على تخمين كلمات مفتاحية من نص التحليل البصري (Groq) أو
-        # حتى من شارة واجهة تطبيق المنصة نفسها في لقطة الشاشة (OKX قد يعرض
-        # "Spot" على واجهة زوج مُرمَّز مُغلَّف رغم أن آلية رائد الفعلية
-        # للتداول عليه هي Futures/Perpetual حصراً بلا استثناء) — هذا أنتج
-        # "🏪 نوع السوق: ⚡ Spot" خاطئاً لـXSPY رغم القاعدة المعمارية الثابتة.
-        # الإصلاح: فحص حتمي مباشر من اسم الرمز (X-prefix) يتجاوز أي تخمين
-        # نصي، بنفس منطق tokenized_label_fix المطبَّق في /signal و/analyze.
-        _is_x_chart_early = (
-            (symbol.upper().startswith("X") and len(symbol) > 2 if symbol else False) or
-            (_chart_sym_for_warn.upper().startswith("X") and len(_chart_sym_for_warn) > 2 if _chart_sym_for_warn else False)
-        )
-        if _is_x_chart_early:
-            _chart_is_futures = True
-
-        _mkt_label = "Futures/Perp" if _chart_is_futures else "Spot"
+        # tokenized_label_fix (#306/#322) — تصحيح جذري (#330): تبيَّن أن
+        # الافتراضي الصحيح لكل الأصول المُرمَّزة هو Spot ما لم يطلب
+        # المستخدم Futures صراحة — فرض "Futures/Perp" دائماً كان خطأً
+        # (يناقض لقطات شاشة فعلية تُظهر "Spot" حقيقياً على OKX لهذه
+        # الأصول). أُزيل الفرض القسري؛ نعتمد الآن على الكشف النصي من
+        # تحليل الشارت نفسه (يعكس ما تعرضه المنصة فعلياً في اللقطة).
         sym_label = f" — {symbol}" if symbol else ""
         # إضافة header بمعلومات العملة (M#54)
         _sym_label = f" — {symbol}" if symbol else ""

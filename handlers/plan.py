@@ -101,7 +101,10 @@ def _get_message_p(update, context=None):
 async def callback_plan_exec(update, context):
     """
     plan_execute_v2: تنفيذ صفقة من الخطة عبر /execute مباشرة
-    صيغة: plan_exec:{symbol}:{price}
+    صيغة: plan_exec:{symbol}:{price}:{side}
+    exec_button_signal_gate_fix (#328): أضيف {side} (buy/sell) ليعكس اتجاه
+    الإشارة الفعلي بدل افتراض "buy" ثابتاً دائماً — مع دعم الصيغة القديمة
+    (3 أجزاء بدون side) كـfallback آمن لأزرار قديمة محتملة.
     """
     query   = update.callback_query
     await query.answer()
@@ -115,6 +118,7 @@ async def callback_plan_exec(update, context):
         price = float(parts[2])
     except ValueError:
         await query.edit_message_text("❌ سعر غير صالح"); return
+    side = parts[3].lower() if len(parts) > 3 and parts[3].lower() in ("buy", "sell") else "buy"
 
     engine = context.bot_data.get("raed_engine")
     if not engine:
@@ -122,7 +126,14 @@ async def callback_plan_exec(update, context):
 
     # plan_execute_v2: إعداد context.args كما يتوقعه cmd_execute
     # ثم إرسال رسالة جديدة تحاكي /execute
-    context.args = [symbol, "buy", "0"]
+    # plan_exec_zero_amount_fix (#327): كان يُمرَّر "0" كمبلغ صراحة، وliteral
+    # "0" — وليس غياب المبلغ — فكان cmd_execute (الذي يستخدم القيمة
+    # الافتراضية 500.0 فقط عند غياب المتغيّر كلياً) يأخذها حرفياً كحجم
+    # صفري، منتجاً "الحجم: $0.00" ثم فشل التنفيذ بالكامل. لا يوجد أيضاً أي
+    # خطوة تسأل المستخدم عن المبلغ في هذا المسار (بعكس توقع طبيعي). الإصلاح
+    # الفوري: عدم تمرير مبلغ إطلاقاً بدل "0"، بحيث يُفعَّل نفس المسار
+    # الافتراضي الآمن المُستخدَم أصلاً عند تنفيذ /execute يدوياً بدون مبلغ.
+    context.args = [symbol, side]
     context.user_data["_plan_exec_price"] = price
     context.user_data["_from_plan"] = True
 
@@ -753,12 +764,19 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # إصلاح #280/#287: معالجة أوسع — microstructure اختيارية
         candidates = []
+        _spot_unavailable_syms = set()  # planmonth_spot_skip_visibility_fix (#326)
         for i, sym in enumerate(symbols):
             # TK5_fix: تحقق من توفر الأصل في Spot في plan_month
             if not _use_futures_pm:  # إصلاح: كان _use_futures_pw خطأ
                 try:
                     _sp_chk = await engine.data_layer.check_spot_available(sym)
                     if not _sp_chk.get("available", True):
+                        # planmonth_spot_skip_visibility_fix (#326): كان هذا
+                        # التخطي صامتاً تماماً — الرمز يظهر لاحقاً بالسعر فقط
+                        # بدون إشارة/ثقة دون أي تفسير، فيبدو وكأنه خلل بيانات
+                        # (لوحظ في XSPY/XSPCX/XQQQ). نسجّله الآن لعرض سبب
+                        # واضح للمستخدم بدل صمت غامض.
+                        _spot_unavailable_syms.add(sym)
                         continue  # تجاهل الأصل غير المتاح في Spot
                 except Exception:
                     pass
@@ -921,6 +939,10 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 line += f" | {dir_ar} | ثقة: {conf:.0%}{conf_warn}"
                 if _t4:
                     line += f" | {_t4}"
+            elif sym_p in _spot_unavailable_syms:
+                # planmonth_spot_skip_visibility_fix (#326): سبب واضح بدل
+                # صمت يبدو كخلل بيانات
+                line += " | ⚠️ غير متاح في Spot — جرّب خطة Futures لتحليله"
             # تطوير #188 (Phase 2): فقرة الزوج المُكثَّفة إن وُجدت
             _res_p = _pair_resolutions.get(sym_p)
             if _res_p:
@@ -1065,15 +1087,31 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # NameError مضموناً في كل استدعاء يصل لهذا الفرع. الإصلاح: نبنيه هنا
         # مباشرة من candidates (يحوي "price" لكل رمز نجح تحليله) بدل انتظار
         # حلقة لاحقة لم تكن قد نُفِّذت بعد عند هذه النقطة.
+        # exec_button_signal_gate_fix (#328): كانت الأزرار تظهر لأي رمز
+        # بسعر > 0 بغض النظر عن الإشارة — حتى للرموز "⚪ انتظار" التي يقول
+        # النظام نفسه صراحة عدم الدخول عليها بعد (قاعدة 0% حجم عند عدم
+        # اكتمال التأكيدات) — يدعو المستخدم لتنفيذ صفقة يوصي النظام بتجنبها.
+        # كما كان اتجاه التنفيذ الفعلي "buy" ثابتاً دائماً بصرف النظر عن
+        # اتجاه الإشارة الحقيقي (قد تكون "sell"). الإصلاح: عرض الزر فقط
+        # للرموز ذات إشارة فعلية (long/short) وثقة فوق حد الدخول، وتشفير
+        # الاتجاه الصحيح في بيانات الزر بدل افتراض "buy" دائماً.
+        _tier_pm_exec = _sm.get_tier(update.effective_user.id) if update.effective_user else "silver"
+        _t_entry_exec = _TIER_CONF_PLAN.get(_tier_pm_exec, 55) / 100
         _sym_prices_pw = {c["symbol"]: c.get("price", 0) for c in candidates if c.get("symbol")}
+        _sym_signal_pw = {
+            c["symbol"]: (c.get("direction", "neutral"), float(c.get("confidence") or 0))
+            for c in candidates if c.get("symbol")
+        }
         _exec_buttons = []
         for _sym_pw in symbols[:10]:
             _p_pw = _sym_prices_pw.get(_sym_pw, 0)
-            if _p_pw > 0:
+            _dir_pw, _conf_pw = _sym_signal_pw.get(_sym_pw, ("neutral", 0.0))
+            if _p_pw > 0 and _dir_pw in ("long", "short") and _conf_pw >= _t_entry_exec:
+                _side_pw = "buy" if _dir_pw == "long" else "sell"
                 _exec_buttons.append([
                     InlineKeyboardButton(
-                        f"⚡ تنفيذ {_sym_pw}",
-                        callback_data=f"plan_exec:{_sym_pw}:{_p_pw:.4f}"
+                        f"⚡ تنفيذ {_sym_pw} ({'شراء' if _side_pw == 'buy' else 'بيع'})",
+                        callback_data=f"plan_exec:{_sym_pw}:{_p_pw:.4f}:{_side_pw}"
                     )
                 ])
         _exec_buttons.append([
@@ -1307,6 +1345,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # ── 3. أسعار لجميع العملات — متوازية ─────────────────
         # plan_exec_price_fix: نحتفظ بالأسعار لأزرار التنفيذ
         _sym_prices_pw = {}
+        _sym_signal_pw_week = {}  # planweek_exec_buttons_fix (#329)
         price_results = await asyncio.gather(
             *[engine.data_layer.get_price_perp(sym)
                if sym.upper() in {"SPCX","COIN","AAPL","NVDA","TSLA","MSFT","AMZN","GOOGL","META","MSTR","OPENAI","ANTHROPIC","AMD","OKB"}
@@ -1382,6 +1421,10 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 price_d  = price_results[i] if not isinstance(price_results[i], Exception) else None
                 price    = float((price_d or {}).get("price") or 0)
                 if price > 0: _sym_prices_pw[sym] = price
+                # planweek_exec_buttons_fix (#329): تخزين الإشارة/الثقة لكل
+                # رمز لإضافة أزرار تنفيذ مُبوَّبة بشكل صحيح لاحقاً (كانت
+                # ميزة موجودة في /planmonth فقط وغائبة تماماً من /planweek)
+                _sym_signal_pw_week[sym] = (signal.direction, signal.confidence)
 
                 dir_ar = ("🟢 شراء" if signal.direction == "long"
                           else "🔴 بيع" if signal.direction == "short"
@@ -1739,10 +1782,30 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
 
         # T3: أزرار تفاعل
-        _fb_kb = InlineKeyboardMarkup([[
+        # planweek_exec_buttons_fix (#329): إضافة أزرار تنفيذ مُبوَّبة —
+        # نفس منطق exec_button_signal_gate_fix (#328) في /planmonth: فقط
+        # للرموز ذات إشارة فعلية (long/short) وثقة فوق حد الدخول، مع تشفير
+        # الاتجاه الصحيح بدل افتراض "buy" ثابتاً — كانت هذه الميزة غائبة
+        # تماماً من /planweek رغم وجودها في /planmonth.
+        _tier_pw_exec = _sm.get_tier(update.effective_user.id) if update.effective_user else "silver"
+        _t_entry_pw_exec = _TIER_CONF_PLAN.get(_tier_pw_exec, 55) / 100
+        _pw_exec_buttons = []
+        for _sym_pw_e in symbols[:10]:
+            _p_pw_e = _sym_prices_pw.get(_sym_pw_e, 0)
+            _dir_pw_e, _conf_pw_e = _sym_signal_pw_week.get(_sym_pw_e, ("neutral", 0.0))
+            if _p_pw_e > 0 and _dir_pw_e in ("long", "short") and _conf_pw_e >= _t_entry_pw_exec:
+                _side_pw_e = "buy" if _dir_pw_e == "long" else "sell"
+                _pw_exec_buttons.append([
+                    InlineKeyboardButton(
+                        f"⚡ تنفيذ {_sym_pw_e} ({'شراء' if _side_pw_e == 'buy' else 'بيع'})",
+                        callback_data=f"plan_exec:{_sym_pw_e}:{_p_pw_e:.4f}:{_side_pw_e}"
+                    )
+                ])
+        _pw_exec_buttons.append([
             InlineKeyboardButton("✅ أتفق مع الخطة", callback_data="plan_agree"),
             InlineKeyboardButton("💬 لدي ملاحظة",   callback_data="plan_comment"),
-        ]])
+        ])
+        _fb_kb = InlineKeyboardMarkup(_pw_exec_buttons)
         # auditing_agent: تدقيق /plan_week قبل الإرسال
         _pw_text = _clean("\n".join(lines))
         _pw_approved, _pw_text = audit_financial_content(_pw_text, source="plan")
