@@ -162,14 +162,25 @@ def evaluate_signal(s: SignalInput) -> dict:
         else:
             reasons.append(f"ب: EV سلبي (ثقة {s.confidence_pct:.0f}% < break-even {be:.0f}%) (-10)")
 
+        # rr_rounding_fix (#311): نفس مشكلة conf_rounding_fix (#296) — رقمان
+        # مختلفان فعلياً (مثال: 1.49 و1.51) قد يُعرضان كلاهما ".1f" كـ"1.5"،
+        # فيبدوان متناقضين نصياً حين يقعان في فرعين مختلفين من الشرط (واحد
+        # "ضعيف <1.5" والآخر "مقبول لكن دون 2:1") — لوحظ بين XSPY وXSPCX.
+        # الإصلاح: عرض منزلتين عشريتين عند التقارب من حدود 1.5 أو 2.0.
+        def _rr_fmt(v: float) -> str:
+            for _b in (1.5, 2.0):
+                if abs(round(v, 1) - _b) < 1e-9:
+                    return f"{v:.2f}"
+            return f"{v:.1f}"
+
         if s.rr_ratio >= 2.0:
             score_b += 10
         elif s.rr_ratio >= 1.5:
             score_b += 7
-            reasons.append(f"ب: R/R = {s.rr_ratio:.1f} مقبول لكن دون 2:1 (-3)")
+            reasons.append(f"ب: R/R = {_rr_fmt(s.rr_ratio)} مقبول لكن دون 2:1 (-3)")
         else:
             score_b += 3
-            reasons.append(f"ب: R/R = {s.rr_ratio:.1f} ضعيف (< 1.5) (-7)")
+            reasons.append(f"ب: R/R = {_rr_fmt(s.rr_ratio)} ضعيف (< 1.5) (-7)")
     elif s.rr_ratio is None:
         score_b += 5  # انتظر تأكيد — نقطة وسط
         reasons.append("ب: R/R غير محسوب بعد — 5/20 مؤقتاً")

@@ -218,6 +218,13 @@ def _normalize_groq_response(data: dict) -> dict:
         result["sentiment_score"] = -0.3 if result.get("sentiment","") in ("bearish","very_bearish") else 0.3 if result.get("sentiment","") in ("bullish","very_bullish") else 0.0
 
     # استخراج summary
+    # summary_map_undefined_fix (#313): summary_map لم يكن معرَّفاً إطلاقاً
+    # في أي مكان بالدالة — NameError مضمون في كل استدعاء يصل لهذا السطر
+    # (أي استجابة Groq لا تحوي "sentiment"+"sentiment_score" مباشرة تمر من
+    # هنا). هذا أثّر على أي استخدام JSON غير مطابق تماماً لشكل تحليل
+    # الأخبار، بما فيها ترجمة العناوين الدفعية (news_translate_groq_fix
+    # #300) — الاستثناء كان يُسقِط كل محاولات النماذج البديلة أيضاً.
+    summary_map = ["summary_ar", "summary", "ملخص", "الملخص", "تحليل", "analysis"]
     for k in summary_map:
         if k in data and isinstance(data[k], str) and len(data[k]) > 10:
             result["summary_ar"] = data[k]
@@ -688,12 +695,21 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
             import ssl
 
             # إصلاح #274: json_mode يتحكم في response_format
+            # groq_undefined_vars_fix (#312): الفرع else كان يشير لمتغيرات
+            # (symbol_name، _price_str) غير معرَّفة إطلاقاً في نطاق هذه
+            # الدالة (بقايا من ميزة أخرى مخصصة لتحليل الصور/الرسوم البيانية،
+            # نُسخت هنا بالخطأ) — أي استدعاء بـ json_mode=False كان يفشل
+            # فوراً بـ NameError، ويُبتلَع صامتاً في try/except المستدعي، ثم
+            # يتراجع (fallback) لمسار آخر. هذا أثّر على كل استخدامات
+            # json_mode=False في الملف، بما فيها ترجمة الأخبار الدفعية
+            # (news_translate_groq_fix #300) عبر مسار retry الداخلي في
+            # _call_groq (سطر "json_mode_fallback_fix"). الإصلاح: رسالة نظام
+            # عامة آمنة بدون أي إشارة لمتغيرات غير معرَّفة.
             sys_msg = ("أنت محلل مالي متخصص. أجب دائماً بـ JSON صحيح فقط بدون أي نص إضافي."
                        if json_mode else
-                       # T30_fix: system prompt يتضمن اسم الأصل والسعر
-                f"أنت خبير تحليل فني للأصل {symbol_name} (السعر الحالي: {_price_str}). "
-                "أجب بنص عربي احترافي مباشر بدون JSON وبدون markdown. "
-                f"ركز حصراً على {symbol_name} وأرقامه المرئية في الصورة.")
+                       "أنت محلل مالي ولغوي محترف. أجب بنص عربي احترافي مباشر "
+                       "بدون JSON وبدون تنسيق Markdown، وفق التعليمات المذكورة "
+                       "في رسالة المستخدم بالضبط.")
             req_body = {
                 "model":       model,
                 "messages":    [
@@ -747,7 +763,14 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
                 logger.info(f"✅ Groq (normalized) ({model}): sentiment={_mapped.get('sentiment')}")
                 return _mapped
             else:
-                logger.warning(f"Groq ({model}): JSON ناقص: {list(_gr.keys())}")
+                # generic_json_passthrough_fix (#313): استجابة JSON صالحة لا
+                # تُشبه شكل "تحليل أخبار" (مثال: {"translations": [...]})
+                # كانت تُسقَط بالكامل هنا (لا تُعاد للمستدعي) لأن التطبيع
+                # مصمَّم فقط لشكل الأخبار تحديداً. الآن تُعاد كما هي طالما
+                # أنها JSON صالح غير فارغ — يسمح لمستدعين آخرين (كترجمة
+                # الأخبار الدفعية) بمعالجة شكلهم الخاص من الاستجابة بأنفسهم.
+                logger.warning(f"Groq ({model}): JSON لا يُطابق شكل تحليل الأخبار — إعادته كما هو: {list(_gr.keys())}")
+                return _gr
 
         except urllib.error.HTTPError as e:
             if e.code == 429:
