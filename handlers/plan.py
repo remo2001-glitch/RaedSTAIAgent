@@ -673,7 +673,16 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # ── 4. بناء المرشحين ──────────────────────────────────
         # في scan_mode: نجلب top_coins ونفلتر أفضلها
-        if scan_mode:
+        # planmonth_asset_type_override_fix (#318): كان "if scan_mode:" هنا
+        # يُنفَّذ دائماً بغض النظر عن _asset_type_pm، فيستبدل قائمة الرموز
+        # المُعَدَّة عمداً في الأعلى (BTC/ETH/... + XSPY/XSPCX/... لخيار
+        # "خطة شاملة — رقمية + مُرمَّزة") بقائمة top_coins البحتة (كريبتو
+        # فقط من API تصنيف عام) — يُلغي اختيار المستخدم الصريح تماماً، وإذا
+        # فشل جلب top_coins (شوهد فعلياً: قائمة "العملات:" فارغة تماماً رغم
+        # عنوان يقول "10 أصل") لا يوجد أي fallback فيُترك symbols فارغة.
+        # الإصلاح: تخطي استبدال top_coins عندما اختار المستخدم صراحة
+        # "tokenized" أو "both" من القائمة — قائمته المُعَدَّة مسبقاً تبقى.
+        if scan_mode and _asset_type_pm not in ("tokenized", "both"):
             from core.state_manager import state_manager as _sm_pm
             tier      = _sm_pm.get_tier(update.effective_user.id)
             coin_lim  = {"free": 15, "silver": 35, "gold": 100,
@@ -696,6 +705,14 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     and len((c.get("symbol") or "")) <= 10
                 )
             ][:10]   # أقصى 10 لتجنب timeout   # أقصى 10 في المسح لتجنب timeout
+
+            # topcoins_empty_fallback_fix (#318): إذا فشل جلب top_coins أو
+            # رجع فارغاً (مشكلة API مؤقتة)، لا نترك symbols فارغة بصمت —
+            # هذا كان يُنتج "العملات: " فارغة تماماً و"لا توجد أصول مؤهلة"
+            # رغم عنوان الخطة الصحيح. نتراجع لقائمة كريبتو افتراضية معروفة.
+            if not symbols:
+                logger.warning("planmonth scan: top_coins فارغ — التراجع لقائمة افتراضية")
+                symbols = _def_crypto[:8]
 
             # إصلاح #254: timeout صارم لجلب OHLCV + تقليل العملات
             symbols = symbols[:8]   # أقصى 8 بدلاً من 10
@@ -927,8 +944,17 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _fg_now    = fear_val
         # إصلاح #1072: لا "محقق ✅" — نص وصفي فقط
         _fg_label  = f"Fear = {_fg_now} < 25 ✓" if _fg_now < 25 else f"حالياً {_fg_now} — انتظر < 25"
-        # rsi_btc_order_fix (#303): _rsi_btc أصبح مُعرَّفاً مسبقاً أعلى الدالة
-        _rsi_label = f"RSI = {_rsi_btc:.0f} > 30 ✓" if _rsi_btc > 30 else f"حالياً {_rsi_btc:.0f} — انتظر > 30"
+        # rsi_label_inverted_fix (#319): _rsi_label كان يفترض ثنائية فقط
+        # (RSI≤30 "انتظر الارتداد" / RSI>30 "✓ ارتد") — فعند RSI مرتفع جداً
+        # (82، ذروة شراء شديدة) كان يُعرَض "RSI = 82 > 30 ✓" وكأنه ارتداد
+        # إيجابي من ذروة بيع، بينما الواقع عكسي تماماً (ذروة شراء = خطر
+        # تصحيح، وليس فرصة تجميع). الإصلاح: تمييز حالة ذروة الشراء بنص خاص.
+        if _rsi_btc >= 70:
+            _rsi_label = f"RSI = {_rsi_btc:.0f} ذروة شراء — انتظر تصحيح تحت 60"
+        elif _rsi_btc > 30:
+            _rsi_label = f"RSI = {_rsi_btc:.0f} > 30 ✓"
+        else:
+            _rsi_label = f"حالياً {_rsi_btc:.0f} — انتظر > 30"
 
         # قراءة قرار allocation الفعلي
         _deployed    = getattr(allocation, "deployed_usd", 0) or 0
@@ -952,6 +978,8 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     # إصلاح #422/#665/#674 (M5): شروط تُفعَّل إجراءات حقيقية
                     (f"• أسبوع 1: 🟡 تجميع محدود 3-5% عند الدعم — Fear={fear_val} < 20 (خوف شديد = فرصة)"
                      if fear_val < 20
+                     else f"• أسبوع 1: احتفظ بـ 100% سيولة (${user_portfolio:,.0f}) — انتظر تصحيح RSI ({_rsi_label})"
+                     if _rsi_btc >= 70
                      else f"• أسبوع 1: احتفظ بـ 100% سيولة (${user_portfolio:,.0f}) — RSI يرتد فوق 30 ({_rsi_label})"),
                     # إصلاح N1: rsi_w قد لا يكون مُعرَّفاً في plan_month → fallback
                     (f"• أسبوع 2: 🟢 دخول تدريجي 5-10% — RSI في ذروة بيع (< 30)"
@@ -1582,13 +1610,20 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 with urllib.request.urlopen(_req_gr, context=_ctx_gr, timeout=10) as _rg:
                     _dg = _jg.loads(_rg.read())
                     _gr_events = _dg["choices"][0]["message"]["content"].strip()
+                    # think_leak_fix (#314): حماية دفاعية إضافية — نفس
+                    # الإصلاح المطبَّق في core/news.py لأي استجابة Groq نصية
+                    import re as _re_th_ev
+                    _gr_events = _re_th_ev.sub(r"<think>.*?</think>", "", _gr_events,
+                                                flags=_re_th_ev.IGNORECASE | _re_th_ev.DOTALL).strip()
                     if _gr_events and len(_gr_events) > 20:
                         events_text = _gr_events
         except Exception as _eg:
             logger.debug(f"events_groq_fix: {_eg}")
         # إصلاح تنسيق "بعد 20ساعة" → "بعد 20 ساعة"
-        events_text = re.sub(r'(بعد\s*)(\d+)(ساعة)', r'بعد  ساعة', events_text)
-        events_text = re.sub(r'(بعد\s*)(\d+)(يوم)', r'بعد  يوم', events_text)
+        # hour_number_wipe_fix (#315): كان يحذف الرقم الملتقَط (بايت تحكم
+        # \x02 فاسد بدل مرجع المجموعة \2) — يمحو عدد الساعات الفعلي
+        events_text = re.sub(r'(بعد\s*)(\d+)(ساعة)', r'\1\2 \3', events_text)
+        events_text = re.sub(r'(بعد\s*)(\d+)(يوم)', r'\1\2 \3', events_text)
         # events_filter_fix v2: فلتر متقدم للأحداث المنتهية
         try:
             from datetime import datetime as _dt_ev, timezone as _tz_ev
@@ -1621,7 +1656,14 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _rsi_pw  = float((getattr(regime,"metrics",{}) or {}).get("rsi", 50) or 50)
         _fg_pw   = fear_val
         if regime.regime.value in ("bear_trend", "distribution"):
-            _rsi_lbl  = f"حالياً {_rsi_pw:.0f} — انتظر > 30" if _rsi_pw < 30 else f"RSI = {_rsi_pw:.0f} > 30 ✓"
+            # rsi_label_inverted_fix (#319): نفس التوحيد الثلاثي (oversold/
+            # normal/overbought) بدل الشرط الثنائي المُضلِّل
+            if _rsi_pw >= 70:
+                _rsi_lbl = f"RSI = {_rsi_pw:.0f} ذروة شراء — انتظر تصحيح تحت 60"
+            elif _rsi_pw >= 30:
+                _rsi_lbl = f"RSI = {_rsi_pw:.0f} > 30 ✓"
+            else:
+                _rsi_lbl = f"حالياً {_rsi_pw:.0f} — انتظر > 30"
             _fg_lbl   = f"Fear = {_fg_pw} < 25 ✓" if _fg_pw < 25 else f"حالياً {_fg_pw} — انتظر < 25"
             _buy_names = " و".join(_buy_signals[:3]) if _buy_signals else ""
 

@@ -1589,6 +1589,41 @@ def _build_professional_block(
 DEFAULT_SYMBOLS = ["BTC", "ETH", "BNB", "SOL"]
 
 
+# msg_split_fix (#317): حد تيليجرام الفعلي للرسالة الواحدة 4096 حرف. كان
+# /analyze يقسم بقصّ خام عند حرف 4000 بالضبط (قد يقطع منتصف كلمة أو كيان
+# Markdown)، و/signal لم يكن يتحقق من الطول إطلاقاً (خطر BadRequest صامت
+# من تيليجرام لأي إشارة طويلة، يظهر للمستخدم كـ"❌ خطأ في التحليل" غامض).
+# هذه الدالة المشتركة تقسم عند حدود الفقرات (سطرين فارغين) قدر الإمكان
+# بدل القطع العشوائي، وتُستخدَم في كل مكان يُرسَل فيه تقرير طويل محتمل.
+def _split_long_message(text: str, limit: int = 3900) -> list:
+    """تقسيم نص طويل لعدة رسائل تيليجرام دون فقدان أي محتوى."""
+    if len(text) <= limit:
+        return [text]
+    chunks = []
+    remaining = text
+    while len(remaining) > limit:
+        # حاول القطع عند أقرب فاصل فقرة (سطرين فارغين) قبل الحد
+        cut = remaining.rfind("\n\n", 0, limit)
+        if cut < limit * 0.5:  # لا فاصل فقرة مناسب → جرّب سطر واحد
+            cut = remaining.rfind("\n", 0, limit)
+        if cut < limit * 0.5:  # ما زال غير مناسب → قصّ صريح كملاذ أخير
+            cut = limit
+        chunks.append(remaining[:cut].strip())
+        remaining = remaining[cut:].strip()
+    if remaining:
+        chunks.append(remaining)
+    return chunks
+
+
+async def _send_long_message(msg, update, context, text: str, parse_mode=None):
+    """يرسل نصاً طويلاً كعدة رسائل عند الحاجة، بدل قصّ المحتوى أو المخاطرة
+    برفض تيليجرام للرسالة الواحدة الطويلة جداً."""
+    chunks = _split_long_message(text)
+    await msg.edit_text(chunks[0], parse_mode=parse_mode)
+    for chunk in chunks[1:]:
+        await _get_message(update, context).reply_text(chunk, parse_mode=parse_mode)
+
+
 def _eng(context):
     return context.bot_data.get("raed_engine")
 
@@ -2888,7 +2923,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if _is_stock_sig and _STOCK_TIER_CONF.get(_tier_sig) is None:
             full_text += (f"\n\n🔒 *الأسهم المُرمَّزة — ذهبي وأعلى*"
                          f"\nقم بالترقية للوصول: /upgrade")
-        await msg.edit_text(full_text, parse_mode=ParseMode.MARKDOWN)
+        await _send_long_message(msg, update, context, full_text, parse_mode=ParseMode.MARKDOWN)
 
     except Exception as e:
         logger.error(f"cmd_signal: {e}")
@@ -3455,6 +3490,11 @@ async def cmd_outlook(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         if _r4.status == 200:
                             _d4 = await _r4.json()
                             _ot4 = _d4["choices"][0]["message"]["content"].strip()
+                            # think_leak_fix (#314): حماية دفاعية إضافية قبل
+                            # أي معالجة أخرى للنص
+                            import re as _re_th4
+                            _ot4 = _re_th4.sub(r"<think>.*?</think>", "", _ot4,
+                                                flags=_re_th4.IGNORECASE | _re_th4.DOTALL).strip()
                             # groq_clean_fix: حذف الحروف الأجنبية (CJK/فيتنامية/كورية)
                             import re as _re4
                             # احتفظ بـ: عربي + لاتيني + أرقام + علامات + مسافات + رموز emoji شائعة
@@ -4187,11 +4227,9 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not _an_approved:
             logger.warning("auditing_agent: /analyze مرفوض → fallback")
 
-        if len(full) > 4000:
-            await msg.edit_text(full[:4000], parse_mode="Markdown")
-            await _get_message(update, context).reply_text(full[4000:], parse_mode="Markdown")
-        else:
-            await msg.edit_text(full, parse_mode="Markdown")
+        # msg_split_fix (#317): تقسيم يحترم حدود الفقرات بدل قصّ خام عند
+        # حرف 4000 بالضبط (كان قد يقطع Markdown في المنتصف)
+        await _send_long_message(msg, update, context, full, parse_mode="Markdown")
 
     except Exception as e:
         logger.error(f"cmd_analyze CRASH: {type(e).__name__}: {e}", exc_info=True)
@@ -4598,11 +4636,8 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"⚠️ التحليل استرشادي — القرار للمستخدم"
         )
         full = _clean_md(full)
-        if len(full) > 4000:
-            await msg.edit_text(full[:4000])
-            await _get_message(update, context).reply_text(full[4000:])
-        else:
-            await msg.edit_text(full)
+        # msg_split_fix (#317): نفس التقسيم المحترِم للفقرات
+        await _send_long_message(msg, update, context, full)
 
     except Exception as e:
         logger.error(f"cmd_chart: {e}")
