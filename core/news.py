@@ -301,6 +301,21 @@ def _strip_markdown_headers(text: str) -> str:
     return text.strip()
 
 
+def _truncate_at_word(text: str, limit: int) -> str:
+    """
+    news_word_boundary_truncate_fix (#331): كان القص يتم بفهرسة حرفية خام
+    [:N] دون مراعاة حدود الكلمات — يُنتج نصاً مقطوعاً في منتصف كلمة (مثال
+    موثَّق فعلياً: "...في الولايات ال" بدل "الولايات المتحدة"). هذه الدالة
+    تقصّ عند آخر مسافة قبل الحد، وتضيف "…" فقط إذا حدث قصّ فعلي.
+    """
+    if len(text) <= limit:
+        return text
+    cut = text.rfind(" ", 0, limit)
+    if cut < limit * 0.5:  # لا مسافة مناسبة قريبة → القص الخام أهون الشرين
+        cut = limit
+    return text[:cut].rstrip() + "…"
+
+
 def _strip_mixed_language_artifacts(text: str, price: float = None) -> str:
     """
     إصلاح #94: شبكة أمان حتمية فوق تعليمة الـprompt — تُزيل كلمات/أحرف
@@ -521,7 +536,7 @@ class NewsEngine:
 
         import html as _html
         headlines = "\n".join(
-            f"- {_html.unescape(item.get('title',''))[:120]} ({item.get('source','')})"
+            f"- {_truncate_at_word(_html.unescape(item.get('title','')), 120)} ({item.get('source','')})"
             for item in news_items[:15]
             if item.get("title")
         )
@@ -709,7 +724,8 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
                        if json_mode else
                        "أنت محلل مالي ولغوي محترف. أجب بنص عربي احترافي مباشر "
                        "بدون JSON وبدون تنسيق Markdown، وفق التعليمات المذكورة "
-                       "في رسالة المستخدم بالضبط.")
+                       "في رسالة المستخدم بالضبط. لا تستخدم <think> أو أي استدلال "
+                       "داخلي ظاهر — اكتب الجواب النهائي مباشرة فقط.")
             req_body = {
                 "model":       model,
                 "messages":    [
@@ -717,7 +733,17 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
                     {"role": "user",   "content": prompt},
                 ],
                 "temperature": 0.1,
-                "max_tokens":  800,
+                # think_leak_fix_v2 (#333): رُفع من 800 — نفس سبب رفع
+                # max_tokens في Groq Vision: نماذج fallback ذات قدرة تفكير
+                # (qwen3) قد تستهلك التوكنز في الاستدلال الداخلي قبل الجواب
+                # الفعلي، و800 غير كافية غالباً لتحليل analyze_symbol (4-5
+                # جمل) بعد طرح تكلفة التفكير — أدى هذا لانقطاع الرد داخل
+                # <think> وتسريبه للمستخدم في /analyze.
+                "max_tokens":  2000,
+                # think_leak_fix_v2 (#333): تعطيل وضع التفكير الافتراضي في
+                # qwen3 (نفس الإصلاح المطبَّق في Groq Vision) لتقليل احتمال
+                # استهلاك التوكنز بالكامل على استدلال داخلي غير ظاهر للمستخدم
+                **({"reasoning_effort": "none"} if "qwen" in model.lower() else {}),
             }
             if json_mode:
                 req_body["response_format"] = {"type": "json_object"}
@@ -745,6 +771,30 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
             data    = json.loads(response_text)
             content = data["choices"][0]["message"]["content"].strip()
 
+            # think_leak_fix (#314) — إعادة تطبيق: هذا الإصلاح كان غائباً من
+            # النسخة المنشورة فعلياً على الخادم رغم تسليمه سابقاً (تأكَّد من
+            # تاريخ الملف)، مما تسبَّب في تكرار تسريب <think> في /analyze
+            # رغم "نجاح" الإصلاح في اختبار سابق. بعض نماذج fallback
+            # (خصوصاً قدرات "تفكير" في qwen3) تُرجِع كتلة <think>...</think>
+            # كاملة تحوي استدلال النموذج الداخلي — بما في ذلك أحياناً إعادة
+            # صياغة تعليمات الـ system prompt نفسها — قبل الجواب الفعلي.
+            import re as _re_think
+            content = _re_think.sub(r"<think>.*?</think>", "", content,
+                                     flags=_re_think.IGNORECASE | _re_think.DOTALL).strip()
+            _think_open = _re_think.search(r"<think>", content, flags=_re_think.IGNORECASE)
+            if _think_open:
+                content = content[:_think_open.start()].strip()
+
+            # think_leak_empty_fix (#332): إذا كانت الاستجابة بأكملها داخل
+            # <think> غير مُغلَقة (انقطعت أثناء "التفكير" قبل الوصول للجواب
+            # الفعلي)، يصبح content فارغاً بعد الإزالة — إعادة dict فارغ هنا
+            # كانت "تنجح" ظاهرياً (dict غير فارغ رغم أن قيمته فارغة)، فلا
+            # يُحفَّز أي fallback لنموذج آخر. الآن نُعيد None صراحة في هذه
+            # الحالة، فيكمل _call_groq تلقائياً للنموذج التالي في القائمة.
+            if not json_mode and len(content) < 15:
+                logger.warning(f"Groq ({model}): استجابة فارغة بعد إزالة <think> غير مُغلَقة")
+                return None
+
             if content.startswith("```"):
                 content = content.split("```")[1]
                 if content.startswith("json"):
@@ -753,6 +803,13 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
             # إصلاح #274: إذا json_mode=False → النتيجة نص حر
             if not json_mode:
                 return {"summary_ar": content.strip(), "source": "groq_text"}
+            # think_leak_empty_fix (#332) امتداد: نفس الحماية لمسار JSON —
+            # محتوى فارغ/قصير جداً بعد إزالة <think> سيُسقِط json.loads()
+            # باستثناء لا يُطابق أنماط fallback الموجودة، فيتوقف عن تجربة
+            # نماذج أخرى تماماً بدل الاستمرار.
+            if len(content) < 5:
+                logger.warning(f"Groq ({model}): محتوى فارغ بعد إزالة <think> — تجربة النموذج التالي")
+                return None
             # إصلاح #658: _gr بدلاً من result لتجنب UnboundLocalError في caller
             _gr = json.loads(content)
             if "sentiment" in _gr and "sentiment_score" in _gr:
@@ -838,7 +895,7 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
                 f"مشاعر السوق {direction} بدرجة {abs(score):.2f}. "
                 f"{'يُنصح بالحذر والمراقبة.' if score < -0.1 else 'السوق يُبدي إشارات إيجابية.' if score > 0.1 else 'السوق في حالة ترقب.'}"
             ),
-            "key_events":      [_html.unescape(i.get("title", ""))[:120] for i in items[:3] if i.get("title")],
+            "key_events":      [_truncate_at_word(_html.unescape(i.get("title", "")), 120) for i in items[:3] if i.get("title")],
             "affected_coins":  ["BTC", "ETH"],
             "market_impact_ar": f"تأثير {direction} متوقع — يُنصح بالمراقبة",
             "confidence":      0.55,
@@ -957,7 +1014,7 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
             _sorted_ev = sorted(events[:6], key=lambda e: _news_impact(e)[0])
             lines += ["", "⚡ *الأحداث الرئيسية (مرتبة حسب التأثير)*"]
             lines += [
-                f"{_news_impact(e)[1]} {_html.unescape(str(e)).replace('_',' ').replace('*','')[:100]}"
+                f"{_news_impact(e)[1]} {_truncate_at_word(_html.unescape(str(e)).replace('_',' ').replace('*',''), 100)}"
                 for e in _sorted_ev if e
             ]
 
@@ -1012,7 +1069,7 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
             lines += ["", "📡 *أخبار إضافية*"]
             for t in extra:
                 # V4b (#1345/#1347): رفع حد العنوان من 90 → 150 حرف
-                title = t[:150]
+                title = _truncate_at_word(t, 150)
                 # فك HTML entities
                 import html as _html_y2
                 title = _html_y2.unescape(title)
@@ -1352,8 +1409,15 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
                                 {"type": "text", "text": prompt_text}
                             ]}
                         ],
-                        "temperature": 0.1, "max_tokens": 1500,
+                        "temperature": 0.1, "max_tokens": 3500,
                         # T11b_reasoning_fix: تعطيل reasoning في Qwen3
+                        # think_leak_fix_v2 (#333): رُفع max_tokens من 1500
+                        # إلى 3500 — النماذج ذات قدرة "التفكير" (reasoning)
+                        # قد تستهلك مئات التوكنز في الاستدلال الداخلي قبل
+                        # الوصول للجواب الفعلي؛ 1500 كانت غالباً غير كافية
+                        # لإنهاء التفكير وكتابة تحليل من 14 بنداً، فتنقطع
+                        # الاستجابة أثناء "التفكير" ولا يصل جواب فعلي إطلاقاً
+                        # (موثَّق: كتلة <think> كاملة بلا إغلاق ولا تحليل بعدها).
                         **({"reasoning_effort": "none"} if "qwen" in model.lower() else {}),
                     }, ensure_ascii=False).encode("utf-8")
 
@@ -1369,26 +1433,32 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
                         lambda r=req: urllib.request.urlopen(r, context=ctx, timeout=60).read().decode())
                     data    = json.loads(resp)
                     content = data["choices"][0]["message"]["content"].strip()
-                    # T11b_fix v2: تصفية <think>...</think> من Qwen3 (re.DOTALL)
+                    # think_leak_fix_v2 (#333): المنطق القديم (T11b_fix
+                    # v2-v4) كان معكوساً منطقياً — يفترض أن المحتوى المفيد
+                    # يقع داخل <think> ويحاول "تلخيصه" (آخر 30 سطراً) بدل
+                    # التعامل معه كاستدلال داخلي يجب تجاهله بالكامل. عملياً
+                    # كتلة <think> تحوي استدلال النموذج الخام بالإنجليزية —
+                    # أحياناً يتضمن نص تعليمات النظام نفسها (تسريب فعلي
+                    # موثَّق) — والجواب الحقيقي دائماً بعد </think> إن أُغلِقت.
+                    # إن لم تُغلَق (انقطع الرد أثناء "التفكير")، فلا يوجد
+                    # جواب فعلي إطلاقاً، ويجب مُعاملته كفشل يُعاد فيه تجربة
+                    # نموذج آخر — لا "تلخيص" جزء من استدلال غير مكتمل وعرضه
+                    # للمستخدم على أنه التحليل النهائي.
                     import re as _re_qw
-                    # T11b_fix v4: Qwen3 يضع كل التحليل داخل <think>
-                    # الحل: استخراج محتوى <think> أولاً ثم تنظيفه
-                    if "<think>" in content:
-                        # استخراج ما داخل <think>
-                        _inside = _re_qw.search(
-                            r"<think>(.*?)(?:</think>|$)", content, flags=_re_qw.DOTALL)
-                        if _inside:
-                            _raw = _inside.group(1).strip()
-                            # تنظيف: إزالة "Step N:" و"I see" وأسطر debug
-                            _lines = [l.strip() for l in _raw.split("\n") if l.strip()]
-                            # أخذ آخر 30 سطر (الخلاصة)
-                            _summary = "\n".join(_lines[-30:]) if len(_lines) > 30 else "\n".join(_lines)
-                            content = _summary if _summary else content
+                    if "<think>" in content.lower():
+                        _closed = _re_qw.search(r"</think>", content, flags=_re_qw.IGNORECASE)
+                        if _closed:
+                            # الجواب الحقيقي هو كل ما بعد </think>
+                            content = content[_closed.end():].strip()
                         else:
-                            content = _re_qw.sub(r"<think>.*", "", content, flags=_re_qw.DOTALL).strip()
-                    # إزالة think خارجية إن وُجدت
-                    content = _re_qw.sub(r"<think>.*?</think>", "", content, flags=_re_qw.DOTALL).strip()
+                            # لم تُغلَق <think> إطلاقاً — لا جواب فعلي متاح.
+                            # فشل صريح بدل تسريب استدلال غير مكتمل للمستخدم.
+                            logger.warning(f"Groq Vision ({model}): انقطع الرد داخل <think> غير مُغلَقة — تجربة نموذج آخر")
+                            continue
                     content = _strip_markdown_headers(content)
+                    if len(content) < 20:
+                        logger.warning(f"Groq Vision ({model}): محتوى فارغ بعد إزالة <think> — تجربة نموذج آخر")
+                        continue
                     logger.info(f"Groq Vision ({model}): {len(content)} حرف ✅")
                     return content
 

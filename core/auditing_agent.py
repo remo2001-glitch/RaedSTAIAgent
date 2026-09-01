@@ -156,12 +156,22 @@ class AuditingAgent:
     
     def audit_financial(self, content: str, source: str = "signal") -> Tuple[bool, str]:
         """تدقيق مالي متشدد للإشارات والتحليلات"""
+        # truncation_root_fix (#316) — إعادة تطبيق: هذا الإصلاح لم يكن
+        # موجوداً فعلياً في النسخة المنشورة (تاريخ الملف يسبق الإصلاح
+        # بأسابيع)، رغم تسليمه سابقاً — هذا سبب تكرار اقتطاع أقسام كاملة
+        # (إدارة المخاطر، السيناريوهات، تقييم الجودة) في /analyze رغم
+        # "نجاح" الإصلاح في اختبار سابق. max_length=4096 كان يقصّ المحتوى
+        # هنا قبل وصوله لمنطق التقسيم متعدد الرسائل في المستدعي (الذي
+        # يُرسِل الفائض في رسالة تيليجرام ثانية بدلاً من فقدانه). رفعه هنا
+        # يجعله شبكة أمان أخيرة فقط ضد محتوى فاسد فعلاً، لا حداً تشغيلياً
+        # طبيعياً لتقرير مالي مفصَّل.
         return self.audit(
             content,
             source=source,
             require_numbers=True,
             require_disclaimer=True,
             min_length=50,
+            max_length=12000,
         )
     
     def audit_outlook(self, content: str) -> Tuple[bool, str]:
