@@ -722,8 +722,17 @@ def _build_professional_block(
                                      _fib_lvls.get(0.0, 0) or 0)
             except Exception:
                 _fib_low = 0
+            # demand_zone_inversion_fix (#336): عند تفعيل الشرط أعلاه (تجاوز
+            # Demand Zone لأدنى مستوى Fibonacci)، كان الرفع "_fib_low*1.005"
+            # (فوق القاع) قد يضع Demand Zone أعلى من الدعم الأساسي (ns) نفسه
+            # عندما يتطابق ns مع _fib_low تماماً — ينتج تناقضاً منطقياً موثَّقاً
+            # فعلياً: "Demand Zone (دعم أعمق)" أعلى سعراً من "الدعم" المباشر!
+            # الإصلاح: الرفع تحت القاع بدل فوقه، مع ضمان نهائي غير مشروط بأن
+            # Demand Zone أقل من الدعم الأساسي دائماً بغض النظر عن حدود Fibonacci.
             if _fib_low and _demand_level < _fib_low:
-                _demand_level = _fib_low * 1.005  # 0.5% فوق القاع
+                _demand_level = _fib_low * 0.995  # تحت القاع بقليل، وليس فوقه
+            # ضمان نهائي: "دعم أعمق" يجب أن يكون أعمق فعلاً من الدعم المباشر
+            _demand_level = min(_demand_level, ns * 0.995)
             entry_conds.append(f"4. وصول Demand Zone {_fmt_price(_demand_level)} (دعم أعمق)")
         # signal_logic_fix: CVD شرط أساسي للدخول
         entry_conds.append(f"5. CVD يتحول إلى محايد/إيجابي (تأكيد ضغط الشراء)")
@@ -854,9 +863,19 @@ def _build_professional_block(
     if scenario_block:
         parts.extend(scenario_block)
         parts.append("")
+    # reasons_boost_order_fix (#335): "الأسباب" كانت تُنسَخ إلى parts هنا
+    # (قبل حساب _flags_found/التأكيدات في الأسفل بمئات الأسطر)، بينما رفع
+    # الثقة (conf_reason_fix_pro) وتحديث نص "أقل من الحد" يحدثان لاحقاً على
+    # متغيّر reasons منفصل — تحديث متغيّر بعد نسخ محتواه القديم إلى parts
+    # لا يُغيِّر ما نُسِخ بالفعل، فيظهر نص الثقة القديم غير المرفوع (مثال
+    # موثَّق: "54.7% أقل من الحد 55.0%") بينما "Confidence Score" المعروض
+    # لاحقاً يستخدم القيمة المرفوعة الصحيحة (58%) — نفس الرقم، عرضان
+    # متضاربان. الإصلاح: حجز موضع في parts وملؤه لاحقاً بعد اكتمال الرفع.
+    _reasons_slot_idx = None
     if reasons:
         parts.append("*✅ الأسباب:*")
-        parts.extend(reasons)
+        _reasons_slot_idx = len(parts)
+        parts.append("")  # سيُستبدَل لاحقاً بالأسباب النهائية بعد الرفع
         parts.append("")
     if entry_conds:
         parts.append("*⏳ متى تدخل؟*")
@@ -1012,6 +1031,12 @@ def _build_professional_block(
             else:
                 _new_reasons_pro.append(_r)
         reasons = _new_reasons_pro
+
+    # reasons_boost_order_fix (#335): الآن بعد اكتمال رفع الثقة وتحديث نص
+    # الأسباب المرتبط بها، نملأ الموضع المحجوز في parts بالنص النهائي
+    # الصحيح (بدل النص القديم غير المرفوع الذي كان يُنسَخ مبكراً).
+    if _reasons_slot_idx is not None:
+        parts[_reasons_slot_idx] = "\n".join(reasons)
 
     # conf_boost_fix: مُدمَج مع conf_boost_pro أعلاه لتجنب double boost
     _boost_pct = _boost_pro  # للتوافق مع الكود اللاحق
@@ -3495,50 +3520,72 @@ async def cmd_outlook(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             # outlook_groq_fix v4: استخدام aiohttp (نفس /signal و/analyze)
             # urllib يُعطي 403 من Railway → aiohttp يعمل
-            try:
-                import aiohttp as _aio4, json as _js4
-                _b4 = _js4.dumps({
-                    "model": "groq/compound",
-                    "messages": [
-                        {"role": "system", "content": "أجب بالعربية فقط. لا تستخدم كلمات إنجليزية."},
-                        {"role": "user", "content": _prompt_out}
-                    ],
-                    "max_tokens": 900,
-                    "temperature": 0.7
-                })
-                _hdrs4 = {
-                    "Authorization": f"Bearer {_groq_key}",
-                    "Content-Type": "application/json"
-                }
-                async with _aio4.ClientSession() as _sess4:
-                    async with _sess4.post(
-                        "https://api.groq.com/openai/v1/chat/completions",
-                        data=_b4, headers=_hdrs4, timeout=_aio4.ClientTimeout(total=25)
-                    ) as _r4:
-                        if _r4.status == 200:
-                            _d4 = await _r4.json()
-                            _ot4 = _d4["choices"][0]["message"]["content"].strip()
-                            # think_leak_fix (#314): حماية دفاعية إضافية قبل
-                            # أي معالجة أخرى للنص
-                            import re as _re_th4
-                            _ot4 = _re_th4.sub(r"<think>.*?</think>", "", _ot4,
-                                                flags=_re_th4.IGNORECASE | _re_th4.DOTALL).strip()
-                            # groq_clean_fix: حذف الحروف الأجنبية (CJK/فيتنامية/كورية)
-                            import re as _re4
-                            # احتفظ بـ: عربي + لاتيني + أرقام + علامات + مسافات + رموز emoji شائعة
-                            _ot4 = _re4.sub(
-                                r'[\u2E80-\u2EFF\u2F00-\u2FDF\u3000-\u9FFF'
-                                r'\uA000-\uA4CF\uA960-\uA97F\uAC00-\uD7FF'
-                                r'\uF900-\uFAFF\uFE30-\uFE4F]+',
-                                "", _ot4
-                            ).strip()
-                            logger.info(f"market_outlook Groq: {len(_ot4)} chars")
-                            if _ot4 and len(_ot4) > 5:
-                                _outlook_parts.append(_ot4)
-                        else:
-                            logger.warning(f"market_outlook HTTP {_r4.status}")
-            except Exception as _oe4:
-                logger.warning(f"market_outlook aiohttp error: {_oe4}")
+            # outlook_fallback_retry_fix (#334): كان يُستخدَم "groq/compound"
+            # فقط بدون أي محاولة بديلة — أي فشل عابر (rate limit، timeout،
+            # مشكلة مؤقتة بالنموذج) كان يُسقِط الاستجابة بالكامل صامتاً
+            # ويتراجع فوراً للقالب الثابت العام (بلا بيانات حية) بدل تجربة
+            # نموذج آخر — بالضبط النمط المُلاحَظ فعلياً (رجوع مفاجئ للنص
+            # العام القديم رغم أن منطق البيانات الحية سليم تماماً). الإصلاح:
+            # نفس سلسلة fallback المتعددة النماذج المستخدَمة في كل مكان آخر
+            # بالنظام (core/news.py GROQ_MODELS_LIST).
+            _outlook_models = ["groq/compound", "qwen/qwen3.6-27b", "openai/gpt-oss-120b"]
+            for _out_model in _outlook_models:
+                try:
+                    import aiohttp as _aio4, json as _js4
+                    _b4 = _js4.dumps({
+                        "model": _out_model,
+                        "messages": [
+                            {"role": "system", "content": "أجب بالعربية فقط. لا تستخدم كلمات إنجليزية."},
+                            {"role": "user", "content": _prompt_out}
+                        ],
+                        "max_tokens": 900,
+                        "temperature": 0.7,
+                        **({"reasoning_effort": "none"} if "qwen" in _out_model.lower() else {}),
+                    })
+                    _hdrs4 = {
+                        "Authorization": f"Bearer {_groq_key}",
+                        "Content-Type": "application/json"
+                    }
+                    async with _aio4.ClientSession() as _sess4:
+                        async with _sess4.post(
+                            "https://api.groq.com/openai/v1/chat/completions",
+                            data=_b4, headers=_hdrs4, timeout=_aio4.ClientTimeout(total=25)
+                        ) as _r4:
+                            if _r4.status == 200:
+                                _d4 = await _r4.json()
+                                _ot4 = _d4["choices"][0]["message"]["content"].strip()
+                                # think_leak_fix (#314): إزالة <think> إن وُجدت،
+                                # مع معالجة حالة عدم الإغلاق (#333)
+                                import re as _re_th4
+                                _closed4 = _re_th4.search(r"</think>", _ot4, flags=_re_th4.IGNORECASE)
+                                if "<think>" in _ot4.lower():
+                                    if _closed4:
+                                        _ot4 = _ot4[_closed4.end():].strip()
+                                    else:
+                                        logger.warning(f"market_outlook ({_out_model}): <think> غير مُغلَقة — تجربة نموذج آخر")
+                                        continue
+                                # groq_clean_fix: حذف الحروف الأجنبية (CJK/فيتنامية/كورية)
+                                import re as _re4
+                                # احتفظ بـ: عربي + لاتيني + أرقام + علامات + مسافات + رموز emoji شائعة
+                                _ot4 = _re4.sub(
+                                    r'[\u2E80-\u2EFF\u2F00-\u2FDF\u3000-\u9FFF'
+                                    r'\uA000-\uA4CF\uA960-\uA97F\uAC00-\uD7FF'
+                                    r'\uF900-\uFAFF\uFE30-\uFE4F]+',
+                                    "", _ot4
+                                ).strip()
+                                logger.info(f"market_outlook Groq ({_out_model}): {len(_ot4)} chars")
+                                if _ot4 and len(_ot4) > 30:
+                                    _outlook_parts.append(_ot4)
+                                    break  # نجح — لا حاجة لتجربة نموذج آخر
+                                else:
+                                    logger.warning(f"market_outlook ({_out_model}): محتوى قصير جداً — تجربة نموذج آخر")
+                                    continue
+                            else:
+                                logger.warning(f"market_outlook ({_out_model}) HTTP {_r4.status}")
+                                continue
+                except Exception as _oe4:
+                    logger.warning(f"market_outlook ({_out_model}) aiohttp error: {_oe4}")
+                    continue
 
         # بناء النص النهائي
         _parts_out = [
