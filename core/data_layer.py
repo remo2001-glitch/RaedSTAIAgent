@@ -2400,17 +2400,30 @@ class DataLayer:
         key = "btc_dominance"
         if cached := _cached(key, "fear"):
             return cached
-        data = await _fetch(
-            self.session,
-            "https://api.coingecko.com/api/v3/global",
-            headers=_H_CG,
-        )
         try:
+            data = await _fetch(
+                self.session,
+                "https://api.coingecko.com/api/v3/global",
+                headers=_H_CG,
+            )
             dom = float(
                 data["data"]["market_cap_percentage"].get("btc", 50.0))
             _store(key, dom, "fear")
             return dom
         except Exception:
+            # btc_dominance_stale_fallback_fix (#337): كان يُعيد 50.0 ثابتة
+            # عند أي فشل عابر (rate limit، timeout) — رقم قد يبدو معقولاً
+            # فيُعامَل كبيانات حية فعلية رغم أنه وهمي تماماً. وثِّق فعلياً:
+            # تقرير أظهر 59% ثم تقرير آخر بفارق دقيقة أظهر 50% (لا يمكن أن
+            # تتغير الهيمنة الحقيقية بهذا المقدار بهذه السرعة). هيمنة BTC
+            # تتغير ببطء شديد، فآخر قيمة حقيقية مخزَّنة (حتى لو تجاوزت مدة
+            # صلاحيتها) أدق بكثير من رقم افتراضي ثابت. نستخدم القيمة القديمة
+            # المخزَّنة إن وُجدت (بتجاوز فحص TTL)، و50.0 فقط كملاذ أخير مطلق
+            # عند غياب أي بيانات سابقة إطلاقاً.
+            _stale = _cache.get(key)
+            if _stale and isinstance(_stale.get("data"), (int, float)):
+                logger.debug(f"get_btc_dominance: فشل الجلب — استخدام آخر قيمة مخزَّنة ({_stale['data']:.1f}%)")
+                return _stale["data"]
             return 50.0
 
     async def get_top_coins(self, limit: int = 20) -> List[Dict]:
