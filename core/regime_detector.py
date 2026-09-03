@@ -102,7 +102,9 @@ class RegimeDetector:
 
         # ── المؤشرات ──────────────────────────────────────────
         atr    = self._atr(highs, lows, closes, 14)
-        adx    = self._adx(highs, lows, closes, 14)
+        # di_directional_fix (Phase 1): نستخدم _adx_full للحصول على +DI/-DI
+        # أيضاً — ADX وحده لا يحدد الاتجاه، +DI/-DI هما من يحددانه
+        adx, _di_plus, _di_minus = self._adx_full(highs, lows, closes, 14)
         ema20  = self._ema(closes, 20)
         _ema50_rd_raw = self._ema(closes, 50)
         # GG3b: cap EMA50 بـ price × 3 لمنع قيم تاريخية مشوّهة في regime_detector
@@ -120,6 +122,8 @@ class RegimeDetector:
         metrics = {
             "atr_pct":       round(atr_pct, 2),
             "adx":           round(adx, 1),
+            "di_plus":       _di_plus,   # di_directional_fix (Phase 1)
+            "di_minus":      _di_minus,  # None إذا بيانات H/L غير موثوقة
             "rsi":           round(rsi, 1),
             "ema20":         round(ema20, 4),
             "ema50":         round(ema50, 4),
@@ -307,6 +311,85 @@ class RegimeDetector:
         return sum(trs[-period:]) / min(period, len(trs))
 
     @staticmethod
+    def _adx_full(highs, lows, closes, period: int = 14) -> Tuple[float, Optional[float], Optional[float]]:
+        """
+        di_directional_fix (Phase 1 — خطة التطوير): يُعيد الآن (ADX, +DI, -DI)
+        بدل ADX فقط. ADX يقيس قوة الاتجاه فحسب، لا اتجاهه — +DI/-DI يحددان
+        الاتجاه الفعلي (+DI>-DI=صاعد، -DI>+DI=هابط). None لـ+DI/-DI في حالة
+        بيانات H/L أحادية غير موثوقة (نفس شرط الكشف المستخدَم أصلاً لـADX).
+        """
+        n = len(closes)
+        if n < period + 1:
+            return 0.0, None, None
+
+        plus_dm_list, minus_dm_list, tr_list = [], [], []
+        for i in range(1, n):
+            h_diff = highs[i]  - highs[i-1]
+            l_diff = lows[i-1] - lows[i]
+            plus_dm_list.append(h_diff if h_diff > l_diff and h_diff > 0 else 0.0)
+            minus_dm_list.append(l_diff if l_diff > h_diff and l_diff > 0 else 0.0)
+            hl = highs[i] - lows[i]
+            hc = abs(highs[i]  - closes[i-1])
+            lc = abs(lows[i]   - closes[i-1])
+            tr_list.append(max(hl, hc, lc))
+
+        pdm_nonzero = sum(1 for x in plus_dm_list  if x > 0)
+        mdm_nonzero = sum(1 for x in minus_dm_list if x > 0)
+        total       = len(plus_dm_list) or 1
+
+        if pdm_nonzero / total < 0.05 or mdm_nonzero / total < 0.05:
+            p  = closes[-1] if closes[-1] > 0 else 1
+            avg_tr  = sum(tr_list[-period:]) / min(period, len(tr_list)) if tr_list else 0
+            atr_pct = avg_tr / p * 100
+            ema_f = sum(closes[-period:])   / period if len(closes) >= period else closes[-1]
+            ema_s = sum(closes[-period*2:]) / (period*2) if len(closes) >= period*2 else ema_f
+            trend_strength = abs(ema_f - ema_s) / max(ema_s, 1) * 100
+            adx_est = min(15 + trend_strength * 8 + atr_pct * 1.5, 65.0)
+            return round(adx_est, 1), None, None  # +DI/-DI غير موثوقة هنا
+
+        def wilder_smooth(data):
+            if len(data) < period:
+                return []
+            val = sum(data[:period])
+            result = [val]
+            for v in data[period:]:
+                val = val - val / period + v
+                result.append(val)
+            return result
+
+        atr_s = wilder_smooth(tr_list)
+        pdm_s = wilder_smooth(plus_dm_list)
+        mdm_s = wilder_smooth(minus_dm_list)
+
+        if not atr_s:
+            return 0.0, None, None
+
+        dx_list = []
+        last_di_p, last_di_m = None, None
+        for i in range(len(atr_s)):
+            atr_v = atr_s[i]
+            if atr_v <= 0:
+                continue
+            di_p  = pdm_s[i] / atr_v * 100
+            di_m  = mdm_s[i] / atr_v * 100
+            last_di_p, last_di_m = di_p, di_m  # آخر قيمة = الحالية
+            denom = di_p + di_m
+            if denom > 0:
+                dx_list.append(abs(di_p - di_m) / denom * 100)
+
+        if not dx_list:
+            return 0.0, last_di_p, last_di_m
+
+        adx_val = sum(dx_list[:period]) / period
+        for dx in dx_list[period:]:
+            adx_val = (adx_val * (period - 1) + dx) / period
+
+        adx_final = round(min(adx_val, 75.0), 1)
+        di_p_final = round(last_di_p, 1) if last_di_p is not None else None
+        di_m_final = round(last_di_m, 1) if last_di_m is not None else None
+        return adx_final, di_p_final, di_m_final
+
+    @staticmethod
     def _adx(highs, lows, closes, period: int = 14) -> float:
         """
         ADX إصلاح #142 — حل جذري لمشكلة بيانات H/L المحسوبة.
@@ -419,8 +502,17 @@ class RegimeDetector:
                if getattr(result, 'market_phase', '') else "")
             + "\n"
             f"📈 *المؤشرات*\n"
-            f"• ATR: {m.get('atr_pct',0):.1f}% | ADX: {m.get('adx',0):.0f}\n"
-            f"• RSI: {m.get('rsi',0):.0f} | حجم: {vol_ratio:.1f}x\n"
+            + (
+                f"• ATR: {m.get('atr_pct',0):.1f}% | ADX: {m.get('adx',0):.0f} (+DI: {m.get('di_plus'):.0f} / -DI: {m.get('di_minus'):.0f})\n"
+                if m.get("di_plus") is not None and m.get("di_minus") is not None else
+                f"• ATR: {m.get('atr_pct',0):.1f}% | ADX: {m.get('adx',0):.0f}\n"
+            )
+            + (
+                f"  ↳ اتجاه ADX: {'🟢 صاعد' if m.get('di_plus',0) > m.get('di_minus',0) else '🔴 هابط'} "
+                f"(قوة الاتجاه {m.get('adx',0):.0f} فقط — لا تحدد الاتجاه بمفردها)\n"
+                if m.get("di_plus") is not None and m.get("di_minus") is not None else ""
+            )
+            + f"• RSI: {m.get('rsi',0):.0f} | حجم: {vol_ratio:.1f}x\n"
             f"• السعر vs EMA50: {m.get('price_vs_ema50',0):+.1f}%\n"
             f"• Fear & Greed: {m.get('fear_greed',50)} | هيمنة BTC: {m.get('btc_dominance',50):.0f}%\n\n"
             f"🎯 *الاستراتيجية الموصى بها*\n"

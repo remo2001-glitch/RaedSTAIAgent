@@ -343,14 +343,19 @@ def _build_result(score: int, verdict: str, reasons: list, s: SignalInput, extra
     bar = "█" * bar_len + "░" * (10 - bar_len)
 
     header = (
-        f"📊 *جودة الإشارة: {bar} {score}/100 — {verdict_ar}*{extra}"
+        f"📊 *جودة إعداد الصفقة (Setup Quality): {bar} {score}/100 — {verdict_ar}*{extra}"
     )
 
     footer_lines = [
         "━━━━━━━━━━━━━━━━━━",
-        f"📊 *تقييم جودة الإشارة — {s.symbol}*",
+        f"📊 *تقييم جودة إعداد الصفقة (Setup Quality) — {s.symbol}*",
         f"الدرجة: {bar} {score}/100",
         f"الحكم: {verdict_ar}",
+        # score_separation_fix (Phase 1 — خطة التطوير، بند 12): "جودة
+        # الإشارة" (Setup Quality — هيكل SL/TP/R/R/حجم) و"Confidence Score"
+        # (ثقة الدخول الآن — من مصادر الإشارة) مقياسان مختلفان تماماً،
+        # وعرضهما بدون تمييز كان يبدو متناقضاً (مثال: جودة 71 مع ثقة 34%).
+        "ℹ️ هذا تقييم لجودة *بنية* الصفقة (SL/TP/حجم) — مستقل عن Confidence Score (ثقة الدخول الآن)",
     ]
 
     if reasons:
