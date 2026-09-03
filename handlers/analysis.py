@@ -658,7 +658,7 @@ def _build_professional_block(
     elif rsi > 70:
         reasons.append(f"• RSI = {int(rsi)} → ذروة شراء (خطر تصحيح)")
     else:
-        reasons.append(f"• RSI = {rsi:.0f}")
+        reasons.append(f"• RSI 1D = {rsi:.0f}")
     ns = fib.get("nearest_support", 0)
     nr = fib.get("nearest_resistance", 0)
     if ns > 0:
@@ -684,7 +684,7 @@ def _build_professional_block(
         else:
             # rsi60_fix: لا تطلب "انتظر تحت 60" إذا RSI < 60 بالفعل
             if rsi < 60:
-                _rsi_cond = f"1. RSI = {rsi:.0f} (< 60) — راقب الارتداد عند مستويات الدعم"
+                _rsi_cond = f"1. RSI 1D = {rsi:.0f} (< 60) — راقب الارتداد عند مستويات الدعم"
             else:
                 _rsi_cond = f"1. انتظر تصحيح RSI تحت 60 ثم ارتداد (حالياً {rsi:.0f})"
         # إصلاح #378: شرط دخول يستخدم مقاومة فيبو القريبة بدلاً من EMA50 البعيد
@@ -1348,7 +1348,7 @@ def _build_professional_block(
 
     parts.extend([
         "",
-        f"*🎯 Confidence Score: {_conf_score}%*",
+        f"*🎯 Confidence Score (ثقة الدخول الآن): {_conf_score}%*",
         *([_conf_3d_line] if _conf_3d_line else []),
         f"• القرار: *{_decision_label}*",
         _lev_line,
@@ -1492,12 +1492,19 @@ def _build_professional_block(
         # نفس الرسالة (✅ مؤكَّد أو ⚠️ متعارض) — تناقض زمني ظاهري لوحظ في كل
         # اختبارات /signal (BTC، XNVDA، XQQQ، XSPY). الإصلاح: العبارة الآن
         # تعكس حالة تأكيد 4H الفعلية الممرَّرة من cmd_signal (mtf_status).
+        # tail_risk_separation_fix (Phase 1 — خطة التطوير، بند 10): كان يُسمّى
+        # "Worst-Case" بينما هو فعلياً سيناريو أبعد من وقف الخسارة العادي
+        # (كسر إضافي بعد SL) — يُخلَط مع "الخسارة عند SL" الحقيقية (المعروضة
+        # أعلاه في سطر "وقف الخسارة") رغم كونهما مفهومين مختلفين تماماً:
+        # SL = الخسارة الفعلية المخطَّطة عند تفعيل الوقف، بينما هذا السيناريو
+        # = احتمال حركة أعمق نادرة (gap/liquidity event) بعد كسر SL نفسه.
+        # الإصلاح: تسمية صريحة "Tail Risk" + توضيح أنه بعد SL لا بدلاً منه.
         (lambda _mtf: (
-            f"• ⚠️ Worst-Case (4H مؤكِّد الاتجاه بالفعل — احتمال ضعيف): كسر {_fmt_price(wc_bd1)} → {_fmt_price(wc_bd2)} (خسارة ~{wc_loss:.1f}%)"
+            f"• ⚠️ Tail Risk (سيناريو متطرف بعد SL — 4H مؤكِّد الاتجاه، احتمال ضعيف): كسر {_fmt_price(wc_bd1)} → {_fmt_price(wc_bd2)} (خسارة ~{wc_loss:.1f}% — أعمق من SL)"
             if "✅" in _mtf else
-            f"• ⚠️ Worst-Case (4H يعارض حالياً — احتمال أعلى من المعتاد): كسر {_fmt_price(wc_bd1)} → {_fmt_price(wc_bd2)} (خسارة ~{wc_loss:.1f}%)"
+            f"• ⚠️ Tail Risk (سيناريو متطرف بعد SL — 4H يعارض، احتمال أعلى من المعتاد): كسر {_fmt_price(wc_bd1)} → {_fmt_price(wc_bd2)} (خسارة ~{wc_loss:.1f}% — أعمق من SL)"
             if "تعارض" in _mtf else
-            f"• ⚠️ Worst-Case (يحتاج تأكيد إطار أعلى): كسر {_fmt_price(wc_bd1)} → {_fmt_price(wc_bd2)} (خسارة ~{wc_loss:.1f}%)"
+            f"• ⚠️ Tail Risk (سيناريو متطرف بعد SL — يحتاج تأكيد إطار أعلى): كسر {_fmt_price(wc_bd1)} → {_fmt_price(wc_bd2)} (خسارة ~{wc_loss:.1f}% — أعمق من SL)"
         ))(mtf_status),
     ])
 
