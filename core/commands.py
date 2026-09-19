@@ -894,6 +894,10 @@ async def cb_vclose(update, context):
         try:
             if engine:
                 engine.drift_monitor.record_outcome(pnl > 0)
+                # خطة التطوير — البُعد الرابع
+                _sig_id_mc2 = result.get("trade", {}).get("signal_id")
+                if _sig_id_mc2:
+                    engine.signal_tracker.close_signal(_sig_id_mc2, cur_price, "manual_close")
         except: pass
         _close_type = "كامل" if pct == 100 else f"{pct}%"
         await query.edit_message_text(

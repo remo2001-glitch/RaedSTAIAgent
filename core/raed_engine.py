@@ -80,6 +80,12 @@ class RaedEngine:
             groq_key=config.get("GROQ_API_KEY", ""))
         self.backtest_engine  = BacktestEngine()
         self.drift_monitor    = DriftMonitor(baseline_win_rate=0.55)
+        # signal_tracker (خطة التطوير — البُعد الرابع، بنية تحتية لحلقة
+        # التعلّم الذاتي): يعمل بجانب drift_monitor لا بدلاً منه — يُسجِّل
+        # بيانات كل إشارة مُصنَّفة حسب نوع الإعداد بدل رقم ربح/خسارة مُجمَّع
+        from core.signal_tracker import signal_tracker as _sig_tracker_singleton
+        _sig_tracker_singleton.attach(_sm_singleton)
+        self.signal_tracker   = _sig_tracker_singleton
 
         # ── Kill Switch Hooks ───────────────────────────────────
         self.kill_switch.register_hook(self._on_kill_switch)
@@ -324,8 +330,20 @@ class RaedEngine:
                                 _changed = True
                                 pnl = result.get("trade", {}).get("pnl", 0)
                                 was_win = pnl > 0
-                                # تسجيل في drift_monitor
+                                # تسجيل في drift_monitor (مُجمَّع عام — دون تغيير)
                                 self.drift_monitor.record_outcome(was_win)
+                                # خطة التطوير — البُعد الرابع: تسجيل مُصنَّف
+                                # حسب نوع الإعداد، بجانب drift_monitor لا بدلاً
+                                # منه — فقط إذا كانت الصفقة مرتبطة فعلياً
+                                # بإشارة مُسجَّلة (صفقات يدوية بلا signal_id
+                                # لا تُسجَّل هنا، وهذا سلوك صحيح ومقصود).
+                                _sig_id = result.get("trade", {}).get("signal_id")
+                                if _sig_id:
+                                    try:
+                                        _close_status = "closed_tp" if (tp > 0 and price >= tp) else "closed_sl"
+                                        self.signal_tracker.close_signal(_sig_id, price, _close_status)
+                                    except Exception as _ste:
+                                        logger.debug(f"signal_tracker.close_signal: {_ste}")
                                 reason = "TP ✅" if (tp > 0 and price >= tp) else "SL 🛑"
                                 logger.info(
                                     f"Auto-close {sym} uid={_uid}: {reason} "

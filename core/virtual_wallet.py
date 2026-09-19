@@ -46,12 +46,16 @@ class VirtualWallet:
 
     # ── شراء ───────────────────────────────────────────────────────────────
 
-    def buy(self, symbol: str, price: float, amount_usd: float) -> dict:
+    def buy(self, symbol: str, price: float, amount_usd: float,
+            signal_id: str | None = None, setup_type: str | None = None) -> dict:
         """
         تنفيذ أمر شراء وهمي
         symbol: مثل BTCUSDT
         price: السعر الحالي
         amount_usd: المبلغ بالدولار
+        signal_id/setup_type: (خطة التطوير — البُعد الرابع) ربط الصفقة
+        بالإشارة التي أنتجتها، لتمكين ربط النتيجة لاحقاً بنوع الإعداد —
+        اختياريان تماماً؛ لا يُغيّران أي سلوك تنفيذ حالي عند غيابهما.
         """
         symbol = symbol.upper()
 
@@ -90,6 +94,10 @@ class VirtualWallet:
             "updated_at": _now(),
             "stop_loss":  round(price * (1 - RISK["max_loss_pct"] / 100), 6),
             "take_profit": round(price * (1 + RISK["take_profit_pct"] / 100), 6),
+            # خطة التطوير — البُعد الرابع: يبقى None لأي صفقة لا تحمل إشارة
+            # مصدر (مثال: شراء يدوي مباشر بدل /signal) — لا يكسر أي مسار حالي
+            "signal_id":  signal_id,
+            "setup_type": setup_type,
         }
 
         self.balance  -= amount_usd
@@ -170,6 +178,10 @@ class VirtualWallet:
             "pnl":      round(pnl, 2),
             "pnl_pct":  round(pnl_pct, 2),
             "time":     _now(),
+            # خطة التطوير — البُعد الرابع: تمرير هوية الإشارة المصدر (إن
+            # وُجدت) للمستدعي، ليتمكن من ربط النتيجة بسجل الإشارة الأصلي
+            "signal_id":  pos.get("signal_id"),
+            "setup_type": pos.get("setup_type"),
         }
         self.history.append(trade)
 
