@@ -684,7 +684,10 @@ def _build_professional_block(
         else:
             # rsi60_fix: لا تطلب "انتظر تحت 60" إذا RSI < 60 بالفعل
             if rsi < 60:
-                _rsi_cond = f"1. RSI 1D = {rsi:.0f} (< 60) — راقب الارتداد عند مستويات الدعم"
+                # rsi_cond_clarity_fix: كان النص يبدو كشرط مستقبلي معلَّق
+                # ("1." ضمن قائمة "متى تدخل؟") رغم أنه يصف حالة مُستوفاة
+                # بالفعل (RSI أقل من 60 فعلاً) — أضيفت ✅ و"بالفعل" للتوضيح
+                _rsi_cond = f"1. ✅ RSI 1D = {rsi:.0f} (تحت 60 بالفعل) — راقب الارتداد عند مستويات الدعم"
             else:
                 _rsi_cond = f"1. انتظر تصحيح RSI تحت 60 ثم ارتداد (حالياً {rsi:.0f})"
         # إصلاح #378: شرط دخول يستخدم مقاومة فيبو القريبة بدلاً من EMA50 البعيد
@@ -1122,6 +1125,14 @@ def _build_professional_block(
             _pos_size_rule  = "0% — لا تأكيدات كافية للدخول"
             _pos_low = 0.0
             _lev_line = "• الرافعة: لا رافعة — انتظر تأكيد الدخول أولاً"
+            # action_size_sync_fix: كان يُعاد استخدام تصحيح "reduce_size"
+            # (⚠️ تقليل الحجم 50%) أدناه حتى في حالة 0% هذه — لا يزال
+            # تناقضاً (50% المُعلَن مقابل 0% الفعلي)، فقط أقل حدة من
+            # "تداول بحجم طبيعي". الإصلاح: تصحيح مخصَّص لحالة 0% هنا.
+            try:
+                object.__setattr__(regime, 'action', 'wait_confirmations_24')
+            except Exception:
+                pass
         else:
             _decision_label = f"[LOW] — حجم {max(1,_t_max_pos//4)}–{_t_max_pos//2}% فقط"
             # vol_leverage_fix: لا رافعة إذا حجم < 0.5x في [LOW]
@@ -1129,13 +1140,13 @@ def _build_professional_block(
                 _lev_line = "• الرافعة: لا رافعة — حجم ضعيف (< 0.5x)"
             _pos_low  = min(_t_max_pos // 2, round(_t_risk * 0.5 / max(_sl_base / 100, 0.01) * 100, 1))
             _pos_size_rule = f"{max(1, min(_t_max_pos//2, round(_pos_low)))}% — ثقة منخفضة"
-        if hasattr(regime, 'action') and regime.action == "trade_normal":
-            try:
-                object.__setattr__(regime, 'action', 'reduce_size')
-                if hasattr(regime, 'metrics') and isinstance(regime.metrics, dict):
-                    regime.metrics['action_basis'] = f" (الثقة {_conf_score}%<{_t_entry}%)"
-            except Exception:
-                pass
+            if hasattr(regime, 'action') and regime.action == "trade_normal":
+                try:
+                    object.__setattr__(regime, 'action', 'reduce_size')
+                    if hasattr(regime, 'metrics') and isinstance(regime.metrics, dict):
+                        regime.metrics['action_basis'] = f" (الثقة {_conf_score}%<{_t_entry}%)"
+                except Exception:
+                    pass
     elif _conf_score < 75:
         # signal_logic_fix: تحقق من التأكيدات أولاً
         _normal_cap = min(_t_max_pos, 20)  # normal_cap_fix
@@ -1144,6 +1155,14 @@ def _build_professional_block(
             _decision_label = "[WAIT] — انتظر تأكيد 2/4 مؤشرات قبل الدخول"
             _pos_size_rule  = "0% — لا تأكيدات كافية للدخول"
             _pos_norm = 0.0
+            # action_size_sync_fix: كان "الإجراء:" يبقى على نصه الأصلي
+            # (مثال: "✅ تداول بحجم طبيعي") رغم أن بوابة التأكيدات فرضت 0%
+            # هنا مباشرة — تناقض مباشر بين سطرين في نفس الرسالة (موثَّق
+            # فعلياً 7/7 مرات). نفس نمط التصحيح المطبَّق أعلاه لباقي الحالات.
+            try:
+                object.__setattr__(regime, 'action', 'wait_confirmations_24')
+            except Exception:
+                pass
         else:
             _decision_label = f"[NORMAL] — حجم {_normal_cap//2}–{_normal_cap}%"
             _pos_norm  = min(float(_normal_cap), round(_t_risk / max(_sl_base / 100, 0.01) * 100, 1))
@@ -1155,6 +1174,12 @@ def _build_professional_block(
             _decision_label = "[WAIT] — انتظر تأكيد 2/4 مؤشرات (ثقة عالية لكن لا تأكيد)"
             _pos_size_rule  = "0% — لا تأكيدات كافية للدخول"
             _pos_norm = 0.0
+            # action_size_sync_fix: نفس التصحيح — لا يجوز "تداول بحجم طبيعي"
+            # هنا رغم ثقة عالية، ما دامت التأكيدات <2/4 تفرض 0% فعلياً
+            try:
+                object.__setattr__(regime, 'action', 'wait_confirmations_24')
+            except Exception:
+                pass
         else:
             _decision_label = f"[HIGH] — حجم {_t_max_pos}%"
             _pos_high  = min(float(_t_max_pos), round(_t_risk * 1.3 / max(_sl_base / 100, 0.01) * 100, 1))
@@ -2758,6 +2783,22 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             mtf_status=_mtf_confirm if "_mtf_confirm" in dir() else "")
         fib_lines  = _fmt_fib_lines(fib, price)
 
+        # confidence_header_sync_fix: رأس الرسالة (engine.signal_layer.
+        # format_ar لاحقاً) يعرض signal.confidence — القيمة الأصلية وقت
+        # توليد الإشارة، قبل أي رفع من التأكيدات (conf_reason_fix_pro داخل
+        # _build_professional_block). عندما يحدث رفع، يبقى الرأس على القيمة
+        # القديمة بينما "Confidence Score" وأسباب القرار تعرض القيمة
+        # المرفوعة — رقمان مختلفان لنفس المفهوم (موثَّق فعلياً: XSPCX
+        # "53%" بالرأس مقابل "56%" بالجسم). الإصلاح: مزامنة signal.confidence
+        # مع القيمة النهائية بعد الرفع (_sig_meta) قبل بناء نص الرأس، بحيث
+        # يعرض كلاهما نفس الرقم دائماً.
+        try:
+            _final_conf_pct = _sig_meta.get("confidence_pct") if _sig_meta else None
+            if _final_conf_pct is not None:
+                signal.confidence = _final_conf_pct / 100
+        except Exception:
+            pass
+
         # حذف تقييم المخاطر عند وجود Professional Block (M#51)
         _risk_text = _clean_md(engine.risk_engine.format_assessment_ar(risk, symbol))
         # إظهار تقييم المخاطر فقط عند الموافقة (لا عند الرفض مع وجود pro block)
@@ -2795,10 +2836,20 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         # multi_tf_fix: إضافة تصنيف متعدد الأطر
         # sig_4h_fix: _sig_4h قد لا يكون مُعرَّفاً في جميع المسارات
-        try:
-            _4h_dir = "🟢 صاعد" if _sig_4h and len(_sig_4h) >= 5 and float(_sig_4h[-1].get("close",0)) > float(_sig_4h[0].get("close",0)) else "🔴 هابط"
-        except Exception:
-            _4h_dir = "🟡 محايد"
+        # mtf_dual_source_fix: كان _4h_dir يُحسَب هنا بطريقة منفصلة تماماً
+        # (مقارنة إغلاق أول شمعة بآخر شمعة في نافذة 4H) عن _c4h_trend
+        # (يُقارن الإغلاق الحالي بـEMA20 على 4H، المُستخدَم في سطر "ℹ️ اتجاه
+        # 4H" لاحقاً) — منهجيتان مختلفتان يمكن أن تتعارضا تماماً (موثَّق
+        # فعلياً: XRKLB أظهر "4H 🟢 صاعد" هنا و"4H 🔴 هابط" لاحقاً في نفس
+        # الرسالة). الإصلاح: استخدام _c4h_trend نفسه (المصدر الأدق والأحدث)
+        # هنا أيضاً بدل حساب مستقل، لضمان تطابق أي ذكر لاتجاه 4H في الرسالة.
+        if "_c4h_trend" in dir():
+            _4h_dir = _c4h_trend
+        else:
+            try:
+                _4h_dir = "🟢 صاعد" if _sig_4h and len(_sig_4h) >= 5 and float(_sig_4h[-1].get("close",0)) > float(_sig_4h[0].get("close",0)) else "🔴 هابط"
+            except Exception:
+                _4h_dir = "🟡 محايد"
         _daily_dir = ("🟢 صاعد" if regime.description_ar and "صاعد" in regime.description_ar
                       else "🔴 هابط" if regime.description_ar and "هابط" in regime.description_ar
                       else "🟡 محايد")
