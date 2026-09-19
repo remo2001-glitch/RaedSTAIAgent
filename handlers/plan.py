@@ -101,10 +101,12 @@ def _get_message_p(update, context=None):
 async def callback_plan_exec(update, context):
     """
     plan_execute_v2: تنفيذ صفقة من الخطة عبر /execute مباشرة
-    صيغة: plan_exec:{symbol}:{price}:{side}
+    صيغة: plan_exec:{symbol}:{price}:{side}:{signal_id}
     exec_button_signal_gate_fix (#328): أضيف {side} (buy/sell) ليعكس اتجاه
     الإشارة الفعلي بدل افتراض "buy" ثابتاً دائماً — مع دعم الصيغة القديمة
     (3 أجزاء بدون side) كـfallback آمن لأزرار قديمة محتملة.
+    خطة التطوير — البُعد الرابع: أضيف {signal_id} (اختياري، قد يكون فارغاً)
+    لربط الصفقة المُنفَّذة بسجل الإشارة الأصلي — لا يكسر الصيغ الأقدم.
     """
     query   = update.callback_query
     await query.answer()
@@ -119,6 +121,7 @@ async def callback_plan_exec(update, context):
     except ValueError:
         await query.edit_message_text("❌ سعر غير صالح"); return
     side = parts[3].lower() if len(parts) > 3 and parts[3].lower() in ("buy", "sell") else "buy"
+    signal_id = parts[4] if len(parts) > 4 and parts[4] else None
 
     engine = context.bot_data.get("raed_engine")
     if not engine:
@@ -136,6 +139,7 @@ async def callback_plan_exec(update, context):
     context.args = [symbol, side]
     context.user_data["_plan_exec_price"] = price
     context.user_data["_from_plan"] = True
+    context.user_data["_plan_exec_signal_id"] = signal_id
 
     await query.edit_message_text(
         f"⏳ جاري تقييم {symbol} للتنفيذ من الخطة..."
@@ -830,6 +834,26 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # السعر من الجلب المتوازي
                 price_d = _prices_all[i] if not isinstance(_prices_all[i], Exception) else {}
                 price   = float((price_d or {}).get("price") or 0)
+                # خطة التطوير — البُعد الرابع: تسجيل الإشارة فور صدورها
+                # (بصرف النظر عن التنفيذ) — signal_id يُرفَق لاحقاً بزر
+                # التنفيذ إن ظهر، ليُربَط بنتيجته الفعلية عند الإغلاق.
+                # ملاحظة معروفة: entry/SL/TP هنا تقريبية (نسب ثابتة عن
+                # السعر وقت توليد الخطة) وليست من _build_professional_block
+                # الأدق المُستخدَم في /signal — كافية لمرحلة البنية التحتية.
+                _sig_id_pm = None
+                try:
+                    _sig_id_pm = engine.signal_tracker.log_signal(
+                        symbol=sym, setup_type=signal.direction or "neutral",
+                        direction=signal.direction, confidence_pct=signal.confidence * 100,
+                        confirmations_met=0, entry_price=price,
+                        sl_price=price * 0.96 if signal.direction == "long" else price * 1.04,
+                        tp1_price=price * 1.04 if signal.direction == "long" else price * 0.96,
+                        rsi_1d=_calc_rsi(candles_clean) if "_calc_rsi" in dir() else None,
+                        regime=regime_desc if "regime_desc" in dir() else "",
+                        user_id=update.effective_user.id if update.effective_user else None,
+                    )
+                except Exception as _ste_pm:
+                    logger.debug(f"signal_tracker.log_signal (plan_month): {_ste_pm}")
                 candidates.append({
                     "symbol":          sym,
                     "confidence":      signal.confidence,
@@ -838,6 +862,7 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "liquidity_score": liq_score,
                     "expected_return": _est_return(signal, regime),
                     "price":           price,
+                    "signal_id":       _sig_id_pm,
                 })
             except Exception as e:
                 logger.warning(f"plan_month {sym}: {e}")
@@ -1102,16 +1127,20 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
             c["symbol"]: (c.get("direction", "neutral"), float(c.get("confidence") or 0))
             for c in candidates if c.get("symbol")
         }
+        # خطة التطوير — البُعد الرابع: signal_id لكل رمز، ليُرفَق بزر
+        # التنفيذ ويُربَط لاحقاً بنتيجة الصفقة الفعلية عند إغلاقها
+        _sym_sigid_pw = {c["symbol"]: c.get("signal_id") for c in candidates if c.get("symbol")}
         _exec_buttons = []
         for _sym_pw in symbols[:10]:
             _p_pw = _sym_prices_pw.get(_sym_pw, 0)
             _dir_pw, _conf_pw = _sym_signal_pw.get(_sym_pw, ("neutral", 0.0))
             if _p_pw > 0 and _dir_pw in ("long", "short") and _conf_pw >= _t_entry_exec:
                 _side_pw = "buy" if _dir_pw == "long" else "sell"
+                _sigid_pw = _sym_sigid_pw.get(_sym_pw) or ""
                 _exec_buttons.append([
                     InlineKeyboardButton(
                         f"⚡ تنفيذ {_sym_pw} ({'شراء' if _side_pw == 'buy' else 'بيع'})",
-                        callback_data=f"plan_exec:{_sym_pw}:{_p_pw:.4f}:{_side_pw}"
+                        callback_data=f"plan_exec:{_sym_pw}:{_p_pw:.4f}:{_side_pw}:{_sigid_pw}"
                     )
                 ])
         _exec_buttons.append([

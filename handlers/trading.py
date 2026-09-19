@@ -1285,7 +1285,12 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
         from core.state_manager import state_manager as _sm_vex
         from core.virtual_wallet import VirtualWallet as _VW_ex
         _vw_ex = _VW_ex(_sm_vex.get_virtual_wallet(user_id) or {})
-        _buy_result = _vw_ex.buy(symbol, ep, final_size)
+        # خطة التطوير — البُعد الرابع: إن جاء التنفيذ من زر خطة (plan_exec)
+        # يحمل هوية إشارة مُسجَّلة مسبقاً، نربطها بالصفقة هنا لتُستخدَم عند
+        # الإغلاق التلقائي لاحقاً (TP/SL) في تحديث سجل أداء الإشارة الأصلي
+        _plan_sig_id = context.user_data.pop("_plan_exec_signal_id", None) if context.user_data else None
+        _buy_result = _vw_ex.buy(symbol, ep, final_size, signal_id=_plan_sig_id,
+                                  setup_type=trade_dir if _plan_sig_id else None)
         if _buy_result.get("ok"):
             # تحديث SL/TP في الـ position
             if symbol.upper() in (_vw_ex.positions or {}):
@@ -2792,6 +2797,12 @@ async def cb_vclose(update, context):
             try:
                 if engine:
                     engine.drift_monitor.record_outcome(pnl > 0)
+                    # خطة التطوير — البُعد الرابع: إغلاق يدوي عبر الزر —
+                    # نُصنِّفه "manual_close" (لا TP ولا SL) بدل تجاهله، حتى
+                    # لا تُفقَد بيانات الإشارات المُغلَقة يدوياً من التحليل
+                    _sig_id_mc = result.get("trade", {}).get("signal_id")
+                    if _sig_id_mc:
+                        engine.signal_tracker.close_signal(_sig_id_mc, cur_price, "manual_close")
             except Exception:
                 pass
             _close_type = "كامل" if pct == 100 else f"{pct}%"
