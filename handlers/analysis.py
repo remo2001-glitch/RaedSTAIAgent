@@ -1084,9 +1084,17 @@ def _build_professional_block(
 
     # ── مصفوفة القرار ──
     # signal_logic_fix: RSI>=70 → [WAIT] دائماً (70 بالضبط = ذروة شراء)
+    # rsi_action_stale_fix: كان الشرط الثاني (regime.action=="overbought_wait")
+    # يُفعِّل هذا الفرع حتى عندما يكون RSI 1D الحالي (المعروض في الرأس)
+    # منخفضاً تماماً (مثال موثَّق: RSI 1D=56 مع نص "ذروة شراء — انتظر تحت
+    # 60" رغم أن 56 أصلاً تحت 60!) — يرجَّح أن regime.action تحمل قيمة من
+    # مصدر/إطار زمني مختلف (كـRSI 4H) دون تسمية ذلك، فيبدو الإجراء متناقضاً
+    # مع RSI 1D المعروض بجانبه مباشرة. الإصلاح: قبول القيمة المخزَّنة فقط
+    # إذا كان RSI 1D الحالي نفسه مرتفعاً بما يكفي (≥60) ليكون التحذير
+    # منطقياً بالنسبة لما يُعرَض فعلياً للمستخدم.
     _is_overbought_wait = (
         rsi >= 70
-        or (hasattr(regime, 'action') and regime.action == "overbought_wait")
+        or (rsi >= 60 and hasattr(regime, 'action') and regime.action == "overbought_wait")
     )
 
     if _is_overbought_wait:
@@ -1111,7 +1119,14 @@ def _build_professional_block(
     elif _conf_score < _t_wait:
         _decision_label = "[WAIT] — لا صفقة نشطة"
         _pos_size_rule  = "0% — انتظر مؤشرات أقوى"
-        if hasattr(regime, 'action') and regime.action == "trade_normal":
+        # action_size_sync_fix (امتداد): كان الشرط يتحقق فقط من
+        # regime.action == "trade_normal"، فيفوت أي قيمة أخرى (مثال موثَّق
+        # فعلياً: "reduce_size" ⚠️ تقليل الحجم 50% بقيت ظاهرة رغم أن هذا
+        # الفرع يفرض 0% دائماً وبلا شرط) — تناقض مباشر بين "تقليل 50%"
+        # و"0%" في نفس الرسالة. بما أن _pos_size_rule هنا 0% دون قيد على
+        # قيمة regime.action الأصلية، يجب تصحيح الإجراء المعروض دائماً هنا،
+        # لا فقط عند قيمة واحدة بعينها.
+        if hasattr(regime, 'action'):
             try:
                 object.__setattr__(regime, 'action', 'avoid')
                 if hasattr(regime, 'metrics') and isinstance(regime.metrics, dict):
@@ -5054,16 +5069,26 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             entry = price * 0.98; tp1 = price * 1.03; tp2 = price * 1.06; sl = price * 0.95
         elif rsi > 70 and fear_val > 60:
             direction = "🔴 بيع محتمل"
-            entry = price * 1.01; tp1 = price * 0.95; tp2 = price * 0.90; sl = price * 1.05
+            # entry_resistance_anchor_fix: entry كان نسبة ثابتة (price*1.01)
+            # مستقلة تماماً عن resistance (Fibonacci/pivot، محسوبة بطريقة
+            # منفصلة) — قد يقع entry عرضاً فوق resistance المعروضة في نفس
+            # الرسالة (موثَّق فعلياً: ETH/BTC أظهر دخولاً 0.032754 فوق
+            # مقاومة 0.032723)، مما يُفرغ فكرة "Limit Sell عند المقاومة" من
+            # معناها. الإصلاح: عند توفر resistance فعلية، يُستخدَم الأدنى
+            # بينها وبين النسبة الثابتة، لضمان ألا يتجاوز الدخول المقاومة.
+            entry = min(price * 1.01, resistance * 0.999) if resistance > price else price * 1.01
+            tp1 = price * 0.95; tp2 = price * 0.90; sl = price * 1.05
         elif rsi > 70 and ema_bearish:
             direction = "🔴 بيع قوي"
-            entry = price * 1.005; tp1 = price * 0.94; tp2 = price * 0.88; sl = price * 1.04
+            entry = min(price * 1.005, resistance * 0.999) if resistance > price else price * 1.005
+            tp1 = price * 0.94; tp2 = price * 0.88; sl = price * 1.04
         elif 30 <= rsi <= 45 and fear_val < 50 and not is_bearish:
             direction = "🟡 شراء محتاط"
             entry = price * 0.99; tp1 = price * 1.04; tp2 = price * 1.08; sl = price * 0.96
         elif 55 <= rsi <= 70 and fear_val > 50:
             direction = "🟠 بيع محتاط"
-            entry = price * 1.01; tp1 = price * 0.96; tp2 = price * 0.92; sl = price * 1.04
+            entry = min(price * 1.01, resistance * 0.999) if resistance > price else price * 1.01
+            tp1 = price * 0.96; tp2 = price * 0.92; sl = price * 1.04
         # إصلاح #240: else branch — يجب مراعاة اتجاه السوق
         # في السوق الهابط: لا يُعطي Long ضمنياً — TP/SL تعكس الانتظار الحقيقي
         elif is_bearish or ema_bearish:
