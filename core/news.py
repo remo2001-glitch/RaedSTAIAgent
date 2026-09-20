@@ -21,7 +21,11 @@ GROQ_API_URL   = "https://api.groq.com/openai/v1/chat/completions"
 # groq_model_fix: نموذج Groq المتاح
 GROQ_MODELS_LIST = [
     "groq/compound",                   # نموذج Groq الأساسي (يعمل عبر API)
-    "qwen/qwen3.6-27b",               # بديل Alibaba (بدون json_mode)
+    "qwen/qwen3.8-27b",               # بديل Alibaba (بدون json_mode)
+    # model_404_fix: qwen/qwen3.6-27b (السابق) أصبح 404 "does not exist or
+    # you do not have access to it" — موثَّق فعلياً من سجل Railway الحي.
+    # Groq يُصدر نسخاً جديدة من نماذج Qwen بوتيرة سريعة وتحذف القديمة —
+    # هذا الاسم نفسه قد يحتاج تحديثاً مستقبلياً مماثلاً إذا تكرر 404.
     "openai/gpt-oss-120b",            # بديل OpenAI OSS (بدون json_mode)
 ]
 GROQ_MODEL     = GROQ_MODELS_LIST[0]
@@ -1332,8 +1336,18 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
         # T11_fix v4: نماذج Groq Vision المدعومة (يوليو 2026)
         # محذوف: llava-v1.5, llava-v1.6, llama-3.2-90b, llama-4-maverick, llama-4-scout
         # مدعوم: Qwen3 Vision ✅
+        # model_404_fix: qwen/qwen3.6-27b أصبح 404 فعلياً (موثَّق من سجل
+        # Railway الحي: "does not exist or you do not have access to it")
+        # — Groq استبدله بـqwen/qwen3.8-27b. كان VISION_MODELS يحوي نموذجاً
+        # وحيداً فقط ("النموذج الوحيد المدعوم") — نقطة فشل واحدة كاملة: أي
+        # تغيير/تعطيل لهذا الاسم يُسقِط ميزة /chart بالكامل بلا أي احتياط،
+        # وهو بالضبط ما حدث. النماذج الأخرى المُجرَّبة سابقاً (llama-4-scout
+        # وغيرها) إما مُزالة من Groq نهائياً أو قيد إزالة أيضاً حسب توثيق
+        # Groq الرسمي، فلا يوجد بديل حقيقي موثوق آخر لإضافته حالياً — نكتفي
+        # بتحديث الاسم الصحيح، مع تسجيل الخطأ بوضوح (موجود أصلاً أدناه)
+        # ليسهل اكتشاف أي 404 مستقبلي مماثل بسرعة كما حدث هذه المرة.
         VISION_MODELS = [
-            "qwen/qwen3.6-27b",  # T11_fix: النموذج الوحيد المدعوم ✅ (Vision + Text)
+            "qwen/qwen3.8-27b",
         ]
 
         try:
