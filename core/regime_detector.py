@@ -518,9 +518,20 @@ class RegimeDetector:
             f"🎯 *الاستراتيجية الموصى بها*\n"
             f"• {strategies_txt}\n"
             # signal_logic_fix: عند RSI>=70 → نص الإجراء يُظهر ذروة الشراء لا "تقليل 50%"
+            # rsi_action_stale_fix (امتداد لـ handlers/analysis.py): كان
+            # الفرع else يعرض result.action مباشرة بلا تحقق من اتساقه مع
+            # m.get('rsi') الحالي المعروض في نفس الرسالة — إذا كانت
+            # result.action محفوظة من لحظة classify() سابقة بقيمة RSI
+            # مختلفة (>70 وقتها) بينما m.get('rsi') الحالي أصبح <60 (موثَّق
+            # فعلياً: BTC عرض "RSI: 59" لكن "الإجراء: ذروة شراء — انتظر
+            # تصحيح تحت 60" رغم أن 59 أصلاً تحت 60)، ينتج نص متناقض ذاتياً
+            # مع الرقم المعروض بجانبه مباشرة. الإصلاح: نفس عتبة الأمان
+            # (rsi>=60) المطبَّقة في handlers/analysis.py.
             + (f"• الإجراء: {_action_ar('overbought_wait')} (RSI={m.get('rsi',50):.0f}>70 ذروة شراء)"
                if m.get("rsi", 50) >= 70 else
-               f"• الإجراء: {_action_ar(result.action)}{m.get('action_basis','')}")
+               f"• الإجراء: {_action_ar(result.action)}{m.get('action_basis','')}"
+               if not (result.action == "overbought_wait" and m.get("rsi", 50) < 60) else
+               f"• الإجراء: {_action_ar('trade_normal')}")
             + _rsi_warning(m.get("rsi", 50), result.regime)
             + _adx_warning(m.get("adx", 0))
         )
