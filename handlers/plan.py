@@ -2209,6 +2209,89 @@ async def cmd_reject(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _get_message_p(update, context).reply_text("❌ خطأ في معالجة الرفض")
 
 
+async def cmd_performance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /performance — خطة التطوير (البُعد الرابع): يعرض win_rate/expectancy
+    من core/signal_tracker.py، مُصنَّفة حسب setup_type (طويل/قصير/محايد) —
+    بخلاف /stats الذي يعرض إجمالياً واحداً فقط من كل صفقات VirtualWallet
+    بلا تصنيف. قراءة فقط — لا معايرة تلقائية لأي عتبة (بموافقة رحال).
+    """
+    engine = _eng(context)
+    if not engine:
+        await _get_message_p(update, context).reply_text("⚠️ النظام لم يُهيَّأ بعد"); return
+
+    tracker = getattr(engine, "signal_tracker", None)
+    if not tracker:
+        await _get_message_p(update, context).reply_text(
+            "⚠️ نظام تتبّع الأداء غير مُهيَّأ بعد."
+        )
+        return
+
+    try:
+        overall = tracker.compute_performance()
+
+        lines = [
+            "📊 *أداء الإشارات المُسجَّلة — رائد*",
+            "━━━━━━━━━━━━━━━━━━",
+        ]
+
+        if overall["win_rate"] is None:
+            lines.append(f"⚠️ {overall['note']}")
+            lines.append("")
+            lines.append(
+                "ℹ️ يبدأ التسجيل تلقائياً عند تنفيذ صفقات عبر أزرار "
+                "⚡ *تنفيذ* في /planmonth، ويتراكم مع كل صفقة تُغلَق "
+                "(TP أو SL)."
+            )
+        else:
+            lines.extend([
+                "",
+                "📈 *الإجمالي*",
+                f"• صفقات مغلقة: {overall['n_closed']}",
+                f"• معدل الفوز: {overall['win_rate']}%",
+                f"• العائد المتوقع (Expectancy): {overall['expectancy_pct']:+.2f}%",
+                f"• متوسط الربح: {overall['avg_win_pct']:+.2f}% | متوسط الخسارة: {overall['avg_loss_pct']:+.2f}%",
+            ])
+            if overall["note"]:
+                lines.append(f"⚠️ {overall['note']}")
+
+            # تفصيل حسب نوع الإعداد — هذا هو الفرق الجوهري عن /stats
+            _setup_labels = [
+                ("long",  "🟢 صفقات شراء (Long)"),
+                ("short", "🔴 صفقات بيع (Short)"),
+            ]
+            _breakdown_lines = []
+            for _setup_key, _setup_label in _setup_labels:
+                _perf = tracker.compute_performance(setup_type=_setup_key)
+                if _perf["n_closed"] > 0:
+                    _breakdown_lines.append(
+                        f"{_setup_label}: {_perf['n_closed']} صفقة | "
+                        f"فوز {_perf['win_rate']}% | "
+                        f"Expectancy {_perf['expectancy_pct']:+.2f}%"
+                        if _perf["win_rate"] is not None else
+                        f"{_setup_label}: {_perf['n_closed']} صفقة (غير كافية للحساب)"
+                    )
+            if _breakdown_lines:
+                lines.append("")
+                lines.append("📊 *حسب نوع الإشارة*")
+                lines.extend(f"• {l}" for l in _breakdown_lines)
+
+        lines.extend([
+            "",
+            "⚠️ إحصائيات من الصفقات الافتراضية المُسجَّلة عبر /planmonth "
+            "فقط حتى الآن (لا تشمل /signal مباشرة، ولا معايرة تلقائية "
+            "لأي عتبة بناءً على هذه الأرقام بعد).",
+            "🤖 رائد التداول الذكي",
+        ])
+
+        await _get_message_p(update, context).reply_text(
+            _clean("\n".join(lines)), parse_mode=ParseMode.MARKDOWN
+        )
+    except Exception as e:
+        logger.error(f"cmd_performance: {e}", exc_info=True)
+        await _get_message_p(update, context).reply_text("❌ تعذّر جلب إحصائيات الأداء حالياً")
+
+
 def register(app):
     from telegram.ext import CallbackQueryHandler as _CQH
     # أوامر الخطط — entry point جديد (T3)
@@ -2219,6 +2302,10 @@ def register(app):
     app.add_handler(CommandHandler("planweek_full",  cmd_plan_week))
     app.add_handler(CommandHandler("portfolio",  cmd_portfolio))
     app.add_handler(CommandHandler("stats",      cmd_stats))
+    # performance_command_fix (خطة التطوير — البُعد الرابع): يعرض
+    # win_rate/expectancy من signal_tracker مُصنَّفة حسب نوع الإشارة —
+    # كانت هذه البيانات تتراكم بصمت بلا أي وسيلة لعرضها للمستخدم
+    app.add_handler(CommandHandler("performance", cmd_performance))
     app.add_handler(CommandHandler("approve",    cmd_approve))
     app.add_handler(CommandHandler("reject",     cmd_reject))
     # Callbacks للخطط
