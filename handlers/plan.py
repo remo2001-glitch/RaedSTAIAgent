@@ -769,6 +769,7 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # إصلاح #280/#287: معالجة أوسع — microstructure اختيارية
         candidates = []
         _spot_unavailable_syms = set()  # planmonth_spot_skip_visibility_fix (#326)
+        _analysis_failed_syms = set()   # analysis_failure_visibility_fix
         for i, sym in enumerate(symbols):
             # TK5_fix: تحقق من توفر الأصل في Spot في plan_month
             if not _use_futures_pm:  # إصلاح: كان _use_futures_pw خطأ
@@ -867,6 +868,7 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.warning(f"plan_month {sym}: {e}")
                 # إصلاح #321: fallback بدلاً من تخطي العملة
+                _fb_added = False
                 try:
                     price_d2 = _prices_all[i] if not isinstance(_prices_all[i], Exception) else {}
                     price2   = float((price_d2 or {}).get("price") or 0)
@@ -885,9 +887,19 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             "expected_return": 0.03 if _dir_fb == "long" else -0.02,
                             "price":           price2,
                         })
+                        _fb_added = True
                         logger.info(f"plan_month {sym}: fallback signal RSI={_rsi_fb:.0f}")
                 except Exception as _fe:
                     logger.debug(f"plan_month {sym} fallback failed: {_fe}")
+                if not _fb_added:
+                    # analysis_failure_visibility_fix: كان هذا الفشل (استثناء
+                    # في التحليل الرئيسي + فشل fallback أيضاً — عادة بسبب
+                    # بيانات شموع غير كافية <14 أو فشل جلب السعر) صامتاً
+                    # تماماً، فيظهر الرمز بالسعر فقط دون أي تفسير — بالضبط
+                    # كنمط "غير متاح في Spot" لكن لسبب مختلف تماماً (بيانات
+                    # غير كافية لا عدم توفر السوق). نُسجِّله بنفس آلية العرض.
+                    _spot_unavailable_syms.discard(sym)  # ليست حالة "غير متاح Spot"
+                    _analysis_failed_syms.add(sym)
 
         ev_mult, ev_reason = engine.event_risk.get_exposure_multiplier()
 
@@ -964,6 +976,10 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 line += f" | {dir_ar} | ثقة: {conf:.0%}{conf_warn}"
                 if _t4:
                     line += f" | {_t4}"
+            elif sym_p in _analysis_failed_syms:
+                # analysis_failure_visibility_fix: سبب مختلف عن عدم توفر
+                # Spot — بيانات غير كافية أو فشل تحليل مؤقت
+                line += " | ⚠️ تعذّر التحليل حالياً — بيانات غير كافية، جرّب لاحقاً"
             elif sym_p in _spot_unavailable_syms:
                 # planmonth_spot_skip_visibility_fix (#326): سبب واضح بدل
                 # صمت يبدو كخلل بيانات
@@ -1036,12 +1052,28 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "• أسبوع 4: تقييم: هل تشكّل قاع؟ قرار الدخول الكامل",
                 ]
         elif regime.regime in (Regime.BULL_TREND, Regime.ACCUMULATION):
-            week_plan = [
-                f"• أسبوع 1: دخول مبكر — {invest_pct:.0%} من المحفظة (${invest_amount:,.0f})",
-                "• أسبوع 2: مضاعفة المراكز الرابحة عند تأكيد الاتجاه",
-                "• أسبوع 3: رفع وقف الخسارة للتعادل على جميع المراكز",
-                "• أسبوع 4: جني جزء من الأرباح (30-50%) والاحتفاظ بالباقي",
-            ]
+            # bull_plan_deployed_check_fix: كان هذا الفرع يعرض "دخول مبكر
+            # X%" دائماً بمجرد أن يكون الـRegime العام صاعداً — بصرف النظر
+            # تماماً عن كون allocation قد وجد فعلاً أي أصل مؤهل أم لا. نتج
+            # تناقض مالي مباشر موثَّق فعلياً: "⚠️ لا توجد أصول مؤهلة
+            # للتوزيع حالياً" ثم مباشرة "أسبوع 1: دخول مبكر — 70% من
+            # المحفظة ($7,189)" في نفس الرسالة! الإصلاح: نفس التحقق
+            # المُطبَّق أصلاً في فرع BEAR_TREND أعلاه — لا نقترح دخولاً
+            # فعلياً إلا إذا وُجد بالفعل مركز واحد على الأقل مؤهل.
+            if _deployed > 0 and _positions:
+                week_plan = [
+                    f"• أسبوع 1: دخول مبكر — {invest_pct:.0%} من المحفظة (${invest_amount:,.0f}) في {_pos_names}",
+                    "• أسبوع 2: مضاعفة المراكز الرابحة عند تأكيد الاتجاه",
+                    "• أسبوع 3: رفع وقف الخسارة للتعادل على جميع المراكز",
+                    "• أسبوع 4: جني جزء من الأرباح (30-50%) والاحتفاظ بالباقي",
+                ]
+            else:
+                week_plan = [
+                    f"• أسبوع 1: احتفظ بالسيولة (${user_portfolio:,.0f}) — لا أصول مستوفية للثقة رغم الاتجاه العام الصاعد ({_rsi_label})",
+                    "• أسبوع 2: راقب اقتراب أي عملة من حد الثقة أو تصحيح RSI",
+                    "• أسبوع 3: عند تحقق 2/4 تأكيدات لأي أصل → دخول تدريجي",
+                    "• أسبوع 4: تقييم — هل تحسّنت شروط الدخول؟",
+                ]
         else:
             week_plan = [
                 "• أسبوع 1: مراقبة — لا دخول حتى تتضح الإشارات",
@@ -1387,17 +1419,11 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _fear_label = fear.get("label_ar", "محايد")
         _regime_ar  = regime.description_ar
 
-        # قرار موقفي بناءً على السوق
-        if fear_val <= 20 and "هابط" in _regime_ar:
-            _pw_decision = "🚨 *لا دخول* — خوف شديد + سوق هابط"
-        elif fear_val <= 30 and "هابط" in _regime_ar:
-            _pw_decision = "⚠️ *تقليل التعرض* — سوق هابط + خوف"
-        elif fear_val <= 40:
-            _pw_decision = "🟡 *انتظار* — شروط الدخول غير مكتملة"
-        elif "صاعد" in _regime_ar and fear_val >= 50:
-            _pw_decision = "✅ *يمكن الدخول بحجم طبيعي* — شروط مناسبة"
-        else:
-            _pw_decision = "🟡 *دخول محدود* — انتظر تأكيداً إضافياً"
+        # weekly_decision_qualified_check_fix: الحساب المبكر السابق لـ
+        # _pw_decision (يعتمد فقط على Fear&Greed والـRegime العام) أُزيل من
+        # هنا بالكامل — القرار الآن يُحسَب فقط بعد حلقة تحليل العملات
+        # (أسفل، بعد _pw_qualified_count) ليعكس أي عملة تستوفي الشروط
+        # فعلياً، لا افتراضاً عاماً. راجع التعليق عند lines[_pw_decision_slot_idx].
 
         lines = [
             "📅 *الخطة الأسبوعية — رائد*",
@@ -1405,11 +1431,20 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"السوق: {_regime_ar}",
             f"Fear & Greed: {fear_val} — {_fear_label}",
             "",
-            f"🎯 *القرار الأسبوعي:* {_pw_decision}",
-            "",
         ]
+        # weekly_decision_qualified_check_fix: كان "القرار الأسبوعي" يُحسَب
+        # هنا (قبل حلقة تحليل العملات) اعتماداً فقط على Fear&Greed والـRegime
+        # العام، بصرف النظر التام عن كون أي عملة فردية تستوفي فعلاً شروط
+        # الدخول (RSI+EMA50+ثقة) — تناقض موثَّق فعلياً: "✅ يمكن الدخول
+        # بحجم طبيعي" ظهر بينما كل العملات العشر أظهرت "⚪ انتظار" فردياً.
+        # الإصلاح: حجز موضع هنا، وملؤه لاحقاً بعد الحلقة بعدد العملات التي
+        # استوفت فعلياً كل الشروط (لا الثقة فقط).
+        _pw_decision_slot_idx = len(lines)
+        lines.append("")  # سيُستبدَل لاحقاً بالقرار الفعلي بعد الحلقة
+        lines.append("")
 
         _buy_signals = []  # إصلاح #382: تجميع إشارات الشراء
+        _pw_qualified_count = 0  # weekly_decision_qualified_check_fix
         for i, sym in enumerate(symbols):
             # TK6_fix: تحقق من توفر الأصل في Spot في plan_week
             if not _use_futures_pw:  # إصلاح: كان _use_futures_pm خطأ
@@ -1491,11 +1526,13 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # rsi_plan_fix: RSI>=70 → تحذير لا تأكيد
                 if rsi_w >= 70:
                     _rsi_cond = f"  • ⚠️ RSI = {rsi_w:.0f} ذروة شراء — انتظر تصحيح تحت 60"
+                    _rsi_ok_w = False
                 else:
                     _rsi_warn_w = ""
                     _rsi_cond = (f"  • ✅ RSI فوق {_rsi_t_w} (حالياً {rsi_w:.0f}){_rsi_warn_w} — مُستوفى"
                              if rsi_w > _rsi_t_w else
                              f"  • RSI يرتفع فوق {_rsi_t_w} (حالياً {rsi_w:.0f})")
+                    _rsi_ok_w = rsi_w > _rsi_t_w
                 # BGB_fix: إذا ema50_w=0 → استخدم السعر
                 if ema50_w <= 0:
                     ema50_w = price
@@ -1503,6 +1540,19 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _ema_cond = (f"  • ✅ السعر فوق EMA50 ({_fmt_price(ema50_w)}) — مُستوفى"
                              if price > ema50_w else
                              f"  • إغلاق فوق EMA50 ({_fmt_price(ema50_w)} — بُعد {_ema50_dist_w:.1f}%)")
+                # pro_option_technical_gate_fix: "خيار المحترف" كان يُفعَّل
+                # بناءً على الثقة فقط، بصرف النظر تماماً عن استيفاء RSI/EMA50
+                # الفعلي — تناقض موثَّق فعلياً: XXLE بثقة 58% (فوق الحد) لكن
+                # RSI=26 (دون 45 بكثير) والسعر 11.1% تحت EMA50 (كلاهما غير
+                # مُستوفى، بلا ✅) ظهر مع صفقة "خيار محترف" كاملة جاهزة
+                # للتنفيذ. الإصلاح: بوابة إضافية تتطلب استيفاء كلا الشرطين
+                # التقنيين معاً مع الثقة، لا الثقة وحدها.
+                _ema_ok_w = price > ema50_w
+                # weekly_decision_qualified_check_fix: عدّاد العملات التي
+                # استوفت فعلياً كل الشروط الثلاثة معاً (لا الثقة وحدها)
+                _t_entry_check_w = _TIER_CONF_PLAN.get(_tier_pw, 65)
+                if _rsi_ok_w and _ema_ok_w and signal.confidence > _t_entry_check_w / 100:
+                    _pw_qualified_count += 1
 
                 # Fibonacci سريع
                 _fib_candles = candles[-30:] if len(candles) >= 30 else candles
@@ -1597,9 +1647,14 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             # T2_plan_fix: عتبة حسب الباقة
                             f"  • الثقة ≥ {_t_entry_plan}% (حالياً {signal.confidence:.0%})",
                             # plan_pro_fix: label واضح حسب حالة الإشارة
+                            # pro_option_technical_gate_fix: يتطلب الآن
+                            # استيفاء RSI وEMA50 معاً بجانب الثقة، لا الثقة
+                            # وحدها (راجع التعليق أعلاه عند حساب _rsi_ok_w/_ema_ok_w)
                             (f"  🛡️ خيار المحترف: Limit @ {_fmt_price(pro_entry_w)} | وقف: {_fmt_price(pro_sl_w)} | هدف: {_fmt_price(pro_tp_w)} | R/R: 1:{rr_w:.1f}"
-                             if signal.confidence > _t_entry_plan / 100
-                             else f"  🔒 خيار المحترف: غير مُفعَّل (ثقة {signal.confidence*100:.0f}% ≤ {_t_entry_plan}%)"),
+                             if (signal.confidence > _t_entry_plan / 100
+                                 and locals().get("_rsi_ok_w", True)
+                                 and locals().get("_ema_ok_w", True))
+                             else f"  🔒 خيار المحترف: غير مُفعَّل ({'ثقة ' + str(round(signal.confidence*100)) + '% ≤ ' + str(_t_entry_plan) + '%' if signal.confidence <= _t_entry_plan/100 else 'شرط RSI/EMA50 غير مُستوفى'})"),
                             f"  📊 Fib دعم: {_fmt_price(_disp_support)} | مقاومة: {_fmt_price(_disp_resistance)}",
                         ]
 
@@ -1730,6 +1785,24 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
         sched_text  = engine.scheduler.next_weekly_ar() if engine.scheduler else ""
+
+        # weekly_decision_qualified_check_fix: نملأ الآن الموضع المحجوز
+        # لـ"القرار الأسبوعي" بعد اكتمال حلقة تحليل كل العملات، بحيث يعكس
+        # عدد العملات المؤهلة فعلياً (_pw_qualified_count) لا فقط الـRegime
+        # العام والخوف والطمع. لا نُظهر "يمكن الدخول بحجم طبيعي" أبداً إن
+        # كان العدد صفراً، بصرف النظر عن قوة الاتجاه العام المُشخَّص.
+        if _pw_qualified_count == 0:
+            if fear_val <= 20 and "هابط" in _regime_ar:
+                _pw_decision = "🚨 *لا دخول* — خوف شديد + سوق هابط"
+            elif fear_val <= 30 and "هابط" in _regime_ar:
+                _pw_decision = "⚠️ *تقليل التعرض* — سوق هابط + خوف"
+            else:
+                _pw_decision = "🟡 *انتظار* — لا عملة تستوفي الشروط بعد رغم الاتجاه العام"
+        elif _pw_qualified_count >= 3:
+            _pw_decision = f"✅ *يمكن الدخول بحجم طبيعي* — {_pw_qualified_count} عملات مؤهلة"
+        else:
+            _pw_decision = f"🟡 *دخول محدود* — {_pw_qualified_count} عملة/عملتان مؤهلتان فقط"
+        lines[_pw_decision_slot_idx] = f"🎯 *القرار الأسبوعي:* {_pw_decision}"
 
         # إصلاح #293/#252: week_plan ديناميكي في planweek
         _rsi_pw  = float((getattr(regime,"metrics",{}) or {}).get("rsi", 50) or 50)

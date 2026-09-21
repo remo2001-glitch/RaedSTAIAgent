@@ -236,6 +236,22 @@ def _market_contradiction(rsi: float, fear_greed: int, regime_desc: str) -> str:
     return ""
 
 
+def _fmt_rr(rr: float) -> str:
+    """
+    rr_boundary_precision_fix: تنسيق R/R بدقة تتكيّف مع قربه من عتبة 2.0.
+    كان عرض منزلة عشرية واحدة (.1f) يُنتج أحياناً "2.0" لقيمة فعلية أقل
+    قليلاً (مثال موثَّق فعلياً: 1.96 → يُعرَض "2.0")، بينما يظهر بجانبه
+    تحذير "R/R = 2.0 ضعيف (يُفضَّل ≥ 2.0)" — تناقض ظاهري: نفس الرقم
+    المعروض يبدو مساوياً للعتبة رغم أن المقارنة الصحيحة (على القيمة غير
+    المُقرَّبة) هي التي أنتجت التحذير بحق. الإصلاح: عند تقريب القيمة إلى
+    "2.0" بالضبط لمنزلة عشرية واحدة، نعرض منزلتين عشريتين بدلاً من ذلك،
+    بحيث يعكس الرقم المعروض بدقة أكبر ما إذا كان فعلاً فوق أو تحت العتبة.
+    """
+    if round(rr, 1) == 2.0:
+        return f"{rr:.2f}"
+    return f"{rr:.1f}"
+
+
 def _fmt_price(price: float, quote: str = "USDT") -> str:
     """تنسيق السعر حسب حجمه ووحدة التسعير (تطوير #188).
     quote="USDT" (افتراضي): السلوك الأصلي تماماً — "$X"."""
@@ -1315,7 +1331,7 @@ def _build_professional_block(
             # أن R/R المعروض يطابق حسابياً ما يراه المستخدم من الأسعار الفعلية
             _rr_shown = abs(tp1_v - entry_agg) / max(abs(entry_agg - pro_sl), 1e-9)
         if _rr_shown is not None and 0 < _rr_shown < 2.0:
-            _risk_warnings.append(f"⚠️ R/R = {_rr_shown:.1f} ضعيف (يُفضَّل ≥ 2.0)")
+            _risk_warnings.append(f"⚠️ R/R = {_fmt_rr(_rr_shown)} ضعيف (يُفضَّل ≥ 2.0)")
 
     # Worst-Case
     # إصلاح #95: ضمان أن مستويات Worst-Case أعمق من (أو تساوي) SL المعروض،
@@ -1498,7 +1514,7 @@ def _build_professional_block(
     elif tp1_v > 0 and pro_entry > 0 and pro_sl > 0:
         # display_pct_consistency_fix (#307): نفس التوحيد أعلاه
         _rr_calc = abs(tp1_v - entry_agg) / max(abs(entry_agg - pro_sl), 1e-9)
-        _rr_line = f"• R/R: {_rr_calc:.1f} — انتظر تأكيد 2/4 مؤشرات"
+        _rr_line = f"• R/R: {_fmt_rr(_rr_calc)} — انتظر تأكيد 2/4 مؤشرات"
     else:
         _rr_line = "• R/R: يحتاج تحديد Entry/SL/TP"
     # pos_size_atr_fix: عرض حجم المركز من ATR بجانب النسبة
@@ -5190,7 +5206,7 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _qs_sl_pct = abs(entry - sl) / entry * 100
             _qs_tp_pct = abs(tp1 - entry) / entry * 100
             if _qs_sl_pct > 0 and _qs_tp_pct / _qs_sl_pct < 2.0:
-                _qs_warns.append(f"⚠️ R/R = {_qs_tp_pct/_qs_sl_pct:.1f} ضعيف (يُفضَّل ≥ 2.0)")
+                _qs_warns.append(f"⚠️ R/R = {_fmt_rr(_qs_tp_pct/_qs_sl_pct)} ضعيف (يُفضَّل ≥ 2.0)")
         for _w in _qs_warns:
             lines.append(_w)
         if bear_buy_warning:
