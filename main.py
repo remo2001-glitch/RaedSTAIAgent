@@ -379,6 +379,7 @@ async def post_init(app: Application):
         BotCommand("autotrade",    "تداول تلقائي on/off"),
         BotCommand("execute",      "تنفيذ فوري"),
         BotCommand("stats",        "إحصائيات فورية"),
+        BotCommand("performance",  "أداء الإشارات حسب النوع"),
         BotCommand("risk",         "حالة المخاطر"),
         BotCommand("events",       "الأحداث القادمة"),
         BotCommand("outlook", "رؤية المؤسسات — BlackRock"),
