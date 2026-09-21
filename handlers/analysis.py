@@ -2523,7 +2523,13 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # TK_Spot_fix: للأصول X-prefix في Spot → استخدام XSPCX لجلب البيانات
     # XSKHY_fix: إذا X-prefix وليس في القائمة المعروفة → symbol = raw_arg كاملاً
-    if raw_arg.upper().startswith("X") and len(raw_arg) > 2:
+    # symbol_resolve_symmetry_fix: كان هذا الشرط في /signal لا يتحقق من
+    # _use_futures إطلاقاً (بعكس /analyze الذي يتحقق منه صراحة: "not
+    # _use_futures_an") — عدم تناظر في المنطق قد يُنتج _data_sym_sig مختلفاً
+    # عن _spot_data_symbol_an لنفس المستخدم/الرمز في حالات وضع futures، مما
+    # يُنتج مفتاح كاش مختلفاً وبيانات شموع مختلفة رغم توحيد عدد الأيام.
+    # الإصلاح: نفس الشرط تماماً في كلا الأمرين.
+    if not _use_futures and raw_arg.upper().startswith("X") and len(raw_arg) > 2:
         _spot_data_symbol = raw_arg.upper()  # XSPCX/XSKHY للـ OKX API
         # إذا resolve أعطانا base مختلف → أعِد symbol للأصلي
         if symbol != raw_arg.upper() and not _use_futures:
