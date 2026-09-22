@@ -183,9 +183,22 @@ class RegimeDetector:
         elif regime == Regime.DISTRIBUTION:
             market_phase = "Distribution"
         elif regime == Regime.SIDEWAYS:
-            # الفرق بين تراكم وتوزيع: هل كان قبلها هبوط أم صعود؟
+            # market_phase_hysteresis_fix: نفس منطق إصلاح #85 (المُطبَّق أدناه
+            # فقط على HIGH_VOLATILITY) لم يكن مُطبَّقاً هنا — long_chg بعتبة
+            # ±5% صارمة بلا نطاق محايد، فأي فارق طفيف في الشمعة الأخيرة غير
+            # المُغلَقة بعد بين استدعاءين منفصلين (/signal و/analyze) قد
+            # يقلب التصنيف بالكامل بين Consolidation/Distribution/Accumulation
+            # — موثَّق فعلياً: XSPCX أظهر "تعزيز" في /signal و"توزيع" في
+            # /analyze بفارق دقائق فقط لنفس الرمز. الإصلاح: نطاق محايد ±1%
+            # حول عتبة 5% (بين 4% و6%) يُبقي التصنيف "Consolidation" بدل
+            # القفز الحاد عند حدود دقيقة.
             long_chg = (closes[-1] - closes[-min(60, len(closes))]) / max(closes[-min(60, len(closes))], 1) * 100
-            market_phase = "Accumulation" if long_chg < -5 else "Distribution" if long_chg > 5 else "Consolidation"
+            if long_chg < -6:
+                market_phase = "Accumulation"
+            elif long_chg > 6:
+                market_phase = "Distribution"
+            else:
+                market_phase = "Consolidation"
         elif regime == Regime.HIGH_VOLATILITY:
             # إصلاح #85: نطاق محايد ±1% يمنع تذبذب Markup/Markdown
             # بين /signal و/analyze لنفس اللحظة بسبب فروق طفيفة في
