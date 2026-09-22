@@ -802,6 +802,16 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception:
                     pass
             if len(candles) < 30:
+                # analysis_failure_visibility_fix (امتداد): كان هذا "continue"
+                # صامتاً تماماً — لا استثناء يُطلَق (فيتجاوز معالج except
+                # الذي يُسجِّل _analysis_failed_syms)، ولا سبب "غير متاح Spot"
+                # (فهو مسار مختلف تماماً: بيانات شموع غير كافية <30 حتى بعد
+                # إعادة المحاولة). هذا بالضبط ما جعل XSPY/XSPCX/XQQQ تظهر
+                # بالسعر فقط بلا أي تفسير رغم إصلاحين سابقين — كلاهما يعتمد
+                # على استثناء أو فحص Spot، وهذا المسار الثالث لا يُشغِّل أياً
+                # منهما. الإصلاح: تسجيله بنفس آلية العرض المستخدَمة أصلاً.
+                _spot_unavailable_syms.discard(sym)
+                _analysis_failed_syms.add(sym)
                 continue
             try:
                 # إصلاح #321: تنظيف candles من القيم المعطوبة
@@ -1551,7 +1561,10 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # weekly_decision_qualified_check_fix: عدّاد العملات التي
                 # استوفت فعلياً كل الشروط الثلاثة معاً (لا الثقة وحدها)
                 _t_entry_check_w = _TIER_CONF_PLAN.get(_tier_pw, 65)
-                if _rsi_ok_w and _ema_ok_w and signal.confidence > _t_entry_check_w / 100:
+                # confidence_boundary_consistency_fix: >= بدل > لمطابقة بوابة
+                # "خيار المحترف" أعلاه — عملة عند الحد بالضبط (=55%) يجب أن
+                # تُحتسَب مؤهلة هنا أيضاً لو "خيار المحترف" اعتبرها مؤهلة.
+                if _rsi_ok_w and _ema_ok_w and signal.confidence >= _t_entry_check_w / 100:
                     _pw_qualified_count += 1
 
                 # Fibonacci سريع
@@ -1650,11 +1663,17 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             # pro_option_technical_gate_fix: يتطلب الآن
                             # استيفاء RSI وEMA50 معاً بجانب الثقة، لا الثقة
                             # وحدها (راجع التعليق أعلاه عند حساب _rsi_ok_w/_ema_ok_w)
+                            # confidence_boundary_consistency_fix: النص المعروض
+                            # "الثقة ≥ {_t_entry_plan}%" يَعِد بالتفعيل عند
+                            # التساوي بالضبط، لكن المقارنة كانت `>` صارمة —
+                            # موثَّق فعلياً: BTC بثقة 55% (=الحد بالضبط) عرض
+                            # "غير مُفعَّل (ثقة 55% ≤ 55%)" رغم أن النص المجاور
+                            # يقول "≥55%". الإصلاح: `>=` لتطابق الوعد النصي.
                             (f"  🛡️ خيار المحترف: Limit @ {_fmt_price(pro_entry_w)} | وقف: {_fmt_price(pro_sl_w)} | هدف: {_fmt_price(pro_tp_w)} | R/R: 1:{rr_w:.1f}"
-                             if (signal.confidence > _t_entry_plan / 100
+                             if (signal.confidence >= _t_entry_plan / 100
                                  and locals().get("_rsi_ok_w", True)
                                  and locals().get("_ema_ok_w", True))
-                             else f"  🔒 خيار المحترف: غير مُفعَّل ({'ثقة ' + str(round(signal.confidence*100)) + '% ≤ ' + str(_t_entry_plan) + '%' if signal.confidence <= _t_entry_plan/100 else 'شرط RSI/EMA50 غير مُستوفى'})"),
+                             else f"  🔒 خيار المحترف: غير مُفعَّل ({'ثقة ' + str(round(signal.confidence*100)) + '% < ' + str(_t_entry_plan) + '%' if signal.confidence < _t_entry_plan/100 else 'شرط RSI/EMA50 غير مُستوفى'})"),
                             f"  📊 Fib دعم: {_fmt_price(_disp_support)} | مقاومة: {_fmt_price(_disp_resistance)}",
                         ]
 
