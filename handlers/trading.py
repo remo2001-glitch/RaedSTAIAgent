@@ -42,6 +42,12 @@ async def _reply(update: Update, text: str, **kwargs):
         async def edit_text(self, *a, **kw): pass
     return _FakeMsg()
 from core.database      import db
+# undefined_keyboard_helper_fix: _plan_keyboard/_main_keyboard تُستدعيان في
+# cmd_upgrade/unknown_command/handle_text لكن لم تُستورَدا في هذا الملف
+# إطلاقاً — NameError مضمون عند أي وصول لهذه المسارات تحديداً (أوامر غير
+# معروفة، أو نص عادي خارج أي محادثة نشطة، أو /upgrade). نفس فئة خلل
+# dir_norm (متغيّر/دالة تُستخدَم دون تعريف أو استيراد سابق).
+from core.commands      import _plan_keyboard, _main_keyboard
 
 
 from decimal import Decimal as _Decimal, ROUND_HALF_UP as _ROUND_HALF_UP
@@ -786,6 +792,17 @@ async def callback_execmode(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lp, sl_cb, tp_cb = 0.0, 5.0, 6.0
 
     # تطبيع direction (استخراج الرافعة يأتي بعد هذا السطر)
+    # dir_norm_undefined_fix: كان "dir_norm" يُستخدَم في السطر التالي بلا أي
+    # تعريف سابق له في هذه الدالة إطلاقاً — NameError صريح وقع قبل بداية
+    # try/except المحلي (الذي يبدأ لاحقاً عند استدعاء cmd_execute)، فلم
+    # يُلتقَط هناك، وتصاعد للمعالج العام في main.py الذي يعرض رسالة عامة
+    # ("⚠️ حدث خطأ غير متوقع") تُخفي السبب الحقيقي تماماً. موثَّق فعلياً:
+    # فشل فوري عند اختيار "✅ حقيقي (OKX)" (وكان سيفشل بنفس الطريقة تماماً
+    # مع "افتراضي" أيضاً، فهذا السطر يُنفَّذ قبل أي تفرّع حسب mode). الإصلاح:
+    # تطبيع فعلي إلى الصيغة التي يتوقعها cmd_execute (buy/sell) بدل الاسم
+    # غير المُعرَّف، مطابقاً بالضبط منطق trade_dir الموجود داخل cmd_execute
+    # نفسها (direction in ("buy","شراء") → long، غير ذلك → short).
+    dir_norm = "buy" if direction.lower() in ("buy", "long", "شراء") else "sell"
     leverage_cb = 1
     for p in parts:
         if p.startswith("lev") and len(p)>3 and p[3:].isdigit():

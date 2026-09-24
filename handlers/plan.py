@@ -588,7 +588,19 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
     def _get_ohlcv_for_sym(sym):
         su = sym.upper()
         if su.startswith("X") and len(su) > 2:
-            return engine.data_layer.get_ohlcv(su, "1d", 50, mkttype="spot")
+            # ohlcv_cache_consistency_fix: /planweek يستخدم _cache_hint فريداً
+            # ("pw2_...") لهذا النوع من الرموز تحديداً (تعليق أصلي: "force
+            # cache refresh") بينما /planmonth لم يكن يستخدم أي cache_hint
+            # هنا — إذا خزَّن أي استدعاء سابق (لأي مستخدم) نتيجة فارغة أو
+            # غير كافية تحت المفتاح الافتراضي، يبقى /planmonth عالقاً بها
+            # حتى انتهاء صلاحية التخزين المؤقت، بينما /planweek يتجاوز ذلك
+            # دائماً بمفتاحه الخاص. موثَّق فعلياً: XSPY/XSPCX/XQQQ نجحت في
+            # /planweek وفشلت بـ"بيانات غير كافية" في /planmonth بفارق
+            # دقائق فقط لنفس الرموز. الإصلاح: نفس أسلوب التفرّد، بادئة
+            # مختلفة ("pm_") لتفادي تصادم المفاتيح بين الأمرين مع الإبقاء
+            # على تخزين مؤقت طبيعي داخل نفس الأمر.
+            return engine.data_layer.get_ohlcv(su, "1d", 50, mkttype="spot",
+                                                 _cache_hint=f"pm_{su}")
         elif su in {"SPCX","COIN","AAPL","NVDA","TSLA","MSFT","AMZN","GOOGL","META","AMD","OKB"}:
             return engine.data_layer.get_ohlcv_perp(su, 200)
         return engine.data_layer.get_ohlcv(su, "1d", 200)
