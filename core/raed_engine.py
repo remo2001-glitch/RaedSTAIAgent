@@ -79,7 +79,9 @@ class RaedEngine:
         self.news_engine      = NewsEngine(
             groq_key=config.get("GROQ_API_KEY", ""))
         self.backtest_engine  = BacktestEngine()
-        self.drift_monitor    = DriftMonitor(baseline_win_rate=0.55)
+        # drift_persistence_fix: حقن state_manager فور الإنشاء ليستعيد أي
+        # حالة محفوظة سابقاً بدل البدء من الصفر عند كل إعادة تشغيل
+        self.drift_monitor    = DriftMonitor(baseline_win_rate=0.55, state_manager=_sm_singleton)
         # signal_tracker (خطة التطوير — البُعد الرابع، بنية تحتية لحلقة
         # التعلّم الذاتي): يعمل بجانب drift_monitor لا بدلاً منه — يُسجِّل
         # بيانات كل إشارة مُصنَّفة حسب نوع الإعداد بدل رقم ربح/خسارة مُجمَّع

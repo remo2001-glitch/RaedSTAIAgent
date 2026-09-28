@@ -36,11 +36,55 @@ class DriftMonitor:
     DRIFT_SEVERE   = 0.35
     MIN_SIGNALS    = 10   # أدنى عدد إشارات للحكم
 
-    def __init__(self, baseline_win_rate: float = 0.55):
+    def __init__(self, baseline_win_rate: float = 0.55, state_manager=None):
         self.baseline       = baseline_win_rate
         self._outcomes:     List[bool] = []    # True=win, False=loss
         self._timestamps:   List[float] = []
         self._rolling_window = 50              # آخر 50 إشارة
+        # drift_persistence_fix: كانت _outcomes/_timestamps قائمتين في
+        # الذاكرة فقط، بلا أي تخزين دائم — تُصفَّران عند كل إعادة تشغيل
+        # للخدمة (كل عملية نشر جديدة على Railway، ومنها عدة مرات خلال هذه
+        # الجلسة نفسها). موثَّق فعلياً: "8 صفقات مغلقة" (من VirtualWallet
+        # المحفوظ في Redis) ظهرت بجانب "0/10 إشارة" في DriftMonitor —
+        # الفارق سببه إعادة تشغيل صفّرت DriftMonitor بينما بقيت المحفظة
+        # سليمة. هذا يُضعِف قيمة DriftMonitor كـ"شبكة أمان" ضد الانحراف في
+        # مشروع يُعاد نشره بوتيرة عالية. الإصلاح: حفظ/استرجاع الحالة عبر
+        # نفس state_manager (Redis) المُستخدَم أصلاً لـVirtualWallet.
+        self._sm = state_manager
+        self._load_state()
+
+    _REDIS_KEY = "raed:drift_monitor:state"
+
+    def _load_state(self):
+        if not self._sm or not getattr(self._sm, "_redis_ok", False):
+            return
+        try:
+            raw = self._sm._redis.get(self._REDIS_KEY)
+            if raw:
+                import json
+                data = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+                self._outcomes   = list(data.get("outcomes", []))
+                self._timestamps = list(data.get("timestamps", []))
+        except Exception as e:
+            logger.debug(f"DriftMonitor._load_state: {e}")
+
+    def _save_state(self):
+        if not self._sm or not getattr(self._sm, "_redis_ok", False):
+            return
+        try:
+            import json
+            self._sm._redis.set(self._REDIS_KEY, json.dumps({
+                "outcomes": self._outcomes,
+                "timestamps": self._timestamps,
+            }))
+        except Exception as e:
+            logger.debug(f"DriftMonitor._save_state: {e}")
+
+    def attach(self, state_manager):
+        """حقن state_manager بعد الإنشاء (نفس نمط signal_tracker.attach)،
+        ثم محاولة استرجاع أي حالة محفوظة سابقاً فوراً."""
+        self._sm = state_manager
+        self._load_state()
 
     def record_outcome(self, was_correct: bool):
         self._outcomes.append(was_correct)
@@ -49,6 +93,7 @@ class DriftMonitor:
         if len(self._outcomes) > self._rolling_window * 2:
             self._outcomes   = self._outcomes[-self._rolling_window:]
             self._timestamps = self._timestamps[-self._rolling_window:]
+        self._save_state()
 
     def assess(self) -> DriftState:
         recent = self._outcomes[-self._rolling_window:]
