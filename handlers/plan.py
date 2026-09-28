@@ -812,7 +812,12 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     pass
             candles = ohlcv_all[i] if isinstance(ohlcv_all[i], list) else []
             # إصلاح #307: إذا فشل OHLCV → retry بـ 50 شمعة
-            if len(candles) < 30:
+            # candle_threshold_consistency_fix: كانت العتبة هنا 30 بينما
+            # /planweek (لنفس نوع البيانات ونفس الرموز) يستخدم 20 فقط —
+            # موثَّق فعلياً: XSPCX/XSPY نجحا بالكامل في /planweek وفشلا
+            # بـ"بيانات غير كافية" في /planmonth بفارق دقائق لنفس الرمزين.
+            # الإصلاح: نفس عتبة /planweek المُثبَتة عملياً (20).
+            if len(candles) < 20:
                 try:
                     # xasset_ohlcv_fix: X-prefix → spot mkttype
                     _is_x_sym = sym.upper().startswith("X") and len(sym) > 2
@@ -826,7 +831,7 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     candles = _retry if isinstance(_retry, list) else []
                 except Exception:
                     pass
-            if len(candles) < 30:
+            if len(candles) < 20:
                 # analysis_failure_visibility_fix (امتداد): كان هذا "continue"
                 # صامتاً تماماً — لا استثناء يُطلَق (فيتجاوز معالج except
                 # الذي يُسجِّل _analysis_failed_syms)، ولا سبب "غير متاح Spot"
@@ -1911,12 +1916,27 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "• أسبوع 4: تقييم القاع — قرار الدخول الكامل",
                 ]
         elif regime.regime.value in ("bull_trend", "accumulation"):
-            week_lines = [
-                "• أسبوع 1: دخول مبكر عند أول تراجع",
-                "• أسبوع 2: مضاعفة المراكز الرابحة",
-                "• أسبوع 3: رفع وقف الخسارة للتعادل",
-                "• أسبوع 4: جني 30-50% من الأرباح",
-            ]
+            # week_lines_qualified_check_fix: هذا القسم كان يعرض "دخول مبكر"
+            # دائماً بمجرد أن يكون الـRegime العام صاعداً — منفصل تماماً عن
+            # "🎯 القرار الأسبوعي" (weekly_decision_qualified_check_fix)،
+            # فلم يرث ذلك الإصلاح. تناقض موثَّق فعلياً: "🎯 القرار الأسبوعي:
+            # 🟡 انتظار — لا عملة تستوفي الشروط" ثم مباشرة "أسبوع 1: دخول
+            # مبكر عند أول تراجع" في نفس الرسالة! الإصلاح: نفس بوابة
+            # _pw_qualified_count المُستخدَمة أصلاً للقرار العام.
+            if _pw_qualified_count > 0:
+                week_lines = [
+                    "• أسبوع 1: دخول مبكر عند أول تراجع",
+                    "• أسبوع 2: مضاعفة المراكز الرابحة",
+                    "• أسبوع 3: رفع وقف الخسارة للتعادل",
+                    "• أسبوع 4: جني 30-50% من الأرباح",
+                ]
+            else:
+                week_lines = [
+                    f"• أسبوع 1: راقب فقط — لا عملة تستوفي شروط الدخول بعد (RSI حالياً {_rsi_pw:.0f})",
+                    "• أسبوع 2: تابع اقتراب أي عملة من حد الثقة أو تصحيح RSI",
+                    "• أسبوع 3: عند تحقق 2/4 تأكيدات لأي أصل → دخول تدريجي",
+                    "• أسبوع 4: تقييم — هل تحسّنت شروط الدخول؟",
+                ]
         else:
             week_lines = [
                 f"• أسبوع 1: مراقبة — RSI حالياً {_rsi_pw:.0f}",

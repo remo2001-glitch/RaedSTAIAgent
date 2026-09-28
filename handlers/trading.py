@@ -609,17 +609,22 @@ async def cmd_live(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ════════════════════════════════════════════════════════════════
 
 async def _auto_execute_job(context):
-    """تأكيد تلقائي بعد 15 دقيقة للماسي"""
-    data = context.job.data
-    try:
-        await context.bot.send_message(
-            data['chat_id'],
-            "⏰ *تم التأكيد التلقائي بعد 15 دقيقة*\n"
-            "⚠️ تحقق من /trades لمتابعة صفقتك",
-            parse_mode="Markdown"
-        )
-    except Exception as _ae:
-        import logging; logging.getLogger(__name__).warning(f'auto_execute_job: {_ae}')
+    """
+    auto_execute_disabled_fix: هذه الدالة كانت تُرسِل "تم التأكيد التلقائي"
+    بعد 15 دقيقة **دون أي تحقق فعلي** — لا تستدعي أي API تبادل، لا تتحقق
+    من إتمام المستخدم للتدفق (اختيار نوع التنفيذ/حقيقي أو افتراضي)، ولا
+    حتى من وجود صفقة أصلاً. موثَّق فعلياً: وصلت هذه الرسالة لمستخدم لم
+    يُكمل أي تنفيذ، وتحقق /trades أكّد عدم وجود أي صفقة مطلقاً — بينما
+    الرسالة أوهمت بأن صفقة حقيقية "تم تأكيدها". هذا خطر مالي مباشر على
+    بوت تداول بأموال حقيقية. اكتُشِف أيضاً أن آلية الإلغاء (handlers/
+    trade.py) لا يمكنها أصلاً إيقاف هذه المهمة — تبحث عن اسم مهمة مختلف
+    تماماً ("trade_auto_...") بينما هذه المهمة مُسجَّلة باسم
+    "auto_exec_..."، فتصادم الأسماء يضمن عدم قابليتها للإلغاء أبداً بأي
+    مسار حالي. الإصلاح الآمن: تعطيل هذا الإشعار المُضلِّل بالكامل. تنفيذ
+    تلقائي حقيقي (يستدعي فعلياً واجهة المنصة) ميزة منفصلة تحتاج تصميماً
+    وموافقة صريحة قبل تفعيلها.
+    """
+    return
 
 @require_tier("execute")
 
@@ -1082,11 +1087,9 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _warn_text = ("\n" + "\n".join(_exec_warnings)) if _exec_warnings else ""
         _rsi_line  = f"📊 RSI: {_exec_rsi:.0f}" if _exec_rsi != 50.0 else ""
 
-        # تأكيد تلقائي 15 دق للماسي
-        _exec_tier = _sm.get_tier(user_id) or "free"
+        # auto_execute_disabled_fix: أُزيل الوعد المُضلِّل "سيُنفَّذ تلقائياً
+        # بعد 15 دقيقة" — راجع التعليق الكامل عند _auto_execute_job أعلاه
         _auto_note = ""
-        if _exec_tier in ("diamond", "admin"):
-            _auto_note = "\n\n⏰ *سيُنفَّذ تلقائياً بعد 15 دقيقة* إذا لم تلغِ"
 
         await _reply(update,
             f"⚡ *تأكيد الصفقة*\n"
@@ -1105,16 +1108,8 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown",
             reply_markup=kb_exectype)
 
-        # جدولة تأكيد تلقائي للماسي
-        if _exec_tier in ("diamond", "admin"):
-            _cb_data_auto = _mkb_type("spot")  # spot كافتراضي
-            context.job_queue.run_once(
-                _auto_execute_job,
-                15 * 60,
-                data={"user_id": user_id, "cb_data": _cb_data_auto,
-                      "chat_id": update.effective_chat.id},
-                name=f"auto_exec_{user_id}_{symbol}"
-            )
+        # auto_execute_disabled_fix: أُزيلت جدولة "التأكيد التلقائي" هنا —
+        # راجع التعليق الكامل عند تعريف _auto_execute_job أعلاه
         return  # ننتظر callback اختيار نوع التنفيذ
 
     # إذا اختار virtual أو لا يوجد ربط → محفظة افتراضية
