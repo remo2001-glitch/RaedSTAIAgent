@@ -1080,10 +1080,24 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # إصلاح #20: استخدام نفس portfolio_val الديناميكي من #12 لتجنب تناقض
         # $10,022 (أعلاه) مقابل $10,000 (هنا) — كلاهما يجب أن يطابق المحفظة الفعلية
         user_portfolio = portfolio_val
-        cash_pct       = 1.0 if regime.regime == Regime.BEAR_TREND else 0.3
-        invest_pct     = 1.0 - cash_pct
-        cash_amount    = user_portfolio * cash_pct
-        invest_amount  = user_portfolio * invest_pct
+        # week1_allocation_mismatch_fix: كان cash_pct/invest_pct يُحسَبان من
+        # نسبة ثابتة (30%/70%) بحسب نوع الـRegime فقط، بمعزل تام عن التوزيع
+        # الفعلي الذي حسبه بالفعل engine.capital_engine (allocation) والمعروض
+        # للمستخدم في قسم "💼 توزيع المحفظة" أعلاه مباشرة في نفس الرسالة.
+        # تناقض مالي مباشر موثَّق فعلياً: "💼 توزيع المحفظة: مُستثمر $5,135
+        # (50%)" ثم "أسبوع 1: دخول مبكر — 70% من المحفظة ($7,189)" — رقمان
+        # مختلفان تماماً لنفس القرار في نفس الرسالة. الإصلاح: استخدام نفس
+        # allocation.deployed_usd/total_value الحقيقيَّين، لا نسبة ثابتة.
+        if allocation is not None and getattr(allocation, "total_value", 0) > 0:
+            invest_amount = allocation.deployed_usd
+            invest_pct    = allocation.deployed_usd / allocation.total_value
+            cash_amount   = allocation.cash_reserve
+            cash_pct      = 1.0 - invest_pct
+        else:
+            cash_pct       = 1.0 if regime.regime == Regime.BEAR_TREND else 0.3
+            invest_pct     = 1.0 - cash_pct
+            cash_amount    = user_portfolio * cash_pct
+            invest_amount  = user_portfolio * invest_pct
 
         # إصلاح #373: week_plan يعكس قرار capital_engine الفعلي
         _fg_now    = fear_val

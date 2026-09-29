@@ -1310,15 +1310,31 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _vw_ex.positions[symbol.upper()]["take_profit"] = tp_price
                 _vw_ex.positions[symbol.upper()]["size_usd"]    = final_size
             _sm_vex.save_virtual_wallet(user_id, _vw_ex.to_dict())
+        else:
+            # duplicate_position_block_fix: كان الكود يتابع بناء بطاقة "تم
+            # التنفيذ" كاملة (حجم، دخول، وقف، هدف) حتى عند رفض VirtualWallet
+            # الفعلي للشراء (مركز مفتوح على نفس الرمز بالفعل) — يكتفي بتبديل
+            # رمز الحالة (✅→⚠️) دون إيقاف التنفيذ. هذا يخالف قاعدة "تكرار
+            # العملة" المتفَق عليها سابقاً (لا يمكن تكرار نفس العملة في نفس
+            # نوع الخطة)، وأنتج رسالة مُضلِّلة موثَّقة فعلياً: تحذير "أغلقه
+            # أولاً" متبوعاً ببطاقة "✅ تم التنفيذ" كاملة لصفقة لم تُفتَح
+            # فعلياً (بيانات المحفظة نفسها سليمة — buy() لم يُنشئ مركزاً
+            # مكرَّراً — لكن الرسالة توهم المستخدم بعكس ذلك). الإصلاح: عند
+            # الرفض، نُرسِل رسالة الرفض فقط ونوقف التنفيذ هنا مباشرة، بلا أي
+            # تفاصيل صفقة وهمية.
+            await msg.edit_text(
+                _clean(f"{_buy_result.get('msg', '⚠️ تعذّر تنفيذ الصفقة')}"),
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
         engine.risk_engine.register_trade(symbol, final_size, trade_dir)
         engine.audit_logger.log_trade(
             symbol=symbol, direction=direction, size=final_size,
             confidence=0.70, regime=regime.regime.value,
             reason="user_manual_virtual")
 
-        _virt_status = "✅" if _buy_result.get("ok") else f"⚠️ {_buy_result.get('msg','')}"
         lines = [
-            f"{_virt_status} *تم التنفيذ — محفظة افتراضية 🎮*",
+            "✅ *تم التنفيذ — محفظة افتراضية 🎮*",
             "━━━━━━━━━━━━━━━━━━",
             f"🪙 {symbol} | {'🟢 شراء' if is_buy else '🔴 بيع'}",
             f"💰 الحجم: ${final_size:,.2f}",
