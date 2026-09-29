@@ -529,6 +529,52 @@ def _est_return(signal, regime) -> float:
     return round(base * adj, 1)
 
 
+# open_position_exclusion_fix: بناءً على طلب رحال الصريح — "طالما موجود
+# مركز مفتوح يتم استبعاد تلك الأصول من المسح ... توفير الوقت والبحث عن
+# فرص أخرى"، ثم تأكيده أن النطاق يشمل كلتا المحفظتين معاً (الافتراضية
+# والحقيقية)، لا إحداهما فقط، وعلى مستوى كل أوامر المسح (/planmonth
+# و/planweek معاً) لا أمر بعينه. موثَّق فعلياً: XQQQ (مركز افتراضي فُتح من
+# /planmonth) ظهرت "🟢 شراء" مجدداً في /planweek لاحقاً بنفس الجلسة.
+async def _get_open_position_symbols(engine, user_id: int) -> set:
+    """يُرجِع مجموعة الرموز الأساسية (بلا USDT) التي لدى المستخدم مركز
+    مفتوح عليها فعلياً في المحفظة الافتراضية أو الحقيقية معاً."""
+    excluded: set = set()
+    try:
+        from core.state_manager import state_manager as _sm_excl
+        from core.virtual_wallet import VirtualWallet as _VW_excl
+        _vw = _VW_excl(_sm_excl.get_virtual_wallet(user_id) or {})
+        for sym in (_vw.positions or {}).keys():
+            excluded.add(sym.upper().replace("USDT", "").replace("USD", ""))
+    except Exception as e:
+        logger.debug(f"_get_open_position_symbols (virtual): {e}")
+    try:
+        if engine.user_has_live_trading(user_id):
+            om = engine.get_user_order_manager(user_id)
+            if om:
+                for t in om.get_open_trades(user_id):
+                    _tsym = (getattr(t, "symbol", "") or "").upper()
+                    excluded.add(_tsym.replace("USDT", "").replace("USD", ""))
+    except Exception as e:
+        logger.debug(f"_get_open_position_symbols (real): {e}")
+    return excluded
+
+
+def _exclude_open_position_symbols(symbols: list, excluded: set) -> tuple:
+    """يُرجِع (المُبقاة، المُستبعَدة) — مطابقة الرمز الأساسي بلا USDT/USD،
+    مع مراعاة تطابق X-prefix (XQQQ يُطابِق QQQ المُخزَّن، والعكس)."""
+    if not excluded:
+        return symbols, []
+    kept, removed = [], []
+    for s in symbols:
+        base = s.upper().replace("USDT", "").replace("USD", "")
+        alt  = base[1:] if base.startswith("X") and len(base) > 2 else f"X{base}"
+        if base in excluded or alt in excluded:
+            removed.append(s)
+        else:
+            kept.append(s)
+    return kept, removed
+
+
 # ════════════════════════════════════════════════════════════════
 # /plan_month
 # ════════════════════════════════════════════════════════════════
@@ -701,6 +747,12 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
             regime = RegimeResult(Regime.UNKNOWN, 0.3, "⚪ غير محدد",
                                    ["reduce_size"], {}, "reduce_size")
 
+        # open_position_exclusion_fix: استبعاد أي رمز لدى المستخدم مركز
+        # مفتوح عليه فعلياً (افتراضي أو حقيقي) قبل أي جلب/تحليل — توفيراً
+        # للوقت والتركيز على فرص جديدة فعلاً، بناءً على طلب رحال الصريح.
+        _excluded_open_pm = await _get_open_position_symbols(engine, update.effective_user.id)
+        symbols, _excluded_syms_pm = _exclude_open_position_symbols(symbols, _excluded_open_pm)
+
         # ── 2. OHLCV لجميع العملات متوازية ───────────────────
         # إصلاح #123: timeout صريح — يمنع تجمد كامل الطلب إذا عملة واحدة
         # (مثل OKB/BGB/CRO) تأخرت في الاستجابة من كل مصادر البيانات
@@ -778,6 +830,11 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if _tk not in symbols and len(symbols) < 10:
                         symbols.append(_tk)
                 logger.info(f"plan_month Futures symbols: {symbols}")
+            # open_position_exclusion_fix: نفس الاستبعاد هنا أيضاً — هذا
+            # الفرع (top_coins) يُعيد بناء symbols من الصفر فيتجاوز الفلتر
+            # المُطبَّق أعلاه على القائمة الأولى.
+            symbols, _excluded_syms_pm2 = _exclude_open_position_symbols(symbols, _excluded_open_pm)
+            _excluded_syms_pm = list(set(_excluded_syms_pm + _excluded_syms_pm2))
             try:
                 ohlcv_all = await asyncio.wait_for(
                     asyncio.gather(
@@ -1008,6 +1065,14 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "━━━━━━━━━━━━━━━━━━",
             # T7_fix: استخدام display names (XGOOGL وليس GOOGL)
             f"العملات: {', '.join(_display_syms_pm if '_display_syms_pm' in dir() else symbols)}",
+        ]
+        # open_position_exclusion_fix: توضيح صريح لأي رمز استُبعِد من المسح
+        # لوجود مركز مفتوح عليه بالفعل — بدل اختفائه بصمت
+        if locals().get("_excluded_syms_pm"):
+            lines.append(
+                f"⏸️ مُستبعَد (مركز مفتوح بالفعل): {', '.join(sorted(set(_excluded_syms_pm)))}"
+            )
+        lines += [
             # regime_3way_fix: تصنيف ثلاثي
             f"السوق: {regime.description_ar}"
             + (" — ⚠️ RSI={:.0f} ذروة شراء، لا مطاردة السعر".format(_rsi_btc)
@@ -1443,6 +1508,15 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
             plan_label = f"خطة عملات رقمية — Top {len(symbols)}"
 
         sym_str2 = ", ".join(symbols)
+
+    # open_position_exclusion_fix: استبعاد أي رمز لدى المستخدم مركز مفتوح
+    # عليه فعلياً (افتراضي أو حقيقي) — نفس المنطق المُطبَّق في /planmonth،
+    # وبنفس المصدر الموحَّد (_get_open_position_symbols)، تحقيقاً لطلب
+    # رحال الصريح بأن يشمل الاستبعاد كل أوامر المسح معاً لا أمراً بمفرده.
+    _excluded_open_pw = await _get_open_position_symbols(engine, update.effective_user.id)
+    symbols, _excluded_syms_pw = _exclude_open_position_symbols(symbols, _excluded_open_pw)
+    sym_str2 = ", ".join(symbols)
+
     # إصلاح #875: دعم msg من callback
     _msg_ov_w = context.user_data.pop("_plan_msg_override", None)
     if _msg_ov_w:
@@ -1544,6 +1618,13 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Fear & Greed: {fear_val} — {_fear_label}",
             "",
         ]
+        # open_position_exclusion_fix: نفس التوضيح المُطبَّق في /planmonth —
+        # لا اختفاء صامت لأي رمز استُبعِد لوجود مركز مفتوح عليه بالفعل
+        if locals().get("_excluded_syms_pw"):
+            lines.append(
+                f"⏸️ مُستبعَد (مركز مفتوح بالفعل): {', '.join(sorted(set(_excluded_syms_pw)))}"
+            )
+            lines.append("")
         # weekly_decision_qualified_check_fix: كان "القرار الأسبوعي" يُحسَب
         # هنا (قبل حلقة تحليل العملات) اعتماداً فقط على Fear&Greed والـRegime
         # العام، بصرف النظر التام عن كون أي عملة فردية تستوفي فعلاً شروط

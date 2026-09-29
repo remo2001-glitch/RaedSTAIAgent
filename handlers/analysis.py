@@ -2723,6 +2723,18 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # CVD_fix: تمرير onchain (بما فيه CVD) لـ technicals
             if onchain and isinstance(onchain, dict):
                 signal.technicals["onchain_data"] = onchain
+        # rsi_internal_sync_fix: كان regime.metrics['rsi'] (المصدر الذي
+        # يقرأ منه regime_detector.format_ar السطر "📈 المؤشرات • RSI: ...")
+        # محسوباً بشكل مستقل تماماً عن rsi أعلاه — قيمتان قد تختلفان بفارق
+        # نقطة أو نقطتين (تقريب/منهجية حساب مختلفة قليلاً) رغم استخدام نفس
+        # الشموع، فيظهر تناقض داخل نفس رسالة /signal الواحدة (موثَّق فعلياً:
+        # "RSI 1D: 72" و"RSI: 72" في القسمين العلويين مقابل "RSI = 71" في
+        # "الأسباب" و"متى تدخل؟" لنفس التقرير بالضبط). نفس نمط المزامنة
+        # المُطبَّق أعلاه لـsignal.technicals، بالضبط لنفس السبب المذكور في
+        # تعليقه: "لضمان التطابق في العرض" — يُطبَّق الآن أيضاً على
+        # regime.metrics لتوحيد كل ذكر لـRSI 1D داخل الرسالة الواحدة.
+        if hasattr(regime, "metrics") and isinstance(regime.metrics, dict):
+            regime.metrics["rsi"] = rsi
 
         # BB1b (#1550/#1553/#1574/#1575): فحص جودة البيانات — انهيار حاد
         _pve50_chk = float(regime.metrics.get("price_vs_ema50", 0) or 0)
