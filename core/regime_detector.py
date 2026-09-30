@@ -12,6 +12,23 @@ from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
+
+def _fmt_rsi_threshold(rsi_val: float, threshold: float = 70) -> str:
+    """
+    rsi_threshold_precision_fix: عند عرض "RSI=X>70" كسبب لذروة الشراء،
+    كان التقريب لمنزلة صحيحة واحدة (.0f) يُنتج أحياناً نصاً يبدو متناقضاً
+    رياضياً — مثال موثَّق فعلياً: القيمة الفعلية 70.4 (كما أكَّد نص /analyze
+    الوصفي المنفصل "RSI المرتفع عند 70.4") تُعرَض كـ"70" فيصبح النص
+    "RSI=70>70" وكأنه يدّعي أن 70 أكبر من 70 (خطأ رياضياً ظاهرياً)، رغم أن
+    الشرط الفعلي (rsi_val>70) صحيح تماماً على القيمة غير المُقرَّبة. نفس
+    نمط _fmt_rr المُطبَّق في handlers/analysis.py: نعرض منزلة عشرية واحدة
+    عند وقوع التقريب على العتبة بالضبط، لتوضيح أن القيمة الحقيقية تتجاوزها.
+    """
+    if round(rsi_val, 0) == threshold:
+        return f"{rsi_val:.1f}"
+    return f"{rsi_val:.0f}"
+
+
 # ─── إصلاح #85: cache نتيجة detect() لكل عملة لفترة قصيرة ──────────
 # يضمن أن /signal و/analyze لنفس العملة في نفس الدقيقتين يحصلان على
 # نفس Regime/Market Phase تماماً، بدل تذبذب بسبب فروق طفيفة في
@@ -147,7 +164,7 @@ class RegimeDetector:
         # لا "تداول بحجم طبيعي" عند ذروة الشراء
         if rsi_val > 70 and action == "trade_normal":
             action = "overbought_wait"
-            _action_basis = f" (RSI={rsi_val:.0f}>70 ذروة شراء)"
+            _action_basis = f" (RSI={_fmt_rsi_threshold(rsi_val)}>70 ذروة شراء)"
 
         if regime == Regime.HIGH_VOLATILITY:
             action = "reduce_size"
@@ -540,7 +557,7 @@ class RegimeDetector:
             # تصحيح تحت 60" رغم أن 59 أصلاً تحت 60)، ينتج نص متناقض ذاتياً
             # مع الرقم المعروض بجانبه مباشرة. الإصلاح: نفس عتبة الأمان
             # (rsi>=60) المطبَّقة في handlers/analysis.py.
-            + (f"• الإجراء: {_action_ar('overbought_wait')} (RSI={m.get('rsi',50):.0f}>70 ذروة شراء)"
+            + (f"• الإجراء: {_action_ar('overbought_wait')} (RSI={_fmt_rsi_threshold(m.get('rsi',50))}>70 ذروة شراء)"
                if m.get("rsi", 50) >= 70 else
                f"• الإجراء: {_action_ar(result.action)}{m.get('action_basis','')}"
                if not (result.action == "overbought_wait" and m.get("rsi", 50) < 60) else
