@@ -5115,11 +5115,21 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if rsi < 30 and fear_val < 40 and not ema_bearish and not is_bearish and not regime_unknown:
             # ذروة بيع + خوف + EMA صاعد + سوق غير هابط → شراء محتمل
             direction = "🟢 شراء محتمل"
-            entry = price * 0.99; tp1 = price * 1.05; tp2 = price * 1.10; sl = price * 0.95
+            # entry_support_anchor_fix: نفس منطق entry_resistance_anchor_fix
+            # (المُطبَّق أصلاً على فروع البيع) لكن لجانب الشراء — entry كان
+            # نسبة ثابتة من price بمعزل تام عن support، فقد يقع عرضاً تحت
+            # support المعروضة في نفس الرسالة، بينما السيناريو الهابط في
+            # نفس التقرير يقول صراحة "كسر الدعم → لا دخول". موثَّق فعلياً:
+            # XSPY/XRKLB أظهرا Limit Buy تحت الدعم المعروض بجانبه مباشرة.
+            # الإصلاح: عند توفر support فعلية، يُستخدَم الأعلى بينها وبين
+            # النسبة الثابتة، لضمان ألا ينزل الدخول تحت الدعم.
+            entry = max(price * 0.99, support * 1.001) if 0 < support < price else price * 0.99
+            tp1 = price * 1.05; tp2 = price * 1.10; sl = price * 0.95
         elif rsi < 30 and (is_bearish or ema_bearish or regime_unknown):
             # ذروة بيع لكن في سوق هابط → انتظار ارتداد فقط (لا شراء)
             direction = "⏳ انتظار ارتداد"
-            entry = price * 0.98; tp1 = price * 1.03; tp2 = price * 1.06; sl = price * 0.95
+            entry = max(price * 0.98, support * 1.001) if 0 < support < price else price * 0.98
+            tp1 = price * 1.03; tp2 = price * 1.06; sl = price * 0.95
         elif rsi > 70 and fear_val > 60:
             direction = "🔴 بيع محتمل"
             # entry_resistance_anchor_fix: entry كان نسبة ثابتة (price*1.01)
@@ -5137,7 +5147,8 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             tp1 = price * 0.94; tp2 = price * 0.88; sl = price * 1.04
         elif 30 <= rsi <= 45 and fear_val < 50 and not is_bearish:
             direction = "🟡 شراء محتاط"
-            entry = price * 0.99; tp1 = price * 1.04; tp2 = price * 1.08; sl = price * 0.96
+            entry = max(price * 0.99, support * 1.001) if 0 < support < price else price * 0.99
+            tp1 = price * 1.04; tp2 = price * 1.08; sl = price * 0.96
         elif 55 <= rsi <= 70 and fear_val > 50:
             direction = "🟠 بيع محتاط"
             entry = min(price * 1.01, resistance * 0.999) if resistance > price else price * 1.01
@@ -5155,14 +5166,15 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # الإصلاح: نص مختلف يصف الحالة القصيرة المدى بدقة عندما يكون
             # is_bearish نفسه False (لا الـRegime العام).
             direction = "⚪ انتظار — سوق هابط" if is_bearish else "⚪ انتظار — ضعف قصير المدى (EMA)"
-            entry = price * 0.990   # عند الدعم القريب
+            entry = max(price * 0.990, support * 1.001) if 0 < support < price else price * 0.990   # عند الدعم القريب
             tp1   = price * 1.040   # +4% (= SL، R/R 1:1 كحد أدنى)
             tp2   = price * 1.080   # +8% (R/R 2:1)
             sl    = price * 0.960   # -4% وقف صارم
         else:
             # سوق محايد + RSI وسط → انتظار بياض
             direction = "⚪ انتظار"
-            entry = price * 0.985; tp1 = price * 1.05; tp2 = price * 1.08; sl = price * 0.96
+            entry = max(price * 0.985, support * 1.001) if 0 < support < price else price * 0.985
+            tp1 = price * 1.05; tp2 = price * 1.08; sl = price * 0.96
 
         # regime_desc محسوبة أعلاه
 

@@ -974,6 +974,17 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # السعر من الجلب المتوازي
                 price_d = _prices_all[i] if not isinstance(_prices_all[i], Exception) else {}
                 price   = float((price_d or {}).get("price") or 0)
+                # price_zero_signal_fix: نفس الحماية المُطبَّقة في /planweek —
+                # كان يمكن أن يستمر بناء candidate كامل (اتجاه/ثقة/signal_id)
+                # ومستويات دخول/وقف من price=0 عند فشل جلب السعر تحديداً،
+                # فيدخل هذا الرمز لاحقاً في التوزيع أو يُعرَض بثقة كاملة رغم
+                # عدم وجود سعر فعلي له. الإصلاح: معاملته كبيانات غير كافية
+                # (نفس مسار _analysis_failed_syms المُستخدَم أصلاً لحالات
+                # مشابهة) بدل المتابعة برقم صفري.
+                if price <= 0:
+                    _spot_unavailable_syms.discard(sym)
+                    _analysis_failed_syms.add(sym)
+                    continue
                 # خطة التطوير — البُعد الرابع: تسجيل الإشارة فور صدورها
                 # (بصرف النظر عن التنفيذ) — signal_id يُرفَق لاحقاً بزر
                 # التنفيذ إن ظهر، ليُربَط بنتيجته الفعلية عند الإغلاق.
@@ -1677,6 +1688,18 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 strat, _ = engine.strategy_router.select(regime, signal)
                 price_d  = price_results[i] if not isinstance(price_results[i], Exception) else None
                 price    = float((price_d or {}).get("price") or 0)
+                # price_zero_signal_fix: كان السعر قد يفشل (price=0) بينما
+                # تستمر الدالة في توليد إشارة كاملة (اتجاه/ثقة/RSI) من
+                # candles وحدها، بلا أي تحقق من صلاحية price — موثَّق فعلياً:
+                # ALICE عرضت "🔄 جاري جلب السعر" و"EMA50 ($0)" لكن مع ذلك
+                # "🟢 شراء" بثقة 68%، ومستويات Fib دعم=مقاومة (كلاهما من
+                # حسابات مبنية على price=0). الإصلاح: نفس معاملة IOTX
+                # (بيانات غير كافية) عند فشل السعر تحديداً، بدل الاستمرار
+                # ببناء إشارة/مستويات من قيمة صفرية.
+                if price <= 0:
+                    lines.append(f"⚠️ {sym}: بيانات غير كافية (تعذّر جلب السعر)")
+                    lines.append("")
+                    continue
                 if price > 0: _sym_prices_pw[sym] = price
                 # planweek_exec_buttons_fix (#329): تخزين الإشارة/الثقة لكل
                 # رمز لإضافة أزرار تنفيذ مُبوَّبة بشكل صحيح لاحقاً (كانت
