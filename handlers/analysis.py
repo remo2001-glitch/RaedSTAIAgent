@@ -1300,21 +1300,31 @@ def _build_professional_block(
         _trade_dur = "2–5 أيام"
 
     # FIN5b: R/R من pro_sl الفعلي المُحسَّن
-    _sl_price = pro_sl if (pro_sl > 0 and pro_sl < price) else price * (1 - _atr_raw_dec * 1.0)
-    _risk   = max(price - _sl_price, 1e-9)
-    _reward = max(tp1_v - price, 1e-9)
+    # rr_entry_reference_fix: كان _risk/_reward يُحسَبان من price (السعر
+    # الحالي الخام) بينما "Entry 1 (Aggressive)" المعروضة للمستخدم مباشرة
+    # فوق سطر "R/R الواقعي" هي entry_agg (نقطة مختلفة، عادة عند الدعم) —
+    # فيُحسَب R/R من مرجع غير المرجع المعروض فعلياً، فلا يطابق ما يحسبه
+    # المستخدم بنفسه من الأرقام الثلاثة الظاهرة أمامه. موثَّق فعلياً: CFX
+    # أظهر "R/R الواقعي: 1:1.0 (مُعدَّل تلقائياً)" بينما Entry/TP1/SL
+    # المعروضة تُعطي حسابياً 1.125≈1.1 لا 1.0. الإصلاح: نفس مرجع الدخول
+    # المعروض فعلياً (entry_agg) بدل price الخام.
+    _sl_price = pro_sl if (pro_sl > 0 and pro_sl < entry_agg) else entry_agg * (1 - _atr_raw_dec * 1.0)
+    _risk   = max(entry_agg - _sl_price, 1e-9)
+    _reward = max(tp1_v - entry_agg, 1e-9)
     rr_real = round(min(_reward / _risk, 5.0), 1)
     # إصلاح #19: فرض R/R ≥ 1:1 على مستوى النظام (يطابق منطق risk_engine)
     # بدلاً من عرض R/R<1 وترك القرار للمستخدم — نرفع TP1/TP2 تناسبياً
     _rr_adjusted_note = ""
     if rr_real < 1.0:
+        # rr_entry_reference_fix (امتداد): نفس مرجع entry_agg بدل price هنا
+        # أيضاً، ليبقى التعديل التلقائي متسقاً مع الأرقام المعروضة فعلياً
         _old_tp1 = tp1_v
-        _new_tp1 = price + _risk  # يضمن reward == risk → R/R = 1.0
-        if tp2_v and _old_tp1 > price:
-            _tp2_ratio = (tp2_v - price) / max(_old_tp1 - price, 1e-9)
-            tp2_v = price + (_new_tp1 - price) * _tp2_ratio
+        _new_tp1 = entry_agg + _risk  # يضمن reward == risk → R/R = 1.0
+        if tp2_v and _old_tp1 > entry_agg:
+            _tp2_ratio = (tp2_v - entry_agg) / max(_old_tp1 - entry_agg, 1e-9)
+            tp2_v = entry_agg + (_new_tp1 - entry_agg) * _tp2_ratio
         tp1_v   = _new_tp1
-        _reward = max(tp1_v - price, 1e-9)
+        _reward = max(tp1_v - entry_agg, 1e-9)
         rr_real = round(min(_reward / _risk, 5.0), 1)
         _rr_adjusted_note = " (مُعدَّل تلقائياً لضمان 1:1)"
 

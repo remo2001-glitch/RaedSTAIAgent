@@ -1123,7 +1123,16 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                          if (cand and conf < _t_entry_pm / 100)
                          else "")
             # تنسيق السعر الصحيح حسب حجمه
-            price_str = _fmt_price(price_v) if price_v > 0 else "🔄 جاري الجلب"
+            # shell_confusing_text_fix: "🔄 جاري الجلب" توحي بأن الجلب لا
+            # يزال جارياً، لكن إذا كان الرمز مُصنَّفاً فعلاً ضمن الفشل
+            # (تعذّر التحليل/غير متاح Spot)، فالجلب انتهى بالفعل وفشل — لا
+            # يزال "جارياً". موثَّق فعلياً: SHELL أظهر "🔄 جاري الجلب |
+            # ⚠️ تعذّر التحليل حالياً" في نفس السطر، نصان متناقضان (لا يزال
+            # جارياً / انتهى بفشل). الإصلاح: عرض "—" بدلاً منه في هذه الحالة.
+            _already_failed_pm = sym_p in _analysis_failed_syms or sym_p in _spot_unavailable_syms
+            price_str = (_fmt_price(price_v) if price_v > 0
+                         else "—" if _already_failed_pm
+                         else "🔄 جاري الجلب")
             # M#99: نوع الصفقة planmonth — لا نُكرر "⚪ انتظار" مع dir_ar
             _d4 = (cand or {}).get("direction","neutral")
             _t4 = "📈 Spot/Long" if _d4=="long" else "📉 Short" if _d4=="short" else ""
