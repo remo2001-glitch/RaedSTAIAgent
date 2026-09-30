@@ -1647,7 +1647,24 @@ class DataLayer:
                 self.get_funding_rate(symbol),
                 return_exceptions=True
             )
+            # whale_data_key_mismatch_fix: كانت النتيجة تُخزَّن هنا تحت مفتاح
+            # مسطَّح "whale_ratio" (رقم عشري مباشر)، بينما كود العرض المشترك
+            # في handlers/analysis.py (وعدّاد تأكيدات الدخول الأربعة معاً)
+            # يقرأ حصراً من مفتاح "whale_data" كقاموس متداخل: tech.get(
+            # "whale_data", {}).get("ratio", 0) — بما أن "whale_data" لا
+            # يوجد إطلاقاً في هذا القاموس (فقط "whale_ratio")، تُعيد كل
+            # قراءة القيمة الافتراضية 0.0 دائماً، بصرف النظر عن الرقم
+            # الحقيقي المجلوب فعلياً. هذا يُعطِّل تأكيد Whale Ratio بالكامل
+            # في /signal تحديداً لكل رمز دائماً، بينما /analyze يُخزِّن بنفس
+            # المفتاح الصحيح "whale_data" فينجح دوماً. موثَّق فعلياً: CFX
+            # أظهر "Whale Ratio 0.00 ⚪" في /signal (0/4 تأكيدات) مقابل
+            # "Whale Ratio 1.52 🟢" في /analyze (2/4 تأكيدات) لنفس الرمز
+            # بفارق دقائق — تناقض غيَّر القرار الفعلي (WATCH مقابل CONDITIONAL).
+            # الإصلاح: تخزين القاموس الكامل تحت المفتاح الصحيح "whale_data"،
+            # مطابقاً تماماً لما يخزّنه /analyze، مع الإبقاء على "whale_ratio"
+            # المسطَّح أيضاً تحسّباً لأي مستهلك آخر قد يعتمد عليه فعلياً.
             if isinstance(wr, dict):
+                enriched["whale_data"]  = wr
                 enriched["whale_ratio"] = wr.get("ratio", 0.0)
             if isinstance(fr, dict):
                 enriched["funding_rate_pct"] = fr.get("rate_pct", 0.0)
