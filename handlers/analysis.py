@@ -2421,11 +2421,16 @@ async def cmd_regime(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "avoid":           "🚫 تجنب الدخول — ADX مرتفع جداً أو تقلب شديد",
             "bounce_entry_confirmed": "🎯 فرصة ارتداد محتملة — راقب التأكيدات",
         }
-        _tip = _regime_tips.get(_regime_action, "")
-        if _tip:
-            text += f"\n\n💡 *توصية رائد:* {_tip}"
 
         # T20_fix v2: ADX من result.metrics (المكان الصحيح)
+        # regime_tip_adx_contradiction_fix: كانت "💡 توصية رائد" (مبنية من
+        # _regime_action فقط) تُحسَب وتُضاف للنص قبل حساب تحذيرات ADX/حجم
+        # بأسطر، فلا تطّلع إحداهما على الأخرى. تناقض مباشر موثَّق فعلياً:
+        # "الإجراء: ✅ تداول بحجم طبيعي" و"💡 توصية رائد: ...بحجم طبيعي"
+        # (مكرَّرة مرتين) ظهرا معاً مع "⚠️ تحذيرات النظام: ADX=42≥40 → تقلب
+        # شديد، قلل الحجم" — توصيتان متعاكستان تماماً من نفس قيمة ADX نفسها
+        # في نفس الرسالة. الإصلاح: حساب ADX/التحذيرات أولاً، ثم تصحيح _tip
+        # إذا كانت توصي بحجم طبيعي رغم أن تحذير ADX الحاد يقول العكس تماماً.
         try:
             _metrics_r = getattr(result, "metrics", {}) or {}
             _adx_r = float(_metrics_r.get("adx", 0) or 0)
@@ -2440,6 +2445,19 @@ async def cmd_regime(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _warns.append(f"⚠️ Volume {_vol_r:.1f}x → ضغط بيع خفي أو انتظار")
             if _atr_r > 4:
                 _warns.append(f"⚠️ ATR={_atr_r:.1f}% مرتفع → تقلب شديد")
+        except Exception:
+            _adx_r = 0.0
+            _warns = []
+
+        _tip = _regime_tips.get(_regime_action, "")
+        if _regime_action == "trade_normal" and _adx_r >= 40:
+            # نفس عتبة تحذير ADX أعلاه بالضبط — لا نوصي بحجم طبيعي بينما
+            # نحذّر من تقلب شديد يتطلب تقليل الحجم في نفس الرسالة
+            _tip = _regime_tips["reduce_size"]
+        if _tip:
+            text += f"\n\n💡 *توصية رائد:* {_tip}"
+
+        try:
             if _warns:
                 text += "\n\n⚠️ *تحذيرات النظام*\n" + "\n".join(_warns)
         except Exception:
