@@ -557,8 +557,16 @@ class RegimeDetector:
             # تصحيح تحت 60" رغم أن 59 أصلاً تحت 60)، ينتج نص متناقض ذاتياً
             # مع الرقم المعروض بجانبه مباشرة. الإصلاح: نفس عتبة الأمان
             # (rsi>=60) المطبَّقة في handlers/analysis.py.
+            # regime_tip_adx_contradiction_fix (امتداد): نفس المبدأ المُطبَّق
+            # في handlers/analysis.py (cmd_regime) — لا نعرض "تداول بحجم
+            # طبيعي" هنا أيضاً إذا كان ADX≥40 (نفس عتبة تحذير "تقلب شديد،
+            # قلل الحجم" المعروض لاحقاً في نفس السطر عبر _adx_warning أدناه
+            # مباشرة). موثَّق فعلياً: ظهر "✅ تداول بحجم طبيعي" ثم "⚠️
+            # ADX=42≥40 → تقلب شديد، قلل الحجم" في نفس الرسالة — تناقض مباشر.
             + (f"• الإجراء: {_action_ar('overbought_wait')} (RSI={_fmt_rsi_threshold(m.get('rsi',50))}>70 ذروة شراء)"
                if m.get("rsi", 50) >= 70 else
+               f"• الإجراء: {_action_ar('reduce_size')} (ADX={m.get('adx',0):.0f}≥40 تقلب شديد)"
+               if (result.action == "trade_normal" and m.get("adx", 0) >= 40) else
                f"• الإجراء: {_action_ar(result.action)}{m.get('action_basis','')}"
                if not (result.action == "overbought_wait" and m.get("rsi", 50) < 60) else
                f"• الإجراء: {_action_ar('trade_normal')}")
