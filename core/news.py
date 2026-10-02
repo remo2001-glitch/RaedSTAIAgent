@@ -567,6 +567,11 @@ class NewsEngine:
   إذا لم يكن له اسم عربي شائع ومعروف (مثال: "شركة Strategy (MicroStrategy)"
   وليس "ميتاستراتجى" أو أي تحويل صوتي مُخترَع) — لا تخترع نقحرة عربية لاسم
   علم؛ استخدم الاسم الإنجليزي كما هو عند الشك
+- crypto_ticker_transliteration_fix: نفس قاعدة company_name_fix أعلاه تنطبق
+  على رموز العملات الرقمية (tickers) أيضاً — اكتب الرمز بحروفه اللاتينية
+  كما هو دائماً (XRP وليس "إكس آر بي"، BTC وليس "بي تي سي"، SOL وليس "سول")،
+  تماماً كما تُكتَب "Bitcoin"/"BTC" بالإنجليزية في كل مكان من هذا التقرير
+  ولا تُنطَق صوتياً بالعربية أبداً — الرمز نفسه عالمي ولا يُترجَم أو يُنقحَر
 - news_redundant_parens_fix: لا تكرر الاسم نفسه بين قوسين إذا كان الاسم
   الإنجليزي ذاته مكتوباً بالفعل في الجملة بلا أي ترجمة أو نقحرة (مثال:
   "Coinbase" مذكورة كما هي في النص العربي) — القوسان مُخصَّصان فقط لتوضيح
@@ -939,6 +944,29 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
     # ═══════════════════════════════════════════════════════════
     # 4. تنسيق التقرير
     # ═══════════════════════════════════════════════════════════
+    # crypto_ticker_transliteration_fix: شبكة أمان حتمية إضافية (بجانب
+    # تعليمة الـprompt أعلاه) — موثَّق فعلياً: "XRP" ظهرت منطوقة صوتياً
+    # كـ"إكس آر بي" في summary_ar رغم أن BTC/ETH تُكتَبان بحروفهما اللاتينية
+    # في بقية نفس التقرير. يستبدل أشهر الأشكال الصوتية الشائعة بالرمز
+    # اللاتيني الصحيح، تحسّباً لتجاهل النموذج التعليمة أحياناً.
+    _TICKER_TRANSLITERATIONS = {
+        "إكس آر بي": "XRP", "إكس ار بي": "XRP",
+        "بي تي سي": "BTC",
+        "إي تي اتش": "ETH", "إي تي إتش": "ETH",
+        "بي إن بي": "BNB", "بي ان بي": "BNB",
+        "إس أو إل": "SOL", "اس او ال": "SOL",
+        "إيه دي إيه": "ADA",
+        "دي أو تي": "DOT",
+        "إيه في إيه إكس": "AVAX",
+    }
+
+    def _fix_ticker_transliteration(self, text: str) -> str:
+        if not text:
+            return text
+        for phonetic, ticker in self._TICKER_TRANSLITERATIONS.items():
+            text = text.replace(phonetic, ticker)
+        return text
+
     async def format_ar(self, items: List[Dict], analysis: Dict) -> str:
         # T19_fix: تنسيق احترافي مُحسَّن
         sent_label, _ = SENTIMENT_LABELS.get(
@@ -1003,10 +1031,10 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
             f"الثقة: {_sentiment_bar} {_conf_news:.0%} | المصادر: {_n_sources}",
             "",
             "📋 *الملخص*",
-            analysis.get("summary_ar", ""),
+            self._fix_ticker_transliteration(analysis.get("summary_ar", "")),
             "",
             "🎯 *التأثير المتوقع*",
-            analysis.get("market_impact_ar", ""),
+            self._fix_ticker_transliteration(analysis.get("market_impact_ar", "")),
         ]
 
         import html as _html
@@ -1049,7 +1077,7 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
                     _translated_map = dict(zip(_events_to_translate, _translated_list))
                 except Exception as e:
                     logger.debug(f"key_events translation fallback: {e}")
-            events = [_translated_map.get(str(e), e) for e in events[:6]]
+            events = [self._fix_ticker_transliteration(_translated_map.get(str(e), e)) for e in events[:6]]
 
             _sorted_ev = sorted(events[:6], key=lambda e: _news_impact(e)[0])
             lines += ["", "⚡ *الأحداث الرئيسية (مرتبة حسب التأثير)*"]
@@ -1114,7 +1142,8 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
         # news_translate_groq_fix (#300): ترجمة دفعية واحدة عبر Groq بدل
         # القاموس الحرفي — يحل مشكلة العناوين المعقدة/أسماء الأعلام التي
         # كانت تظهر إنجليزية بالكامل رغم وجود "ترجمة"
-        extra = await self._translate_titles_batch(_extra_raw) if _extra_raw else []
+        extra = [self._fix_ticker_transliteration(t) for t in
+                 (await self._translate_titles_batch(_extra_raw) if _extra_raw else [])]
 
         if extra:
             lines += ["", "📡 *أخبار إضافية*"]

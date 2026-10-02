@@ -339,8 +339,17 @@ class EventRiskFilter:
         for e in sorted(events, key=lambda x: x.event_time):
             in_hours = (e.event_time - time.time()) / 3600
             sign = "⏰" if in_hours > 6 else "⚠️"
+            # events_hours_rounding_fix: هذا السطر كان يُقرِّب بالبتر الدائم
+            # (int() يحذف الكسر دائماً نحو الأسفل)، بينما تحذير "حدث عالي
+            # المخاطر قادم خلال..." في assess() (أعلى في نفس الرسالة) يُقرِّب
+            # للأقرب (.0f). لنفس القيمة الدقيقة (مثال: 160.6 ساعة)، هذا ينتج
+            # حتماً فارق ساعة كاملة بين القسمين (161 مقابل 160) — ليس بسبب
+            # فارق توقيت بين استدعاءين منفصلين لـtime.time()، بل بسبب طريقتي
+            # تقريب مختلفتين تماماً لنفس نوع القيمة. موثَّق فعلياً: "اجتماع
+            # الفيدرالي... خلال 161 ساعة" ثم "...بعد 160 ساعة" لنفس الحدث في
+            # نفس الرسالة. الإصلاح: نفس طريقة التقريب (للأقرب) في كلا القسمين.
             lines.append(
-                f"{sign} {e.name_ar} — بعد {int(in_hours)} ساعة ({SEVERITY_AR[e.severity]})"
+                f"{sign} {e.name_ar} — بعد {round(in_hours)} ساعة ({SEVERITY_AR[e.severity]})"
             )
             recommendation = _event_recommendation(e.severity, int(in_hours))
             if recommendation:
