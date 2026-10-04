@@ -2072,11 +2072,69 @@ async def cmd_vtrades(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(buttons_list) if buttons_list else None)
 
 
-# dead_code_cleanup_fix: أُزيلت هنا النسخة الثانية (طبق الأصل) من
-# async def cmd_virtual — راجع التعليق المطابق في core/commands.py لنفس
-# السبب الكامل. ملاحظة منفصلة تستحق المتابعة لاحقاً: لم يُعثَر على أي
-# تسجيل فعلي لأمر Telegram باسم "/virtual" تحت أي اسم دالة في كل المشروع
-# — الأمر غير فعّال تماماً اليوم رغم ظهوره في عدة رسائل اقتراحية للمستخدم.
+# dead_code_cleanup_fix: أُزيلت هنا النسخة القديمة (طبق الأصل) من cmd_virtual
+# — راجع التعليق المطابق في core/commands.py لنفس السبب الكامل (أسعار ثابتة
+# قديمة، بلا signal_id، وغير مُسجَّلة أصلاً).
+#
+# virtual_command_fix: أمر /virtual كان غير مُسجَّل تحت أي اسم دالة في كل
+# المشروع، رغم اقتراحه للمستخدم في 5 رسائل ("/virtual buy BTC 100"). أُعيد
+# بناؤه كغلاف رفيع فوق المسارات الحية بدل إحياء المنطق القديم:
+#  • buy: يُحوَّل إلى cmd_execute بوسيط "virtual" — فيمر بالأسعار الحية،
+#    محرك المخاطر، حماية تكرار المركز، وتسجيل الإشارة، كأي تنفيذ افتراضي.
+#  • sell: يعرض أزرار الإغلاق نفسها المستخدمة في /vtrades، فيمر عبر cb_vclose
+#    الحي (المربوط بـdrift_monitor وsignal_tracker) بدل تكرار منطق الإغلاق.
+async def cmd_virtual(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /virtual buy BTC 500 — شراء افتراضي بسعر حي
+    /virtual sell BTC    — إغلاق مركز افتراضي (كامل أو 50%) بأزرار تأكيد
+    """
+    args = context.args or []
+    usage = (
+        "🎮 *التداول الافتراضي*\n\n"
+        "• شراء: `/virtual buy BTC 500`\n"
+        "• إغلاق: `/virtual sell BTC`\n\n"
+        "_الأسعار حية، ويمر الشراء بنفس حمايات /execute_\n"
+        "📋 صفقاتك: /vtrades"
+    )
+    if len(args) < 2:
+        await _reply(update, usage, parse_mode="Markdown")
+        return
+
+    action = args[0].lower()
+    if action in ("buy", "شراء"):
+        new_args = [args[1], "buy"]
+        if len(args) > 2:
+            new_args.append(args[2])
+        new_args.append("virtual")
+        context.args = new_args
+        await cmd_execute(update, context)
+        return
+
+    if action in ("sell", "بيع", "close", "اغلاق", "إغلاق"):
+        raw = args[1].upper().strip()
+        for _sfx in ("USDT", "BUSD", "USDC"):
+            if raw.endswith(_sfx) and len(raw) > len(_sfx):
+                raw = raw[:-len(_sfx)]
+                break
+        base = raw.replace("/", "").replace("-", "")
+        from core.state_manager import state_manager as _sm_vs
+        from core.virtual_wallet import VirtualWallet as _VW_vs
+        vw = _VW_vs(_sm_vs.get_virtual_wallet(update.effective_user.id) or {})
+        positions = vw.positions or {}
+        key = next((k for k in (base, base + "USDT") if k in positions), None)
+        if not key:
+            await _reply(update,
+                         f"❌ لا يوجد مركز افتراضي مفتوح على {base}\n📋 /vtrades")
+            return
+        kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton(f"✅ إغلاق {key} كامل", callback_data=f"vclose_{key}_100"),
+            InlineKeyboardButton("50% إغلاق",           callback_data=f"vclose_{key}_50"),
+        ]])
+        await update.message.reply_text(
+            f"🎮 اختر حجم إغلاق مركز {key}:", reply_markup=kb)
+        return
+
+    await _reply(update, "⚠️ الاستخدام: buy أو sell\n\n" + usage, parse_mode="Markdown")
 
 
 # ══ /report ══════════════════════════════════════════════════════════════════
@@ -3148,6 +3206,7 @@ def register(app):
     # T1/T2/T4: أوامر جديدة
     app.add_handler(CommandHandler("wallet",   cmd_wallet))
     app.add_handler(CommandHandler("vtrades",  cmd_vtrades))
+    app.add_handler(CommandHandler("virtual",  cmd_virtual))  # virtual_command_fix
     app.add_handler(CommandHandler("profile",  cmd_profile))
     # Survey callbacks
     app.add_handler(CallbackQueryHandler(cb_survey_goal,    pattern=r"^survey_goal_"))

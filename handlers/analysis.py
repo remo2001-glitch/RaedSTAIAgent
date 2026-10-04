@@ -669,10 +669,13 @@ def _build_professional_block(
         reasons.append("• MACD سالب (sellers مسيطرون)")
     elif macd_hist > 0:
         reasons.append("• MACD موجب (زخم شراء)")
+    # rsi_display_rounding_fix: int() كان يبتر الكسر (70.6→"70") بينما رأس
+    # الرسالة نفسها يُقرِّب .0f (70.6→"71") — فارق رقم بين الرأس والأسباب
+    # لنفس القيمة. توحيد على .0f كبقية الرسالة.
     if rsi < 30:
-        reasons.append(f"• RSI = {int(rsi)} → ذروة بيع (فرصة انتعاش)")
+        reasons.append(f"• RSI = {rsi:.0f} → ذروة بيع (فرصة انتعاش)")
     elif rsi > 70:
-        reasons.append(f"• RSI = {int(rsi)} → ذروة شراء (خطر تصحيح)")
+        reasons.append(f"• RSI = {rsi:.0f} → ذروة شراء (خطر تصحيح)")
     else:
         reasons.append(f"• RSI 1D = {rsi:.0f}")
     ns = fib.get("nearest_support", 0)
@@ -2804,7 +2807,14 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         rsi = _calc_rsi(candles)
         # تحديث rsi في technicals لضمان التطابق في العرض
         if hasattr(signal, "technicals") and isinstance(signal.technicals, dict):
-            signal.technicals["rsi"] = round(rsi, 1)
+            # rsi_display_rounding_fix: كانت القيمة تُقرَّب هنا لمنزلة عشرية
+            # (round(rsi, 1)) ثم يُنسِّقها رأس /signal (strategy_router.py:576)
+            # بـ.0f — تقريب مزدوج، بينما بقية الأقسام تُنسِّق القيمة الخام
+            # مباشرة بـ.0f. لقيمة مثل 61.46: round→61.5 ثم .0f→"62" في الرأس،
+            # بينما الخام .0f→"61" في بقية الأقسام. موثَّق فعلياً: ETH أظهر
+            # "RSI 1D: 62" في الرأس و61 في الأقسام الثلاثة الأخرى (و/analyze=61).
+            # الإصلاح: تخزين القيمة الخام (لا round) ليُطبَّق تقريب واحد فقط.
+            signal.technicals["rsi"] = float(rsi)
             # CVD_fix: تمرير onchain (بما فيه CVD) لـ technicals
             if onchain and isinstance(onchain, dict):
                 signal.technicals["onchain_data"] = onchain
@@ -4270,7 +4280,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"analyze_symbol ({symbol}): {_ae}")
             analysis = (f"📊 تحليل {symbol}\n"
                        f"السعر: {_fmt_price(price)} ({change_24h:+.2f}%)\n"
-                       f"RSI: {int(rsi)} | السوق: {regime_desc}")
+                       f"RSI: {rsi:.0f} | السوق: {regime_desc}")
 
         change_sign = "+" if change_24h >= 0 else ""
         # حساب مستويات دخول/خروج من ATR
@@ -5336,7 +5346,9 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"💰 السعر: {_fmt_price(price, quote)} ({change_sign}{change_24h:.2f}%)",
             f"⏱️ الإطار الزمني: يومي (1D)",
             f"🌍 السوق: {regime_desc}",
-            f"📈 RSI: {int(rsi)} | Fear & Greed: {fear_val}",
+            # rsi_display_rounding_fix: .0f بدل int() — نفس سبب التوحيد في
+            # قسم الأسباب (البتر كان يُظهر 71 في /signal و70 هنا لنفس القيمة)
+            f"📈 RSI: {rsi:.0f} | Fear & Greed: {fear_val}",
             "",
             f"🎯 *التوصية: {direction}*",
             "",
