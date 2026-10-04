@@ -1310,6 +1310,14 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _vw_ex.positions[symbol.upper()]["take_profit"] = tp_price
                 _vw_ex.positions[symbol.upper()]["size_usd"]    = final_size
             _sm_vex.save_virtual_wallet(user_id, _vw_ex.to_dict())
+            # rejected_signal_eval_fix: تمييز هذه الإشارة كـ"نُفِّذت فعلاً"
+            # فور نجاح الشراء — يستثنيها هذا من مسار تقييم "الإشارات
+            # المرفوضة بأثر رجعي" (الذي يُقيِّم فقط ما صدر ولم يُنفَّذ قط)
+            if _plan_sig_id:
+                try:
+                    engine.signal_tracker.mark_executed(_plan_sig_id)
+                except Exception as _me_err:
+                    logger.debug(f"signal_tracker.mark_executed: {_me_err}")
         else:
             # duplicate_position_block_fix: كان الكود يتابع بناء بطاقة "تم
             # التنفيذ" كاملة (حجم، دخول، وقف، هدف) حتى عند رفض VirtualWallet
@@ -2064,56 +2072,11 @@ async def cmd_vtrades(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(buttons_list) if buttons_list else None)
 
 
-# ══ /virtual ══════════════════════════════════════════════════════════════════
-
-async def cmd_virtual(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /virtual buy BTC 500   — شراء وهمي بـ $500
-    /virtual sell BTC      — بيع كامل مركز BTC
-    /virtual sell BTC 0.01 — بيع كمية محددة
-    """
-    user_id = update.effective_user.id
-    await db.add_to_memory(user_id, "/virtual")
-    args = context.args
-
-    if len(args) < 2:
-        await update.message.reply_text(
-            f"{E['virtual']} التداول الوهمي\n\n"
-            f"الاستخدام:\n"
-            f"  /virtual buy BTC 500   — شراء بـ $500\n"
-            f"  /virtual sell BTC      — بيع المركز كاملاً\n"
-            f"  /virtual sell BTC 0.01 — بيع كمية محددة\n\n"
-            f"{E['wallet']} محفظتك: /wallet" + _sig()
-        )
-        return
-
-    action = args[0].lower()
-    symbol = args[1].upper().replace("USDT", "") + "USDT"
-
-    wallet_data = await db.get_virtual_wallet(user_id)
-    wallet = VirtualWallet(wallet_data)
-
-    # سعر وهمي
-    mock_prices = {
-        "BTCUSDT": 67420.50, "ETHUSDT": 3521.30, "BNBUSDT": 598.40,
-        "SOLUSDT": 172.80, "XRPUSDT": 0.5821, "ADAUSDT": 0.4521,
-    }
-    price = mock_prices.get(symbol, 1.0)
-
-    if action == "buy":
-        amount = float(args[2]) if len(args) > 2 else 100.0
-        result = wallet.buy(symbol, price, amount)
-    elif action == "sell":
-        qty = float(args[2]) if len(args) > 2 else None
-        result = wallet.sell(symbol, price, qty)
-    else:
-        await update.message.reply_text(
-            f"{E['error']} أمر غير معروف. استخدم: buy أو sell" + _sig()
-        )
-        return
-
-    await db.update_virtual_wallet(user_id, wallet.to_dict())
-    await update.message.reply_text(result["msg"] + _sig())
+# dead_code_cleanup_fix: أُزيلت هنا النسخة الثانية (طبق الأصل) من
+# async def cmd_virtual — راجع التعليق المطابق في core/commands.py لنفس
+# السبب الكامل. ملاحظة منفصلة تستحق المتابعة لاحقاً: لم يُعثَر على أي
+# تسجيل فعلي لأمر Telegram باسم "/virtual" تحت أي اسم دالة في كل المشروع
+# — الأمر غير فعّال تماماً اليوم رغم ظهوره في عدة رسائل اقتراحية للمستخدم.
 
 
 # ══ /report ══════════════════════════════════════════════════════════════════
