@@ -1135,7 +1135,11 @@ def _build_professional_block(
         _pos_size_rule  = "0% — RSI في ذروة شراء، انتظر تصحيح تحت 60"
     elif locals().get("_is_low_volume_wait", False):
         # vol_wait_fix: حجم ضعيف → WAIT + 0%
-        _decision_label = "[WAIT] — حجم ضعيف جداً (< 0.3x)، انتظر سيولة"
+        # volume_threshold_text_fix: سطر القرار كان يقول "(< 0.3x)" بنص ثابت بينما
+        # رأس التقرير يُقرِّب الحجم لمنزلة واحدة فيعرض "0.3x" لقيم مثل 0.28 —
+        # فيبدو "حجم: 0.3x" و"< 0.3x" متناقضين (موثَّق فعلياً لـXRP). نعرض القيمة
+        # الفعلية بمنزلتين، والشرط الحقيقي _vol_ratio_check < 0.3 لم يتغيّر.
+        _decision_label = f"[WAIT] — حجم ضعيف جداً ({_vol_ratio_check:.2f}x < 0.3x)، انتظر سيولة"
         _pos_size_rule  = "0% — حجم < 0.3x، مؤشرات غير موثوقة"
         _lev_line       = "• الرافعة: لا رافعة — انتظر حجم ≥ 1.0x أولاً"
         # إجراء_fix: تجاوز نص "تقليل الحجم 50%" بنص موحَّد مع القرار
@@ -2477,7 +2481,10 @@ async def cmd_regime(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _vol_r = float(_metrics_r.get("volume_ratio", 1) or 1)
             _warns = []
             if _adx_r > 0 and _adx_r < 20:
-                _warns.append(f"⚠️ ADX={_adx_r:.0f} < 20 → لا اتجاه واضح (Whipsaw محتمل)")
+                # adx_threshold_text_fix: الشرط _adx_r < 20؛ التقريب .0f كان يُظهر
+                # "ADX=20 < 20" للقيم 19.5–19.99
+                _adx_disp = f"{_adx_r:.1f}" if round(_adx_r) == 20 else f"{_adx_r:.0f}"
+                _warns.append(f"⚠️ ADX={_adx_disp} < 20 → لا اتجاه واضح (Whipsaw محتمل)")
             elif _adx_r >= 40:
                 _warns.append(f"⚠️ ADX={_adx_r:.0f} ≥ 40 → تقلب شديد، قلل الحجم")
             if _vol_r < 0.8:
@@ -4305,7 +4312,12 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _sig_a.technicals["oi_data"]     = _oi_data
                 _sig_a.technicals["fund_data"]   = _fund_data
                 _sig_a.technicals["whale_data"]  = _whale_data
-                _sig_a.technicals["atr_value"]   = round(_calc_atr(candles) * price / 100, 2)
+                # atr_value_precision_fix: كان round(..., 2) يُحوِّل ATR لـXRP من 0.0432
+                # إلى 0.04 (خطأ 7%)، ولأصول أرخص من ذلك إلى 0.0 فيختفي السطر كلياً
+                # (if _atr_val)، ويُعطِّل فرع التنسيق الذكي (<0.01) في دالة العرض
+                # لأن القيمة تُقرَّب قبل وصولها إليه. القيمة للعرض فقط — التنسيق
+                # يتولاه سطر "ATR (تقلب)" بحسب حجم السعر.
+                _sig_a.technicals["atr_value"]   = round(_calc_atr(candles) * price / 100, 8)
                 _sig_a.technicals["candles_4h"]   = _candles_4h
                 _sig_a.technicals["onchain_data"]  = _onchain_an
                 # BB من 4H إذا متاح
@@ -4346,7 +4358,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "target_mult":   1.5  if _scenario_fb == "counter_trend_bounce" else 2.0,
                 "oi_data": _oi_data, "fund_data": _fund_data,
                 "whale_data": _whale_data, "onchain_data": _onchain_an,
-                "atr_value": round(_calc_atr(candles) * price / 100, 2),
+                "atr_value": round(_calc_atr(candles) * price / 100, 8),  # atr_value_precision_fix
             }
         class _AnalyzeRegime:
             description_ar = regime_desc

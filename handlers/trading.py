@@ -2090,12 +2090,17 @@ async def cmd_vtrades(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # المنفَّذَ تماماً.
         _age_h = vw.position_age_hours(sym)
         _rem_h = vw.hold_remaining_hours(sym)
+
+        def _dur(h: float) -> str:
+            # الأعمار الطويلة بالأيام (151 ساعة أقل وضوحاً من 6.3 يوم)
+            return f"{h:.0f}س" if h < 48 else f"{h / 24:.1f} يوم"
+
         if _age_h is None or _rem_h is None:
             _hold_txt = ""
         elif _rem_h > 0:
-            _hold_txt = f" | منذ {_age_h:.0f}س — متبقي {_rem_h:.0f}س"
+            _hold_txt = f" | منذ {_dur(_age_h)} — متبقي {_dur(_rem_h)}"
         else:
-            _hold_txt = f" | منذ {_age_h:.0f}س — ⏰ تجاوز مدة الاحتفاظ، يُغلق في المسح القادم"
+            _hold_txt = f" | منذ {_dur(_age_h)} — ⏰ تجاوز مدة الاحتفاظ، يُغلق في المسح القادم"
         lines += [
             f"*{sym}*",
             f"• دخول: ${pos['avg_price']:,.4f} | الحالي: ${cur_price:,.4f}",
@@ -2139,7 +2144,7 @@ async def cmd_virtual(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args or []
     usage = (
         "🎮 *التداول الافتراضي*\n\n"
-        "• شراء: `/virtual buy BTC 500`\n"
+        "• شراء: `/virtual buy BTC 100`\n"
         "• إغلاق: `/virtual sell BTC`\n\n"
         "_الأسعار حية، ويمر الشراء بنفس حمايات /execute_\n"
         "📋 صفقاتك: /vtrades"
