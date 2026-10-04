@@ -359,6 +359,45 @@ class RaedEngine:
         except Exception as e:
             logger.debug(f"_check_virtual_positions: {e}")
 
+    async def _evaluate_rejected_signals(self) -> None:
+        """
+        rejected_signal_eval_fix (خطة التطوير — البُعد الرابع، الفجوة
+        الثانية): يُقيِّم افتراضياً الإشارات التي صدرت ولم تُنفَّذ قط
+        (رُفضَت ببوابة التأكيدات أو الثقة) — "لو نُفِّذت فعلاً، هل كانت
+        لتربح أم تخسر؟" — بجلب شموع OHLCV منذ لحظة صدور كل إشارة ومحاكاة
+        المسار (evaluate_hypothetical_outcome، دالة خالصة قابلة للاختبار
+        منفصلة في core/signal_tracker.py). قراءة/تسجيل فقط — لا يُغيِّر
+        أي عتبة أو سلوك تلقائياً؛ الغرض توفير بيانات مقارنة لمراجعة رحال
+        لاحقاً (عبر /performance) للتحقق من صحة بوابة التأكيدات الحالية.
+        """
+        from core.signal_tracker import evaluate_hypothetical_outcome
+        _max_age_h = 24.0 * 14
+        try:
+            pending = self.signal_tracker.get_pending_rejected_signals(
+                min_age_hours=24.0, max_age_hours=_max_age_h, limit=50)
+        except Exception as e:
+            logger.debug(f"_evaluate_rejected_signals (fetch pending): {e}")
+            return
+        if not pending:
+            return
+        for rec in pending:
+            try:
+                import time as _tev
+                _days_needed = min(21, int((_tev.time() - rec.created_ts) / 86400) + 3)
+                candles = await self.data_layer.get_ohlcv(rec.symbol, "1d", _days_needed)
+                if not isinstance(candles, list) or not candles:
+                    continue
+                outcome = evaluate_hypothetical_outcome(rec, candles)
+                if outcome is None:
+                    _age_h = (_tev.time() - rec.created_ts) / 3600.0
+                    if _age_h >= _max_age_h:
+                        outcome = "inconclusive"
+                    else:
+                        continue  # نحاول مجدداً لاحقاً بشموع أحدث
+                self.signal_tracker.record_hypothetical_outcome(rec.signal_id, outcome)
+            except Exception as e:
+                logger.debug(f"_evaluate_rejected_signals ({rec.symbol}): {e}")
+
     async def _notify_real_users(self, signals: list, regime, send_fn) -> None:
         """
         يُرسل إشعاراً للمستخدمين الحقيقيين (has_live=True)
@@ -734,6 +773,10 @@ class RaedEngine:
 
             # 3.5 فحص وإغلاق المراكز التي بلغت TP أو SL
             await self._check_virtual_positions(regime)
+
+            # 3.6 rejected_signal_eval_fix: تقييم افتراضي للإشارات
+            # المرفوضة (نفس دورة الفحص كل 4 ساعات، لا جدولة منفصلة جديدة)
+            await self._evaluate_rejected_signals()
 
             # 4. تنفيذ آلي للإشارات القوية
             executed = []

@@ -56,6 +56,76 @@ class SignalRecord:
     exit_price:         Optional[float] = None
     pnl_pct:            Optional[float] = None
     was_win:            Optional[bool] = None
+    # rejected_signal_eval_fix (الفجوة الثانية — تقييم الإشارات المرفوضة
+    # بأثر رجعي): log_signal() يُسجِّل كل إشارة فور صدورها بصرف النظر عن
+    # تنفيذها، لكن لا شيء كان يُميِّز "نُفِّذت فعلاً" عن "صدرت ولم تُنفَّذ"
+    # — كلتاهما تبقيان status="open" للأبد إن لم تُفتَح صفقة حقيقية بها.
+    # executed=True تُضبَط فقط عند فتح مركز حقيقي بهذه الإشارة (mark_executed)،
+    # فتُصبح executed=False + status="open" القديمة العلامة الموثوقة لإشارة
+    # "صدرت ورُفضَت ولم تُنفَّذ قط" — هذه فقط المؤهَّلة للتقييم الافتراضي.
+    executed:              bool = False
+    hypothetical_outcome:  Optional[str] = None   # "would_win"|"would_lose"|"entry_not_reached"|"inconclusive"
+    hypothetical_eval_ts:  Optional[float] = None
+
+
+def evaluate_hypothetical_outcome(signal: "SignalRecord", candles: List[Dict[str, Any]]) -> Optional[str]:
+    """
+    دالة خالصة (لا حالة، لا شبكة) تُحاكي: "لو نُفِّذت هذه الإشارة المرفوضة
+    فعلياً، هل كانت لتضرب الهدف أم وقف الخسارة أولاً؟"
+
+    المدخل candles: شموع OHLCV بعد لحظة صدور الإشارة فقط (مرتَّبة زمنياً
+    تصاعدياً)، كل عنصر يحوي "timestamp"/"high"/"low" على الأقل (نفس صيغة
+    get_ohlcv في core/data_layer.py).
+
+    المخرج:
+    - "entry_not_reached": السعر لم يصل قط لمستوى الدخول المحدَّد خلال
+      نافذة الشموع المتاحة
+    - "would_win": بعد لمس الدخول، ضرب الهدف الأول (tp1) قبل وقف الخسارة
+    - "would_lose": بعد لمس الدخول، ضرب وقف الخسارة قبل الهدف الأول
+    - None: لمس الدخول لكن لم يُحسَم أيهما بعد ضمن الشموع المتاحة — يحتاج
+      إعادة محاولة لاحقاً بشموع أحدث، وليس نتيجة نهائية
+
+    عند تحقق الهدف والوقف في نفس الشمعة الواحدة معاً (شموع يومية خشنة لا
+    تحسم الترتيب الدقيق داخل اليوم)، نفترض وقف الخسارة أولاً — افتراض
+    متحفِّظ يتجنَّب المبالغة في تقدير نسبة الفوز الافتراضية.
+    """
+    if not candles or signal.entry_price <= 0:
+        return None
+    is_long = signal.direction == "long"
+    relevant = sorted(
+        [c for c in candles if float(c.get("timestamp", 0)) >= signal.created_ts],
+        key=lambda c: c.get("timestamp", 0)
+    )
+    if not relevant:
+        return None
+
+    entry_touched_idx = None
+    for i, c in enumerate(relevant):
+        hi, lo = float(c.get("high", 0)), float(c.get("low", 0))
+        touched = (lo <= signal.entry_price) if is_long else (hi >= signal.entry_price)
+        if touched:
+            entry_touched_idx = i
+            break
+    if entry_touched_idx is None:
+        return "entry_not_reached"
+
+    has_sl = signal.sl_price > 0
+    has_tp = signal.tp1_price > 0
+    for c in relevant[entry_touched_idx:]:
+        hi, lo = float(c.get("high", 0)), float(c.get("low", 0))
+        if is_long:
+            sl_hit = has_sl and lo <= signal.sl_price
+            tp_hit = has_tp and hi >= signal.tp1_price
+        else:
+            sl_hit = has_sl and hi >= signal.sl_price
+            tp_hit = has_tp and lo <= signal.tp1_price
+        if sl_hit and tp_hit:
+            return "would_lose"   # افتراض متحفِّظ عند التعادل داخل نفس الشمعة
+        if sl_hit:
+            return "would_lose"
+        if tp_hit:
+            return "would_win"
+    return None  # لمس الدخول لكن لم يُحسَم بعد — يحتاج شموعاً أحدث
 
 
 class SignalTracker:
@@ -134,6 +204,56 @@ class SignalTracker:
             record.was_win = record.pnl_pct > 0
         self._save(record)
         return record
+
+    def mark_executed(self, signal_id: str) -> bool:
+        """
+        يُستدعى فور نجاح فتح مركز حقيقي بهذه الإشارة (VirtualWallet.buy
+        نجح مع signal_id) — يُميِّزها عن إشارات صدرت ورُفضَت ولم تُفتَح
+        لها صفقة قط، وهي وحدها المؤهَّلة لاحقاً للتقييم الافتراضي.
+        """
+        if not signal_id:
+            return False
+        record = self.get_signal(signal_id)
+        if not record:
+            return False
+        record.executed = True
+        return self._save(record)
+
+    def get_pending_rejected_signals(self, min_age_hours: float = 24.0,
+                                      max_age_hours: float = 24.0 * 14,
+                                      limit: int = 200) -> List[SignalRecord]:
+        """
+        يُعيد الإشارات المؤهَّلة للتقييم الافتراضي: صدرت ولم تُنفَّذ قط
+        (executed=False)، لم تُقيَّم بعد (hypothetical_outcome is None)،
+        وعمرها ضمن النافذة [min_age_hours, max_age_hours] — الحد الأدنى
+        يضمن وقتاً كافياً ليتحرك السعر فعلياً نحو الدخول/الهدف/الوقف قبل
+        محاولة التقييم، والحد الأقصى يمنع محاولات متكررة بلا جدوى على
+        إشارات قديمة جداً فقدت صلتها.
+        """
+        now = time.time()
+        min_age_s = min_age_hours * 3600
+        max_age_s = max_age_hours * 3600
+        out: List[SignalRecord] = []
+        for sid in self.get_all_signal_ids(limit=limit * 5):
+            rec = self.get_signal(sid)
+            if not rec or rec.executed or rec.hypothetical_outcome is not None:
+                continue
+            age = now - rec.created_ts
+            if min_age_s <= age <= max_age_s and rec.entry_price > 0:
+                out.append(rec)
+                if len(out) >= limit:
+                    break
+        return out
+
+    def record_hypothetical_outcome(self, signal_id: str, outcome: str) -> bool:
+        """يُسجِّل نتيجة التقييم الافتراضي لإشارة مرفوضة — قيمة واحدة من
+        "would_win"|"would_lose"|"entry_not_reached"|"inconclusive"."""
+        record = self.get_signal(signal_id)
+        if not record:
+            return False
+        record.hypothetical_outcome = outcome
+        record.hypothetical_eval_ts = time.time()
+        return self._save(record)
 
     def get_signal(self, signal_id: str) -> Optional[SignalRecord]:
         r = self._redis()
@@ -240,22 +360,94 @@ class SignalTracker:
             ),
         }
 
+    def compute_rejected_performance(self, setup_type: Optional[str] = None,
+                                      symbol: Optional[str] = None,
+                                      min_evaluated: int = 1) -> Dict[str, Any]:
+        """
+        يحسب "لو نُفِّذت الإشارات المرفوضة فعلاً، ماذا كانت ستُحقِّق؟" —
+        بالاعتماد حصراً على سجلات قُيِّمت افتراضياً فعلاً عبر
+        evaluate_hypothetical_outcome (hypothetical_outcome ليس None ولا
+        "entry_not_reached"، لأن الأخيرة لا تمثّل ربحاً أو خسارة فعلية).
+        الغرض: مقارنة مباشرة مع compute_performance (الصفقات المُنفَّذة
+        فعلاً) للتحقق هل بوابة التأكيدات صحيحة فعلاً — إن كانت الإشارات
+        المرفوضة ستخسر أكثر بوضوح من المُنفَّذة، هذا يُثبِت أن البوابة
+        تعمل كما يجب؛ إن تساوت النسبتان أو كانت المرفوضة أفضل، فهذا
+        مؤشر أن البوابة متشدِّدة أكثر من اللازم. قراءة صرف — لا تُغيِّر
+        أي عتبة أو سلوك تلقائياً.
+        """
+        ids = self.get_all_signal_ids()
+        evaluated = []
+        entry_missed = 0
+        inconclusive = 0
+        for sid in ids:
+            rec = self.get_signal(sid)
+            if not rec or rec.executed or rec.hypothetical_outcome is None:
+                continue
+            if setup_type and rec.setup_type != setup_type:
+                continue
+            if symbol and rec.symbol != symbol.upper():
+                continue
+            if rec.hypothetical_outcome == "entry_not_reached":
+                entry_missed += 1
+                continue
+            if rec.hypothetical_outcome == "inconclusive":
+                inconclusive += 1
+                continue
+            evaluated.append(rec)
+
+        n = len(evaluated)
+        if n < min_evaluated:
+            return {
+                "n_evaluated": n, "entry_not_reached": entry_missed,
+                "inconclusive": inconclusive, "win_rate": None,
+                "note": f"عيّنة غير كافية ({n} إشارة مرفوضة مُقيَّمة فقط)",
+            }
+        wins = sum(1 for r in evaluated if r.hypothetical_outcome == "would_win")
+        win_rate = wins / n
+        return {
+            "n_evaluated":       n,
+            "entry_not_reached": entry_missed,
+            "inconclusive":      inconclusive,
+            "win_rate":          round(win_rate * 100, 1),
+            "note": (
+                None if n >= 50 else
+                f"عيّنة أولية ({n}/50 إشارة) — نسبة إرشادية فقط حتى تراكم 50 على الأقل"
+            ),
+        }
+
     def format_performance_ar(self, setup_type: Optional[str] = None,
                                symbol: Optional[str] = None) -> str:
         """نص عربي جاهز للعرض — يُستخدَم من أي أمر Telegram يريد عرض التقرير."""
         perf = self.compute_performance(setup_type=setup_type, symbol=symbol)
         title = setup_type or (symbol or "كل الإشارات")
         if perf["win_rate"] is None:
-            return f"📊 *أداء {title}*\n{perf['note']}"
-        lines = [
-            f"📊 *أداء {title}*",
-            f"عدد الصفقات المغلقة: {perf['n_closed']}",
-            f"معدل الفوز: {perf['win_rate']}%",
-            f"العائد المتوقع (Expectancy): {perf['expectancy_pct']:+.2f}%",
-            f"متوسط الربح: {perf['avg_win_pct']:+.2f}% | متوسط الخسارة: {perf['avg_loss_pct']:+.2f}%",
-        ]
-        if perf["note"]:
-            lines.append(f"⚠️ {perf['note']}")
+            lines = [f"📊 *أداء {title}*", perf["note"]]
+        else:
+            lines = [
+                f"📊 *أداء {title}*",
+                f"عدد الصفقات المغلقة: {perf['n_closed']}",
+                f"معدل الفوز: {perf['win_rate']}%",
+                f"العائد المتوقع (Expectancy): {perf['expectancy_pct']:+.2f}%",
+                f"متوسط الربح: {perf['avg_win_pct']:+.2f}% | متوسط الخسارة: {perf['avg_loss_pct']:+.2f}%",
+            ]
+            if perf["note"]:
+                lines.append(f"⚠️ {perf['note']}")
+
+        # rejected_signal_eval_fix: مقارنة مباشرة مع الإشارات المرفوضة
+        # المُقيَّمة افتراضياً، إن وُجدت أي منها فعلاً لنفس التصفية
+        rej = self.compute_rejected_performance(setup_type=setup_type, symbol=symbol)
+        if rej["win_rate"] is not None or rej["n_evaluated"] > 0:
+            lines.append("")
+            lines.append("🔬 *لو نُفِّذت الإشارات المرفوضة؟*")
+            if rej["win_rate"] is not None:
+                lines.append(f"من {rej['n_evaluated']} إشارة مرفوضة مُقيَّمة: كانت لتربح {rej['win_rate']}% منها")
+                if rej["note"]:
+                    lines.append(f"⚠️ {rej['note']}")
+            else:
+                lines.append(rej["note"])
+            if rej["entry_not_reached"] > 0:
+                lines.append(f"(+ {rej['entry_not_reached']} إشارة لم يصل السعر لدخولها إطلاقاً)")
+
         return "\n".join(lines)
 
 

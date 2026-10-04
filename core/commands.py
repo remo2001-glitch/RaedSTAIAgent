@@ -338,57 +338,15 @@ async def cmd_vtrades(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(buttons_list) if buttons_list else None)
 
 
-# ══ /virtual ══════════════════════════════════════════════════════════════════
-
-@security_check
-async def cmd_virtual(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /virtual buy BTC 500   — شراء وهمي بـ $500
-    /virtual sell BTC      — بيع كامل مركز BTC
-    /virtual sell BTC 0.01 — بيع كمية محددة
-    """
-    user_id = update.effective_user.id
-    await db.add_to_memory(user_id, "/virtual")
-    args = context.args
-
-    if len(args) < 2:
-        await update.message.reply_text(
-            f"{E['virtual']} التداول الوهمي\n\n"
-            f"الاستخدام:\n"
-            f"  /virtual buy BTC 500   — شراء بـ $500\n"
-            f"  /virtual sell BTC      — بيع المركز كاملاً\n"
-            f"  /virtual sell BTC 0.01 — بيع كمية محددة\n\n"
-            f"{E['wallet']} محفظتك: /wallet" + _sig()
-        )
-        return
-
-    action = args[0].lower()
-    symbol = args[1].upper().replace("USDT", "") + "USDT"
-
-    wallet_data = await db.get_virtual_wallet(user_id)
-    wallet = VirtualWallet(wallet_data)
-
-    # سعر وهمي
-    mock_prices = {
-        "BTCUSDT": 67420.50, "ETHUSDT": 3521.30, "BNBUSDT": 598.40,
-        "SOLUSDT": 172.80, "XRPUSDT": 0.5821, "ADAUSDT": 0.4521,
-    }
-    price = mock_prices.get(symbol, 1.0)
-
-    if action == "buy":
-        amount = float(args[2]) if len(args) > 2 else 100.0
-        result = wallet.buy(symbol, price, amount)
-    elif action == "sell":
-        qty = float(args[2]) if len(args) > 2 else None
-        result = wallet.sell(symbol, price, qty)
-    else:
-        await update.message.reply_text(
-            f"{E['error']} أمر غير معروف. استخدم: buy أو sell" + _sig()
-        )
-        return
-
-    await db.update_virtual_wallet(user_id, wallet.to_dict())
-    await update.message.reply_text(result["msg"] + _sig())
+# dead_code_cleanup_fix: أُزيلت هنا async def cmd_virtual (ونسخة طبق
+# الأصل منها في handlers/trading.py) — كلتاهما غير مُسجَّلتين كأمر
+# Telegram فعلياً في أي مكان بالمشروع (تحقَّقت بالبحث الشامل في كل
+# الملفات: صفر استدعاء خارج تعريفيهما)، وتستخدمان أسعاراً وهمية ثابتة
+# بالكود (mock_prices قديمة جداً، مثال BTC=$67,420) ولا تُنشئان signal_id
+# عند الشراء أصلاً، فلا صلة لهما بخط أنابيب التتبّع الحالي (signal_tracker).
+# اكتُشِفتا ميتتين تماماً أثناء تتبّع كل مواضع VirtualWallet.sell() لربط
+# rejected_signal_eval_fix. التداول الافتراضي الفعلي يمر حالياً عبر
+# /execute (handlers/trading.py::cmd_execute)، لا هذا المسار القديم.
 
 
 # ══ /report ══════════════════════════════════════════════════════════════════
