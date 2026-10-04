@@ -811,63 +811,10 @@ async def cb_profile_violations(update, context):
 
 # ══ Callbacks: vtrades ════════════════════════════════════════════════════════
 
-async def cb_vclose(update, context):
-    """إغلاق صفقة افتراضية كاملة أو جزئية."""
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-    from core.state_manager import state_manager as _sm_vc
-    from core.virtual_wallet import VirtualWallet as _VW_vc
-
-    parts   = query.data.split("_")  # vclose_BTCUSDT_100
-    sym     = parts[1] if len(parts) > 1 else ""
-    pct     = int(parts[2]) if len(parts) > 2 else 100
-
-    vw_data = _sm_vc.get_virtual_wallet(user_id) or {}
-    vw      = _VW_vc(vw_data)
-
-    if sym not in vw.positions:
-        await query.edit_message_text(f"❌ لا يوجد مركز مفتوح على {sym}")
-        return
-
-    # السعر الحالي
-    engine    = context.bot_data.get("raed_engine")
-    cur_price = vw.positions[sym]["avg_price"]
-    if engine:
-        try:
-            pd = await engine.data_layer.get_price(sym.replace("USDT",""))
-            if pd: cur_price = float(pd.get("price", cur_price))
-        except: pass
-
-    # حساب الكمية
-    qty    = vw.positions[sym]["quantity"]
-    sell_q = qty if pct == 100 else qty * (pct / 100)
-
-    result = vw.sell(sym, cur_price, sell_q)
-    if result.get("ok"):
-        _sm_vc.save_virtual_wallet(user_id, vw.to_dict())
-        pnl = result.get("trade", {}).get("pnl", 0)
-        sign = "+" if pnl >= 0 else ""
-        # تسجيل في drift_monitor
-        try:
-            if engine:
-                engine.drift_monitor.record_outcome(pnl > 0)
-                # خطة التطوير — البُعد الرابع
-                _sig_id_mc2 = result.get("trade", {}).get("signal_id")
-                if _sig_id_mc2:
-                    engine.signal_tracker.close_signal(_sig_id_mc2, cur_price, "manual_close")
-        except: pass
-        _close_type = "كامل" if pct == 100 else f"{pct}%"
-        await query.edit_message_text(
-            f"✅ *تم الإغلاق*\n\n"
-            f"• {sym} {_close_type}\n"
-            f"• سعر الإغلاق: ${cur_price:,.4f}\n"
-            f"• PnL: {sign}${pnl:,.2f}\n"
-            f"• الرصيد: ${vw.balance:,.2f}\n\n"
-            "🎮 /vtrades لعرض الصفقات",
-            parse_mode="Markdown")
-    else:
-        await query.edit_message_text(f"❌ {result.get('msg','خطأ')}")
+# dead_code_cleanup_fix: أُزيلت هنا نسخة cb_vclose القديمة — غير مُسجَّلة كمعالج
+# في أي مكان (المُسجَّلة الوحيدة في handlers/trading.py، وهذا الملف لا يُستورَد
+# منه سوى لوحتَي المفاتيح)، وكانت تنادي drift_monitor/signal_tracker بعد كل
+# إغلاق حتى الجزئي، وهو ما أُصلح في النسخة الحية (partial_close_stats_fix).
 
 
 async def cb_goto_vtrades(update, context):

@@ -8,6 +8,7 @@ CoinGecko · Binance · DeFiLlama · CryptoPanic
 """
 
 import asyncio
+from core.symbol_classify import REAL_CRYPTO_X_TICKERS  # symbol_classify_fix: مصدر واحد للاستثناء
 import json
 import time
 import re
@@ -390,7 +391,7 @@ _CG_MAP = {
 def _cg_id(symbol: str) -> str:
     sym = symbol.upper()
     # cg_xprefix_fix: X-prefix assets (أصول مُرمَّزة) غير موجودة في CoinGecko
-    if sym.startswith("X") and len(sym) > 2 and sym not in ("XRP", "XLM", "XMR", "XTZ", "XEM", "XDC", "XAUT"):
+    if sym.startswith("X") and len(sym) > 2 and sym not in REAL_CRYPTO_X_TICKERS:
         return ""  # فارغ = تجاوز CoinGecko
     # 1. فحص _CG_MAP المحلي أولاً
     if sym in _CG_MAP:

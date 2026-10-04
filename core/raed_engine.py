@@ -321,11 +321,15 @@ class RaedEngine:
                             continue
                         tp = float(pos.get("take_profit", 0))
                         sl = float(pos.get("stop_loss",   0))
-                        # فحص TP أو SL
-                        should_close = (
-                            (tp > 0 and price >= tp) or
-                            (sl > 0 and price <= sl)
-                        )
+                        # فحص TP أو SL أو انتهاء مدة الاحتفاظ
+                        # time_exit_enforcement_fix: كان وصف الدالة يعلن إغلاق
+                        # "انتهاء مدة الاحتفاظ" بينما الشرط TP/SL فقط — فتبقى
+                        # المراكز مفتوحة إلى أن يلامس السعر أحدهما مهما طال
+                        # الزمن. الأولوية: TP/SL أولاً (سبب إغلاق أدق)، ثم الوقت.
+                        tp_hit   = tp > 0 and price >= tp
+                        sl_hit   = sl > 0 and price <= sl
+                        time_hit = (not tp_hit and not sl_hit) and _vw.is_hold_expired(sym)
+                        should_close = tp_hit or sl_hit or time_hit
                         if should_close:
                             result = _vw.sell(sym, price)
                             if result.get("ok"):
@@ -342,11 +346,15 @@ class RaedEngine:
                                 _sig_id = result.get("trade", {}).get("signal_id")
                                 if _sig_id:
                                     try:
-                                        _close_status = "closed_tp" if (tp > 0 and price >= tp) else "closed_sl"
+                                        _close_status = ("closed_tp" if tp_hit
+                                                         else "closed_sl" if sl_hit
+                                                         else "expired")
                                         self.signal_tracker.close_signal(_sig_id, price, _close_status)
                                     except Exception as _ste:
                                         logger.debug(f"signal_tracker.close_signal: {_ste}")
-                                reason = "TP ✅" if (tp > 0 and price >= tp) else "SL 🛑"
+                                reason = ("TP ✅" if tp_hit
+                                          else "SL 🛑" if sl_hit
+                                          else "Time Exit ⏰")
                                 logger.info(
                                     f"Auto-close {sym} uid={_uid}: {reason} "
                                     f"PnL=${pnl:+,.2f}"

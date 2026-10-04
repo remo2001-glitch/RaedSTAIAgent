@@ -44,6 +44,50 @@ class VirtualWallet:
             return 0.0
         return round((self.total_value - VIRTUAL_WALLET_START) / VIRTUAL_WALLET_START * 100, 2)
 
+    # ── مدة الاحتفاظ (Time Exit) ────────────────────────────────────────────
+    # time_exit_enforcement_fix: بطاقة كل تنفيذ عبر /execute تعرض "⏰ أقصى مدة
+    # N ساعة"، لكن لم يكن في النظام أي كود يفرضها: المركز يُخزِّن opened_at
+    # فقط بلا أي حد، والإغلاق التلقائي (raed_engine._check_virtual_positions)
+    # كان يعلن في وصفه إغلاق "انتهاء مدة الاحتفاظ" بينما شرطه TP أو SL فقط.
+    # موثَّق فعلياً: مراكز عمرها نحو 6 أيام ما زالت مفتوحة وبطاقتها تقول 48 ساعة.
+    # هذه الدوال هي المصدر الوحيد لحساب العمر والحد والمتبقي، ويستخدمها
+    # الإغلاق التلقائي وعرض /vtrades معاً، فلا يتباعد ما يُعرَض عمّا يُنفَّذ.
+    #
+    # مركز بلا max_hold_hours مخزَّن (مراكز قبل هذا الإصلاح، والتنفيذ الجماعي
+    # والتداول التلقائي التي لا تعرف مدة) يُقاس بحدّ احتياطي = أطول أفق يوثّقه
+    # النظام نفسه: "Time Exit: إذا لا حركة بعد 5 أيام → أغلق الموضع" في /signal.
+    LEGACY_MAX_HOLD_HOURS = 120.0
+
+    def position_age_hours(self, symbol: str) -> float | None:
+        pos = self.positions.get(symbol.upper()) or self.positions.get(symbol)
+        if not pos:
+            return None
+        try:
+            opened = datetime.fromisoformat(str(pos.get("opened_at")))
+            if opened.tzinfo is None:
+                opened = opened.replace(tzinfo=timezone.utc)
+            return max(0.0, (datetime.now(timezone.utc) - opened).total_seconds() / 3600.0)
+        except Exception:
+            return None   # لا نعرف وقت الفتح → لا نُغلِق على أساس مجهول
+
+    def hold_limit_hours(self, symbol: str) -> float:
+        pos = self.positions.get(symbol.upper()) or self.positions.get(symbol) or {}
+        try:
+            h = float(pos.get("max_hold_hours") or 0)
+        except (TypeError, ValueError):
+            h = 0.0
+        return h if h > 0 else self.LEGACY_MAX_HOLD_HOURS
+
+    def hold_remaining_hours(self, symbol: str) -> float | None:
+        age = self.position_age_hours(symbol)
+        if age is None:
+            return None
+        return self.hold_limit_hours(symbol) - age
+
+    def is_hold_expired(self, symbol: str) -> bool:
+        rem = self.hold_remaining_hours(symbol)
+        return rem is not None and rem <= 0
+
     # ── شراء ───────────────────────────────────────────────────────────────
 
     def buy(self, symbol: str, price: float, amount_usd: float,
