@@ -378,6 +378,7 @@ async def post_init(app: Application):
         BotCommand("portfolio",    "توزيع المحفظة"),
         BotCommand("autotrade",    "تداول تلقائي on/off"),
         BotCommand("execute",      "تنفيذ فوري"),
+        BotCommand("virtual",      "تداول افتراضي"),
         BotCommand("stats",        "إحصائيات فورية"),
         BotCommand("performance",  "أداء الإشارات حسب النوع"),
         BotCommand("risk",         "حالة المخاطر"),
