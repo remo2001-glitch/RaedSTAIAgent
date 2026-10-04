@@ -174,9 +174,13 @@ class RegimeDetector:
                 action = "avoid"
                 # CC1 (#1685/#1699): نص دقيق يُوضّح الشرط الفعلي المُفعَّل
                 if fear_greed < 20 and adx > 30:
-                    _action_basis = f" (ADX={adx:.0f}≥30، Fear={fear_greed}<20)"
+                    _action_basis = f" (ADX={_fmt_rsi_threshold(adx, 30)}>30، Fear={fear_greed}<20)"
                 elif adx > 30:
-                    _action_basis = f" (ADX={adx:.0f}≥30)"
+                    # adx_threshold_text_fix: الشرط الفعلي adx > 30 (صارم) لكن النص كان "≥30"،
+                    # وبالتقريب .0f تظهر قيمة مثل 30.4 كـ"ADX=30≥30". نفس مبدأ
+                    # _fmt_rsi_threshold (يقبل أي عتبة): منزلة عشرية عند وقوع التقريب
+                    # على العتبة بالضبط، وعلامة > تطابق الشرط.
+                    _action_basis = f" (ADX={_fmt_rsi_threshold(adx, 30)}>30)"
                 else:
                     _action_basis = f" (Fear={fear_greed}<20)"
             else:
