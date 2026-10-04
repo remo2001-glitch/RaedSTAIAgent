@@ -19,6 +19,7 @@ import logging
 from core.middleware import require_tier
 from core.coins_list import is_symbol_allowed, get_tier_message
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from core.symbol_classify import is_tokenized_x_ticker
 from telegram.ext import ContextTypes, CommandHandler, MessageHandler, filters
 from core.state_manager import state_manager as _sm
 from core.middleware    import require_tier
@@ -171,7 +172,7 @@ def _get_market_hours_warning(symbol: str, user_tz_offset: int = 3) -> str:
 
     # كشف تلقائي: أي أصل يبدأ بـ X ويتبعه حروف → مُرمَّز أمريكي
     _is_x_token = (
-        _sym.startswith("X") and len(_sym) >= 3 and
+        is_tokenized_x_ticker(_sym) and
         _sym not in _KSE_TOKENS and
         _sym[1:].isalpha()
     )
@@ -835,7 +836,7 @@ def _build_professional_block(
     # is_stock parameter أو فحص القاموس لتحديد الأصل المُرمَّز
     _is_x_asset = (
         is_stock or  # مُمرَّر من cmd_signal/cmd_analyze
-        symbol.upper().startswith("X") or  # XSPCX
+        is_tokenized_x_ticker(symbol) or  # XSPCX
         symbol.upper() in {"SPCX","AMZN","AAPL","GOOGL","META","AMD",
                            "NFLX","SPY","ORCL","AVGO","MSFT","COIN","NVDA"}
     )
@@ -2543,7 +2544,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 _raw_symbol = (context.args or ["BTC"])[0].upper()
                 # TK_ROOT_fix: X-prefix (XSPCX,XAMZN..) = Spot مُرمَّز → لا نُجبر Futures
-                _is_x_prefix = _raw_symbol.startswith("X") and len(_raw_symbol) > 2
+                _is_x_prefix = is_tokenized_x_ticker(_raw_symbol)
                 if not _is_x_prefix and await engine.data_layer.is_tokenized_stock(_raw_symbol):
                     _mkttype = "futures"  # أصل مُرمَّز بدون X → Futures تلقائياً
                 # T13_fix: السلع (CL/NL/GC..) → Futures تلقائياً بدون سؤال
@@ -2571,7 +2572,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _use_futures:
         # TK2_fix: الأصول التي تبدأ بـ X (XSPCX, XAMZN...) أصول OKX Spot مؤكدة
         # /quicksignal يُثبت أنها متاحة — تجاوز check_spot مباشرة
-        if raw_arg.upper().startswith("X") and len(raw_arg) > 2:
+        if is_tokenized_x_ticker(raw_arg):
             from core.data_layer import resolve_stock_symbol as _rss
             _stock_res = _rss(raw_arg, "spot")
             _resolve_sym = _stock_res.get("base", raw_arg[1:])  # XSPCX → SPCX
@@ -2611,7 +2612,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # عن _spot_data_symbol_an لنفس المستخدم/الرمز في حالات وضع futures، مما
     # يُنتج مفتاح كاش مختلفاً وبيانات شموع مختلفة رغم توحيد عدد الأيام.
     # الإصلاح: نفس الشرط تماماً في كلا الأمرين.
-    if not _use_futures and raw_arg.upper().startswith("X") and len(raw_arg) > 2:
+    if not _use_futures and is_tokenized_x_ticker(raw_arg):
         _spot_data_symbol = raw_arg.upper()  # XSPCX/XSKHY للـ OKX API
         # إذا resolve أعطانا base مختلف → أعِد symbol للأصلي
         if symbol != raw_arg.upper() and not _use_futures:
@@ -2683,7 +2684,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # "تذبذب جانبي" في /signal و"اتجاه هابط" في /analyze بفارق دقيقة،
         # وEMA50 محسوبة مختلفة تماماً: ~759.7 مقابل 767.9492). الإصلاح:
         # نفس منطق الأيام بالضبط في كلا الأمرين لضمان مشاركة نفس الكاش.
-        _sig_days = 90 if (_data_sym_sig.upper().startswith("X") and len(_data_sym_sig) > 2) else 365
+        _sig_days = 90 if is_tokenized_x_ticker(_data_sym_sig) else 365
         _ohlcv_fn = engine.data_layer.get_ohlcv_perp(symbol, _sig_days) if _is_perp_sig else engine.data_layer.get_ohlcv(_data_sym_sig, "1d", _sig_days, mkttype=_mkt_arg_sig)
         candles, onchain, fear, news_raw, btc_dom, _sig_4h = await asyncio.gather(
             _ohlcv_fn,
@@ -2707,7 +2708,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             news_an = {}
 
         # X3_fix: خفض الحد لـ X-prefix assets (بيانات محدودة)
-        _is_x_sig = raw_arg.upper().startswith("X") and len(raw_arg) > 2
+        _is_x_sig = is_tokenized_x_ticker(raw_arg)
         _min_candles_sig = 15 if _is_x_sig else 50
         if len(candles) < _min_candles_sig:
             # XSKHY_name_fix: عرض الاسم الكامل في رسالة الخطأ
@@ -2771,14 +2772,10 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # (كلاهما صحيحان لكن لم يُعالجا هذا السبب الأعمق). الإصلاح: تجريد
         # بادئة X لهذا الاستدعاء تحديداً فقط (لا لبقية استخدامات symbol في
         # الدالة، التي تحتاج الصيغة الكاملة لجلب بيانات OKX Spot بنجاح).
-        # xrp_regression_guard: يجب استثناء عملات حقيقية تبدأ بـX بالصدفة
-        # (XRP، XLM، إلخ) من التجريد — نفس قائمة الاستثناء الآمنة المُستخدَمة
-        # فعلياً في core/data_layer.py::_cg_id لنفس الغرض بالضبط، لتفادي
-        # تحويل "XRP" (رمز حقيقي) إلى "RP" (رمز لا معنى له) خطأً.
-        _XPREFIX_REAL_CRYPTO_EXCEPTIONS = ("XRP", "XLM", "XMR", "XTZ", "XEM", "XDC", "XAUT")
-        _enrich_sym = (symbol[1:] if (symbol.upper().startswith("X") and len(symbol) > 2
-                                       and symbol.upper() not in _XPREFIX_REAL_CRYPTO_EXCEPTIONS)
-                       else symbol)
+        # xrp_regression_guard: العملات الحقيقية التي تبدأ بـX (XRP، XLM…) لا
+        # تُجرَّد من بادئتها — المصنِّف المشترك (core/symbol_classify.py) هو
+        # المصدر الوحيد لهذا الاستثناء الآن، بدل قائمة محلية مكرَّرة.
+        _enrich_sym = symbol[1:] if is_tokenized_x_ticker(symbol) else symbol
         onchain = await engine.data_layer.get_signal_enrichment(_enrich_sym, onchain)
 
         signal = engine.signal_layer.generate(
@@ -3178,7 +3175,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _mkt_label_display = "Perpetual" if _use_futures else "Spot"
             full_text += f"\n\n📌 *{_display_symbol}* — أصل مُرمَّز ({_mkt_label_display}) على OKX"
             # T25b_fix: تحذير Synthetic في /signal
-            _is_x_sig = _display_symbol.upper().startswith("X") and len(_display_symbol) > 2
+            _is_x_sig = is_tokenized_x_ticker(_display_symbol)
             if _is_x_sig:
                 full_text += (
                     f"\n⚠️ *تحذير:* {_display_symbol} أصل اصطناعي (Synthetic) — "
@@ -3965,7 +3962,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 _pre_asset_an = False
         # TK_ROOT_fix: X-prefix = Spot مُرمَّز → لا نُجبر Futures
-        _is_x_an = raw_arg.upper().startswith("X") and len(raw_arg) > 2
+        _is_x_an = is_tokenized_x_ticker(raw_arg)
         if _pre_asset_an and not _is_x_an:
             _mkttype_an = "futures"
         else:
@@ -3977,7 +3974,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # TK4/TK1b: التحقق من Spot (X-prefix يتجاوز مباشرة)
     if not _use_futures_an:
-        if raw_arg.upper().startswith("X") and len(raw_arg) > 2:
+        if is_tokenized_x_ticker(raw_arg):
             # TK4_fix: XSPCX/XAMZN أصول Spot مؤكدة — تجاوز check
             from core.data_layer import resolve_stock_symbol as _rss_an
             _stock_res_an = _rss_an(raw_arg, "spot")
@@ -4011,7 +4008,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
     symbol     = resolution.base
 
     # TK_Spot_fix: للأصول X-prefix في Spot → استخدام XSPCX لجلب البيانات
-    if not _use_futures_an and raw_arg.upper().startswith("X") and len(raw_arg) > 2:
+    if not _use_futures_an and is_tokenized_x_ticker(raw_arg):
         _spot_data_symbol_an = raw_arg.upper()  # XSPCX للـ OKX API
     else:
         _spot_data_symbol_an = symbol
@@ -4069,10 +4066,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             else:
                 # RSI_Fib_fix: X-prefix يستخدم 90 يوم من OKX (لا Yahoo طويل المدى)
-                _an_days = 90 if (
-                    _spot_data_symbol_an.upper().startswith("X") and
-                    len(_spot_data_symbol_an) > 2
-                ) else 365
+                _an_days = 90 if is_tokenized_x_ticker(_spot_data_symbol_an) else 365
                 price_d, candles, fear, btc_dom = await asyncio.wait_for(
                     asyncio.gather(
                         # TK_Spot_fix: XSPCX لجلب السعر والبيانات في Spot
@@ -4496,7 +4490,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _mkt_label_an_display = "Perpetual" if _use_futures_an else "Spot"
             parts.append(f"📌 {_display_symbol_an} — أصل مُرمَّز ({_mkt_label_an_display}) على OKX")
         # T25_fix: تحذير Synthetic في /analyze
-        _is_x_an = _display_symbol_an.upper().startswith("X") and len(_display_symbol_an) > 2
+        _is_x_an = is_tokenized_x_ticker(_display_symbol_an)
         if _is_x_an:
             parts.append(
                 f"\n⚠️ *تحذير:* {_display_symbol_an} أصل اصطناعي (Synthetic) — "
@@ -4531,7 +4525,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # المُعاد فعلياً من _build_professional_block (نفس القيم المعروضة).
         if _SCORER_ENABLED:
             try:
-                _is_x_an = symbol.upper().startswith("X") and len(symbol) > 2
+                _is_x_an = is_tokenized_x_ticker(symbol)
                 _has_err_an = "NameError" in full or "تعذّر بناء التحليل" in full
                 _sm_an = _sig_meta_an or {}
                 _an_ent = _sm_an.get("pro_entry", price)
@@ -4863,7 +4857,7 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # CHART_FORMAT_fix: تنسيق احترافي محسَّن
         _mkt_icon = "📈 Futures/Perp" if _chart_is_futures else "⚡ Spot"
         # chart_header_fix: إضافة معلومات الأصل الكاملة
-        _is_x_chart = symbol.upper().startswith("X") and len(symbol) > 2 if symbol else False
+        _is_x_chart = is_tokenized_x_ticker(symbol) if symbol else False
         _synthetic_warn_chart = (
             f"⚠️ تحذير: {symbol.upper()} أصل اصطناعي (Synthetic) — السيولة محدودة"
             if _is_x_chart else ""
@@ -5032,7 +5026,7 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 _pre_is_asset = False
         # TK_ROOT_fix: X-prefix = Spot مُرمَّز → لا نُجبر Futures
-        _is_x_qs = raw_arg.upper().startswith("X") and len(raw_arg) > 2
+        _is_x_qs = is_tokenized_x_ticker(raw_arg)
         if _pre_is_asset and not _is_x_qs:
             _mkttype_qs = "futures"  # Futures تلقائياً للأصول بدون X
         else:
@@ -5044,7 +5038,7 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # TK3/TK1b: التحقق من Spot (X-prefix يتجاوز مباشرة)
     if not _use_futures_qs:
-        if qs_sym.upper().startswith("X") and len(qs_sym) > 2:
+        if is_tokenized_x_ticker(qs_sym):
             pass  # TK3_fix: XSPCX/XAMZN أصول Spot مؤكدة
         else:
             try:
@@ -5084,8 +5078,7 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         display_symbol = f"{symbol} (Perp)"
 
     # T10b_fix: X-prefix Spot (XSPCX/XAAPL...) → جلب OKX Spot مباشرة
-    _is_x_spot_qs = (raw_arg.upper().startswith("X") and
-                     len(raw_arg) > 2 and
+    _is_x_spot_qs = (is_tokenized_x_ticker(raw_arg) and
                      not is_perp_stock)
     if _is_x_spot_qs:
         display_symbol = raw_arg.upper()  # XSPCX وليس SPCX
@@ -5402,7 +5395,7 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if _atr_qs > 0:
             lines.append(f"📊 ATR: {_atr_qs:.1f}% يومياً")
         # T24_fix: تحذير Synthetic + سيناريوهات
-        _is_x_qs = display_symbol.upper().startswith("X") and len(display_symbol) > 2
+        _is_x_qs = is_tokenized_x_ticker(display_symbol)
         if _is_x_qs:
             lines.append(
                 f"\n⚠️ *تحذير:* {display_symbol} أصل اصطناعي (Synthetic) — "

@@ -29,6 +29,7 @@ from decimal import Decimal
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
+from core.symbol_classify import is_tokenized_x_ticker
 from telegram.constants import ParseMode
 
 logger = logging.getLogger(__name__)
@@ -113,7 +114,7 @@ def _tier_perms(tier: str) -> dict:
 def _is_tokenized(symbol: str) -> bool:
     """هل الأصل مُرمَّز (X-prefix أو في NYSE_TOKENS)؟"""
     s = symbol.upper().strip().split("/")[0]
-    return s in _NYSE_TOKENS or (s.startswith("X") and len(s) >= 3)
+    return s in _NYSE_TOKENS or is_tokenized_x_ticker(s)
 
 def _get_om(engine, user_id: int):
     """OrderManager للمستخدم"""

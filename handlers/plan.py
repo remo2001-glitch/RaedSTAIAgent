@@ -10,6 +10,7 @@ import logging
 import re
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from core.symbol_classify import is_tokenized_x_ticker
 from telegram.ext import ContextTypes, CommandHandler, MessageHandler, filters, CallbackQueryHandler
 from telegram.constants import ParseMode
 from core.middleware import require_tier
@@ -279,7 +280,7 @@ async def _resolve_custom_symbols(raw_symbols, tier, data_layer):
         except Exception:
             res = PairResolution(base=raw)
         # PLAN_NAME_fix: للأصول X-prefix، أبقِ الرمز الأصلي للعرض
-        display_sym = raw_orig if (raw_orig.startswith("X") and len(raw_orig) > 2) else res.base
+        display_sym = raw_orig if is_tokenized_x_ticker(raw_orig) else res.base
         resolved.append(res.base)      # للتحليل (GOOGL)
         resolutions.append(res)
         display_syms.append(display_sym)  # للعرض (XGOOGL)
@@ -592,7 +593,7 @@ def _exclude_open_position_symbols(symbols: list, excluded: set) -> tuple:
     kept, removed = [], []
     for s in symbols:
         base = s.upper().replace("USDT", "").replace("USD", "")
-        alt  = base[1:] if base.startswith("X") and len(base) > 2 else f"X{base}"
+        alt  = base[1:] if is_tokenized_x_ticker(base) else f"X{base}"
         if base in excluded or alt in excluded:
             removed.append(s)
         else:
@@ -658,7 +659,7 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # قيمة scan_mode.
     def _get_ohlcv_for_sym(sym):
         su = sym.upper()
-        if su.startswith("X") and len(su) > 2:
+        if is_tokenized_x_ticker(su):
             # ohlcv_cache_consistency_fix: /planweek يستخدم _cache_hint فريداً
             # ("pw2_...") لهذا النوع من الرموز تحديداً (تعليق أصلي: "force
             # cache refresh") بينما /planmonth لم يكن يستخدم أي cache_hint
@@ -930,7 +931,7 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     # مهلة الانتظار المُثبَتة عملياً في /planweek.
                     await asyncio.sleep(1)
                     # xasset_ohlcv_fix: X-prefix → spot mkttype
-                    _is_x_sym = sym.upper().startswith("X") and len(sym) > 2
+                    _is_x_sym = is_tokenized_x_ticker(sym)
                     # yahoo_limit_gate_fix: نفس السبب الجذري الموثَّق أعلاه
                     # عند الجلب الأول — limit يجب أن يتجاوز 89 لفتح Yahoo
                     # fallback للرموز المحظورة (XSPY/XSPCX/XQQQ)، وإلا فإن
@@ -1599,7 +1600,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # XAMZN_EMA50_fix v2: X-prefix → OKX Spot مباشرة (XAMZN/XGOOGL/XSPCX)
             *[engine.data_layer.get_ohlcv(sym.upper(), "1d", 50,
                   mkttype="spot", _cache_hint=f"pw2_{sym.upper()}")  # pw2: force cache refresh
-               if (sym.upper().startswith("X") and len(sym) > 2)
+               if is_tokenized_x_ticker(sym)
                else engine.data_layer.get_ohlcv_perp(sym, 100)
                if sym.upper() in {"SPCX","COIN","AAPL","NVDA","TSLA","MSFT","AMZN",
                                    "GOOGL","META","MSTR","OPENAI","ANTHROPIC","AMD","OKB"}

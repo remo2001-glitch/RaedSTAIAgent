@@ -17,6 +17,7 @@ except ImportError:
                     "XMETA","XNVDA","XTSLA","XMSFT","XAVGO","XSKHY","XISRG",
                     "XTQQQ","XGME","XSMCI","XTWLO"}
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from core.symbol_classify import is_tokenized_x_ticker
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 from telegram.constants import ParseMode
 
@@ -1062,14 +1063,19 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
         # فحص NYSE للأصول المُرمَّزة
-        _exec_is_x = (symbol.startswith("X") and len(symbol) >= 3) or symbol in _NYSE_TOKENS
+        _exec_is_x = is_tokenized_x_ticker(symbol) or symbol in _NYSE_TOKENS
         if _exec_is_x:
             try:
-                from handlers.analysis import _is_nyse_closed, _get_nyse_warning
-                if _is_nyse_closed():
-                    _exec_warnings.append(
-                        "⏰ تنبيه: السوق الأمريكي مغلق حالياً — سيولة أقل"
-                    )
+                # nyse_warning_dead_import_fix: كان الاستيراد هنا يطلب
+                # _is_nyse_closed و_get_nyse_warning من handlers.analysis وهما
+                # غير موجودتين أصلاً (الدالة الفعلية _get_market_hours_warning)،
+                # فيفشل الاستيراد داخل try/except صامتاً ولا يظهر هذا التحذير
+                # لأي أصل مُرمَّز أبداً. الدالة الحقيقية تُرجِع "" عند فتح السوق
+                # ونصاً تحذيرياً عند الإغلاق — نعرض سطرها الأول.
+                from handlers.analysis import _get_market_hours_warning
+                _mw = _get_market_hours_warning(symbol)
+                if _mw:
+                    _exec_warnings.append(_mw.strip().split("\n")[0])
             except Exception:
                 pass
 
@@ -1195,6 +1201,24 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
         final_size = min(final_size, size_usd)
         # الحد الأدنى المطلق = $1 (ليس $10)
         final_size = max(final_size, 1.0)
+        # size_reduction_transparency_fix: التخفيض مقصود بالتصميم (محرك المخاطر
+        # أو معامل الأحداث القادمة، ولا يُكبِّر الحجم أبداً)، لكن البطاقة كانت
+        # تعرض "الحجم: $70" دون أي إشارة أن المستخدم طلب $100 ولماذا خُفِّض —
+        # فيبدو كخلل. موثَّق فعلياً: /virtual buy BTC 100 → $70 بلا تفسير.
+        # نُحدِّد العامل الحاكم بمقارنة سقفي min() نفسيهما.
+        _size_note = ""
+        try:
+            _cap_risk = float(risk.approved_size or size_usd)
+            _cap_ev   = size_usd * ev_mult
+            if final_size < size_usd - 0.005:
+                if ev_mult < 1 and _cap_ev <= _cap_risk:
+                    _why = f"معامل الأحداث القادمة ×{ev_mult:.2f}"
+                else:
+                    _why = "حماية محرك المخاطر"
+                _size_note = (f"ℹ️ الحجم المطلوب ${size_usd:,.0f} خُفِّض إلى "
+                              f"${final_size:,.2f} ({_why})")
+        except Exception:
+            _size_note = ""
         is_buy     = direction in ("buy","شراء")
         slip       = 0.1
         ep         = price * (1+slip/100) if is_buy else price * (1-slip/100)
@@ -1309,6 +1333,15 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _vw_ex.positions[symbol.upper()]["stop_loss"]   = sl_price
                 _vw_ex.positions[symbol.upper()]["take_profit"] = tp_price
                 _vw_ex.positions[symbol.upper()]["size_usd"]    = final_size
+                # time_exit_enforcement_fix: تخزين المدة المعروضة في البطاقة
+                # على المركز نفسه ليفرضها الإغلاق التلقائي (VirtualWallet.
+                # is_hold_expired) — كانت تُعرَض فقط ولا تُخزَّن ولا تُفرَض.
+                try:
+                    _mh = float(risk.max_hold_hours or 0)
+                    if _mh > 0:
+                        _vw_ex.positions[symbol.upper()]["max_hold_hours"] = _mh
+                except Exception:
+                    pass
             _sm_vex.save_virtual_wallet(user_id, _vw_ex.to_dict())
             # rejected_signal_eval_fix: تمييز هذه الإشارة كـ"نُفِّذت فعلاً"
             # فور نجاح الشراء — يستثنيها هذا من مسار تقييم "الإشارات
@@ -1346,6 +1379,7 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "━━━━━━━━━━━━━━━━━━",
             f"🪙 {symbol} | {'🟢 شراء' if is_buy else '🔴 بيع'}",
             f"💰 الحجم: ${final_size:,.2f}",
+            *([_size_note] if _size_note else []),
             f"📈 سعر الدخول: ${ep:,.4f}",
             f"🛑 وقف الخسارة: ${sl_price:,.4f} ({risk.stop_loss_pct:.1f}%)",
             f"🎯 هدف الربح: ${tp_price:,.4f} ({risk.take_profit_pct:.1f}%)",
@@ -2049,10 +2083,24 @@ async def cmd_vtrades(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sign     = "+" if live_pnl >= 0 else ""
         emoji    = "📈" if live_pnl >= 0 else "📉"
 
+        # vtrades_hold_visibility_fix: القائمة لم تكن تعرض حجم المركز ولا
+        # عمره ولا ما تبقّى من مدة احتفاظه — فلا يُرى منها أن مركزاً عمره ستة
+        # أيام تجاوز حدّه، ولا أن BTC المتبقي (35$) نصف مركز. تستخدم نفس
+        # دوال VirtualWallet التي يعتمدها الإغلاق التلقائي، فيطابق المعروضُ
+        # المنفَّذَ تماماً.
+        _age_h = vw.position_age_hours(sym)
+        _rem_h = vw.hold_remaining_hours(sym)
+        if _age_h is None or _rem_h is None:
+            _hold_txt = ""
+        elif _rem_h > 0:
+            _hold_txt = f" | منذ {_age_h:.0f}س — متبقي {_rem_h:.0f}س"
+        else:
+            _hold_txt = f" | منذ {_age_h:.0f}س — ⏰ تجاوز مدة الاحتفاظ، يُغلق في المسح القادم"
         lines += [
             f"*{sym}*",
             f"• دخول: ${pos['avg_price']:,.4f} | الحالي: ${cur_price:,.4f}",
             f"• PnL: {emoji} {sign}${live_pnl:,.2f} ({sign}{pnl_pct:.1f}%)",
+            f"• الحجم: ${pos.get('cost',0):,.2f}{_hold_txt}",
             f"• TP: ${pos.get('take_profit',0):,.4f} | SL: ${pos.get('stop_loss',0):,.4f}",
             "",
         ]
@@ -2843,8 +2891,17 @@ async def cb_vclose(update, context):
             _sm_vc.save_virtual_wallet(user_id, vw.to_dict())
             pnl  = result.get("trade", {}).get("pnl", 0)
             sign = "+" if pnl >= 0 else ""
+            # partial_close_stats_fix: كان drift_monitor.record_outcome
+            # وsignal_tracker.close_signal يُستدعَيان بعد كل عملية بيع ناجحة
+            # حتى الجزئية — فصفقة تُغلَق على خطوتين تُسجَّل نتيجتين مستقلتين،
+            # وخسارة ضئيلة من ضوضاء السعر (-0.04$ موثَّقة فعلياً) تُحتسَب
+            # "خسارة" كاملة في مراقب الانحراف، ويُغلَق سجل الإشارة وما زال نصف
+            # المركز مفتوحاً. الإصلاح: تُسجَّل النتيجة فقط عند الإغلاق الكامل
+            # (اختفاء المركز من المحفظة). تبقى الأرباح/الخسائر المُحقَّقة
+            # للجزء المُغلَق في رصيد المحفظة كالمعتاد — هذا يخص الإحصاءات فقط.
+            _fully_closed = sym not in vw.positions
             try:
-                if engine:
+                if engine and _fully_closed:
                     engine.drift_monitor.record_outcome(pnl > 0)
                     # خطة التطوير — البُعد الرابع: إغلاق يدوي عبر الزر —
                     # نُصنِّفه "manual_close" (لا TP ولا SL) بدل تجاهله، حتى
