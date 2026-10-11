@@ -12,6 +12,7 @@ signal_scorer.py — نظام تقييم جودة إشارات رائد التد
 """
 
 from dataclasses import dataclass, field
+from core.indicators import fmt_vol_ratio as _fv
 from typing import Optional, Literal
 import logging
 
@@ -228,10 +229,10 @@ def evaluate_signal(s: SignalInput) -> dict:
         score_d += 5
     elif vol >= 0.5:
         score_d += 3
-        reasons.append(f"د: حجم {vol:.1f}x — أقل من المتوسط (-2)")
+        reasons.append(f"د: حجم {_fv(vol)} — أقل من المتوسط (-2)")
     elif vol > 0:
         score_d += 0
-        reasons.append(f"د: حجم {vol:.1f}x — ضعيف جداً (-5)")
+        reasons.append(f"د: حجم {_fv(vol)} — ضعيف جداً (-5)")
     else:
         score_d += 3  # غير محسوب
 
