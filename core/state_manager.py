@@ -897,6 +897,23 @@ class StateManager:
         self._state["wallets"][str(user_id)] = wallet_data
         self.save()  # حفظ في الملف أيضاً
 
+    def list_wallet_user_ids(self) -> list:
+        """معرّفات كل مستخدم لديه محفظة افتراضية (Redis أولاً ثم _state)."""
+        ids = set()
+        if self._redis_ok:
+            try:
+                for key in self._redis.keys("raed:vw:*"):
+                    k = key.decode() if isinstance(key, bytes) else key
+                    tail = k.replace("raed:vw:", "")
+                    if tail.isdigit():
+                        ids.add(int(tail))
+            except Exception as e:
+                logger.debug(f"list_wallet_user_ids redis: {e}")
+        for uid_str in (self._state.get("wallets", {}) or {}).keys():
+            if str(uid_str).isdigit():
+                ids.add(int(uid_str))
+        return sorted(ids)
+
     def get_autotrade_users(self) -> list:
         result = []
         for uid_str, data in self._state.get("users", {}).items():

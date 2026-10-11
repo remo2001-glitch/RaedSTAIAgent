@@ -384,19 +384,9 @@ class BacktestEngine:
 
     @staticmethod
     def _rsi_series(data: List[float], period: int = 14) -> List[float]:
-        result = [50.0] * len(data)
-        if len(data) < period + 1:
-            return result
-        gains, losses = [], []
-        for i in range(1, len(data)):
-            d = data[i] - data[i-1]
-            gains.append(max(d, 0))
-            losses.append(max(-d, 0))
-        for i in range(period, len(data)):
-            ag = sum(gains[i-period:i]) / period
-            al = sum(losses[i-period:i]) / period or 1e-9
-            result[i] = 100 - 100 / (1 + ag / al)
-        return result
+        # wilder_unify_fix: نفس صيغة التداول الحي (core/indicators.py)
+        from core.indicators import wilder_rsi_series
+        return wilder_rsi_series(data, period)
 
     @staticmethod
     def _rolling_max(data: List[float], window: int) -> List[float]:

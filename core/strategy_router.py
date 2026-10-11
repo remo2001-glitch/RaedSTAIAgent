@@ -298,8 +298,9 @@ class SignalLayer:
             closes = [c["close"] for c in candles]
             vols   = [c.get("volume", 0) for c in candles]
             rsi    = _rsi(closes, min(14, len(closes)-1))
-            vol_ma = _sma(vols, min(10, len(vols))) or 1
-            vol_r  = vols[-1] / vol_ma if vol_ma > 0 else 1.0
+            # volume_completed_fix: آخر شمعة مكتملة لا الشمعة قيد التكوّن
+            from core.indicators import volume_ratio_completed
+            vol_r  = volume_ratio_completed(candles, window=min(10, len(vols)))
             score  = 0.5
             bias   = "neutral"
             if rsi < 30: score = 0.65; bias = "bullish"
@@ -322,7 +323,9 @@ class SignalLayer:
         ema200 = _ema(closes, 200) if len(closes) >= 200 else ema50
         macd_hist = _macd_histogram(closes)
         bb_pos    = _bb_position(closes, 20)
-        vol_ratio  = vols[-1] / (_sma(vols, 20) or 1)
+        # volume_completed_fix: آخر شمعة مكتملة ÷ متوسط 20 شمعة مكتملة
+        from core.indicators import volume_ratio_completed
+        vol_ratio  = volume_ratio_completed(candles, window=20)
         vol_avg20  = _sma(vols, 20) or 1
 
         # تعريف مبكر لمنع NameError (#510)
@@ -334,15 +337,7 @@ class SignalLayer:
         rsi_div = "none"
         if len(closes) >= 30:
             # احسب RSI لكل نقطة
-            def _rsi_series(c, p=14):
-                if len(c) < p+1: return [50.0]*len(c)
-                rs = []
-                for i in range(p, len(c)):
-                    g = sum(max(c[j]-c[j-1],0) for j in range(i-p+1,i+1)) / p + 1e-9
-                    l = sum(max(c[j-1]-c[j],0) for j in range(i-p+1,i+1)) / p + 1e-9
-                    rs.append(100-100/(1+g/l))
-                return [50.0]*p + rs
-
+            from core.indicators import wilder_rsi_series as _rsi_series
             rsi_arr = _rsi_series(closes)
 
             # أبحث عن آخر قاعين في السعر (pivot lows)
@@ -780,12 +775,10 @@ def _sma(data, period):
     return sum(data[-period:]) / min(period, len(data))
 
 def _rsi(closes, period=14):
+    # wilder_unify_fix: تنعيم Wilder على كامل السلسلة (core/indicators.py)
+    from core.indicators import wilder_rsi
     if len(closes) < period + 1: return 50
-    gains = [max(closes[i]-closes[i-1], 0) for i in range(1, len(closes))]
-    losses = [max(closes[i-1]-closes[i], 0) for i in range(1, len(closes))]
-    ag = _sma(gains, period) or 1e-9
-    al = _sma(losses, period) or 1e-9
-    return 100 - 100 / (1 + ag / al)
+    return wilder_rsi(closes, period)
 
 def _macd_histogram(closes):
     if len(closes) < 26: return 0

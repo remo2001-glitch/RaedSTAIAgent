@@ -238,11 +238,59 @@ class SignalTracker:
             rec = self.get_signal(sid)
             if not rec or rec.executed or rec.hypothetical_outcome is not None:
                 continue
+            # perf_status_check_fix: سجل أُغلق (status != open) كان مرتبطاً بصفقة
+            # فعلية سبقت إضافة حقل executed — ليس "مرفوضاً" ولا يُقيَّم افتراضياً.
+            if rec.status != "open":
+                continue
+            # إشارة محايدة لا اتجاه لها — لا معنى لتقييم "لو نُفِّذت" (كانت
+            # تُعامَل كـshort بالخطأ لأن is_long=False).
+            if rec.direction not in ("long", "short"):
+                continue
             age = now - rec.created_ts
             if min_age_s <= age <= max_age_s and rec.entry_price > 0:
                 out.append(rec)
                 if len(out) >= limit:
                     break
+        return out
+
+    def sync_executed(self, signal_ids) -> int:
+        """
+        perf_executed_sync_fix: يضبط executed=True لكل signal_id مرتبط بمركز
+        مفتوح أو صفقة مغلقة في أي محفظة. يعالج سجلات سبقت حقل executed، أو فشل
+        mark_executed بصمت. يُعيد عدد السجلات التي عُدِّلت فعلاً.
+        """
+        n = 0
+        for sid in set(x for x in (signal_ids or []) if x):
+            rec = self.get_signal(sid)
+            if rec and not rec.executed:
+                rec.executed = True
+                if self._save(rec):
+                    n += 1
+        return n
+
+    def funnel_counts(self) -> Dict[str, int]:
+        """
+        perf_funnel_fix: قمع التسجيل — كم إشارة سُجِّلت، كم نُفِّذ، كم أُغلق،
+        كم ينتظر التقييم الافتراضي، كم قُيِّم. يوضح لماذا قد يظهر 0 صفقة مغلقة.
+        """
+        out = {"logged": 0, "executed": 0, "open_executed": 0, "closed": 0,
+               "rejected_pending": 0, "rejected_evaluated": 0}
+        for sid in self.get_all_signal_ids():
+            rec = self.get_signal(sid)
+            if not rec:
+                continue
+            out["logged"] += 1
+            if rec.executed:
+                out["executed"] += 1
+                if rec.status == "open":
+                    out["open_executed"] += 1
+            if rec.status != "open" and rec.was_win is not None:
+                out["closed"] += 1
+            if not rec.executed and rec.status == "open":
+                if rec.hypothetical_outcome is None:
+                    out["rejected_pending"] += 1
+                else:
+                    out["rejected_evaluated"] += 1
         return out
 
     def record_hypothetical_outcome(self, signal_id: str, outcome: str) -> bool:
@@ -262,7 +310,7 @@ class SignalTracker:
         try:
             raw = r.get(f"{REDIS_KEY_PREFIX}{signal_id}")
         except Exception as e:
-            logger.debug(f"SignalTracker.get_signal redis: {e}")
+            logger.warning(f"SignalTracker.get_signal redis: {e}")
             return None
         if not raw:
             return None
@@ -298,7 +346,7 @@ class SignalTracker:
             r.rpush(REDIS_INDEX_KEY, signal_id)
             r.ltrim(REDIS_INDEX_KEY, -MAX_INDEX_SIZE, -1)
         except Exception as e:
-            logger.debug(f"SignalTracker._append_index: {e}")
+            logger.warning(f"SignalTracker._append_index: {e}")
 
     def get_all_signal_ids(self, limit: int = 5000) -> List[str]:
         r = self._redis()
@@ -382,6 +430,8 @@ class SignalTracker:
         for sid in ids:
             rec = self.get_signal(sid)
             if not rec or rec.executed or rec.hypothetical_outcome is None:
+                continue
+            if rec.status != "open":
                 continue
             if setup_type and rec.setup_type != setup_type:
                 continue

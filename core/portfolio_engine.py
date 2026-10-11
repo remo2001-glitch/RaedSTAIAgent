@@ -51,6 +51,7 @@ class CapitalAllocationEngine:
     3. يُطبق تعديلات التقلب والسيولة والارتباط
     4. يُطبق حدود التركيز
     """
+    ALLOC_MIN_CONFIDENCE = 0.65   # حد التوزيع على المحفظة (≠ حد الإشارة الفردية 55%)
 
     # ── حدود التوزيع ──────────────────────────────────────────
     MAX_SINGLE_ASSET   = 0.25    # 25% أقصى لأصل واحد
@@ -109,7 +110,7 @@ class CapitalAllocationEngine:
 
         # ── 2. تصفية وترتيب المرشحين ────────────────────────
         qualified = [c for c in candidates
-                      if c.get("confidence", 0) >= 0.65
+                      if c.get("confidence", 0) >= self.ALLOC_MIN_CONFIDENCE
                       and c.get("direction", "neutral") != "neutral"]
         qualified = qualified[:self.MAX_POSITIONS]
 
@@ -307,7 +308,7 @@ class CapitalAllocationEngine:
             # إصلاح #146: تمييز "ثقة منخفضة" (كل العملات<65%) عن
             # "لا إشارة شراء" (بعض العملات≥65% لكن اتجاهها ليس شراء/long)
             _high_conf_not_long = bool(candidates) and any(
-                (c.get("confidence", 0) >= 0.65 and c.get("direction") != "long")
+                (c.get("confidence", 0) >= self.ALLOC_MIN_CONFIDENCE and c.get("direction") != "long")
                 for c in candidates
             )
             if _high_conf_not_long:
@@ -321,8 +322,14 @@ class CapitalAllocationEngine:
                 # 55-60%) — تناقض ظاهري مباشر بين النص والرقم المعروض بجانبه
                 # في نفس الرسالة. الإصلاح: صياغة صريحة لا تلتبس مع رقم ثقة
                 # الـRegime.
-                cause = (f"ثقة الدخول الفردية لكل عملة دون الحد المطلوب "
-                         f"رغم تشخيص الاتجاه العام ({regime.description_ar})")
+                # threshold_clarity_fix: الحدان مختلفان ولا يجب خلطهما — 55% يسمح
+                # بإشارة دخول فردية (حسب الباقة)، بينما التوزيع على المحفظة يتطلب
+                # 65%. نذكر أعلى ثقة فعلية والحد الذي لم تبلغه.
+                _top = max((c.get("confidence", 0) for c in candidates), default=0)
+                cause = (f"أعلى ثقة بين العملات المحلَّلة {_top:.0%} — دون حد التوزيع "
+                         f"على المحفظة ({self.ALLOC_MIN_CONFIDENCE:.0%}؛ وهو أعلى من "
+                         f"حد الإشارة الفردية 55%) رغم تشخيص الاتجاه العام "
+                         f"({regime.description_ar})")
             return (
                 f"⚠️ لا توجد أصول مؤهلة للتوزيع حالياً\n"
                 f"السبب: {cause}"

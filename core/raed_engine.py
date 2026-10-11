@@ -30,6 +30,23 @@ from core.state_manager   import state_manager as _sm_singleton
 logger = logging.getLogger(__name__)
 
 
+
+def _format_auto_close_notice(sym: str, reason: str, entry: float, exit_px: float,
+                              pnl: float, pnl_pct: float, balance: float) -> str:
+    """نص إشعار الإغلاق التلقائي للمركز الافتراضي (TP / SL / Time Exit)."""
+    icon = "🟢" if pnl > 0 else "🔴" if pnl < 0 else "⚪"
+    sign = "+" if pnl >= 0 else "-"
+    return (
+        f"{icon} *إغلاق تلقائي — {sym}*\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"• السبب: {reason}\n"
+        f"• الدخول: ${entry:,.4f}\n"
+        f"• الخروج: ${exit_px:,.4f}\n"
+        f"• الربح/الخسارة: {sign}${abs(pnl):,.2f} ({pnl_pct:+.2f}%)\n"
+        f"• الرصيد النقدي بعد الإغلاق: ${balance:,.2f}\n\n"
+        f"🎮 /vtrades للتفاصيل"
+    )
+
 class RaedEngine:
     """
     المحرك المركزي — Singleton يُهيَّأ مرة واحدة عند بدء البوت.
@@ -309,6 +326,7 @@ class RaedEngine:
                     continue
                 _vw = _VW_c(_wdata)
                 _changed = False
+                _close_notices = []   # auto_close_notify_fix: تُرسَل بعد حفظ المحفظة
 
                 for sym in list(_vw.positions.keys()):
                     pos = _vw.positions.get(sym)
@@ -331,6 +349,7 @@ class RaedEngine:
                         time_hit = (not tp_hit and not sl_hit) and _vw.is_hold_expired(sym)
                         should_close = tp_hit or sl_hit or time_hit
                         if should_close:
+                            _entry_px = float(pos.get("avg_price", 0) or 0)
                             result = _vw.sell(sym, price)
                             if result.get("ok"):
                                 _changed = True
@@ -351,7 +370,7 @@ class RaedEngine:
                                                          else "expired")
                                         self.signal_tracker.close_signal(_sig_id, price, _close_status)
                                     except Exception as _ste:
-                                        logger.debug(f"signal_tracker.close_signal: {_ste}")
+                                        logger.warning(f"signal_tracker.close_signal: {_ste}")
                                 reason = ("TP ✅" if tp_hit
                                           else "SL 🛑" if sl_hit
                                           else "Time Exit ⏰")
@@ -359,11 +378,28 @@ class RaedEngine:
                                     f"Auto-close {sym} uid={_uid}: {reason} "
                                     f"PnL=${pnl:+,.2f}"
                                 )
+                                # auto_close_notify_fix: الإغلاق التلقائي كان صامتاً
+                                # (يُكتشف عبر /vtrades فقط). إشعار غير صامت بالتفاصيل.
+                                _pnl_pct = result.get("trade", {}).get("pnl_pct", 0)
+                                _close_notices.append(
+                                    _format_auto_close_notice(
+                                        sym, reason, _entry_px, price, pnl,
+                                        _pnl_pct, _vw.balance))
                     except Exception as ep:
                         logger.debug(f"_check_virtual_positions {sym}: {ep}")
 
                 if _changed:
                     _sm_c.save_virtual_wallet(_uid, _vw.to_dict())
+                    # الإرسال بعد الحفظ، وفشله لا يمنع الإغلاق ولا باقي المستخدمين
+                    _sfn_close = getattr(self, "_send_fn", None)
+                    if _sfn_close:
+                        for _notice in _close_notices:
+                            try:
+                                await _sfn_close(_notice, user_id=_uid,
+                                                 parse_mode="Markdown")
+                            except Exception as _ne:
+                                logger.warning(
+                                    f"auto-close notice failed uid={_uid}: {_ne}")
         except Exception as e:
             logger.debug(f"_check_virtual_positions: {e}")
 
@@ -380,6 +416,24 @@ class RaedEngine:
         """
         from core.signal_tracker import evaluate_hypothetical_outcome
         _max_age_h = 24.0 * 14
+        # perf_executed_sync_fix: قبل التقييم نُزامن executed من المحافظ الفعلية
+        # (مراكز مفتوحة + سجل البيع) حتى لا تُقيَّم صفقة نُفِّذت فعلاً كأنها مرفوضة.
+        try:
+            from core.state_manager import state_manager as _sm_sy
+            _ids = set()
+            for _u in _sm_sy.list_wallet_user_ids():
+                _w = _sm_sy.get_virtual_wallet(_u) or {}
+                for _p in (_w.get("positions") or {}).values():
+                    if isinstance(_p, dict) and _p.get("signal_id"):
+                        _ids.add(_p["signal_id"])
+                for _t in (_w.get("history") or []):
+                    if isinstance(_t, dict) and _t.get("signal_id"):
+                        _ids.add(_t["signal_id"])
+            _fixed = self.signal_tracker.sync_executed(_ids)
+            if _fixed:
+                logger.info(f"signal_tracker.sync_executed: صُحِّح {_fixed} سجل")
+        except Exception as e:
+            logger.warning(f"_evaluate_rejected_signals (sync_executed): {e}")
         try:
             pending = self.signal_tracker.get_pending_rejected_signals(
                 min_age_hours=24.0, max_age_hours=_max_age_h, limit=50)
@@ -864,6 +918,33 @@ class RaedEngine:
                                     amount_usd = _buy_amt,
                                 )
                                 if _result.get("ok"):
+                                    # perf_funnel_fix: كانت صفقات المسح التلقائي بلا signal_id
+                                    # فلا تظهر في /performance أبداً (0 مغلقة). نسجّل إشارة
+                                    # لكل مستخدم بعد نجاح الشراء فقط ونربطها بالمركز.
+                                    try:
+                                        _sg = s.get("signal")
+                                        _tech_sg = (getattr(_sg, "technicals", {}) or {}) if _sg else {}
+                                        _pos_sg = _vw.positions.get(s["symbol"].upper(), {})
+                                        _sid_auto = self.signal_tracker.log_signal(
+                                            symbol=s["symbol"], setup_type=s["direction"],
+                                            direction=s["direction"],
+                                            confidence_pct=s["confidence"] * 100,
+                                            confirmations_met=len(_tech_sg.get("conf_flags", []) or []),
+                                            entry_price=s["price"],
+                                            sl_price=float(_pos_sg.get("stop_loss", 0) or 0),
+                                            tp1_price=float(_pos_sg.get("take_profit", 0) or 0),
+                                            rsi_1d=_tech_sg.get("rsi"),
+                                            regime=regime.regime.value, user_id=_uid)
+                                        if _sid_auto and s["symbol"].upper() in _vw.positions:
+                                            _vw.positions[s["symbol"].upper()]["signal_id"] = _sid_auto
+                                            _vw.positions[s["symbol"].upper()]["setup_type"] = s["direction"]
+                                            self.signal_tracker.mark_executed(_sid_auto)
+                                        elif not _sid_auto:
+                                            logger.warning(
+                                                f"signal_tracker: تعذّر تسجيل إشارة {s['symbol']} "
+                                                f"uid={_uid} (Redis غير متاح؟) — الصفقة لن تظهر في /performance")
+                                    except Exception as _sbe:
+                                        logger.warning(f"signal_tracker bind auto {s['symbol']}: {_sbe}")
                                     _sm_vw.save_virtual_wallet(_uid, _vw.to_dict())
                                     # Q1-Q5: تسجيل الصفقة
                                     _sm_vw.record_auto_trade(_uid, s["symbol"], _scan_type, _buy_amt)
