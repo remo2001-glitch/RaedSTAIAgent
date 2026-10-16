@@ -38,17 +38,10 @@ _EMPTY_PATTERNS = [
 
 # fallback للمحتوى المرفوض
 _FALLBACK_MESSAGES = {
-    "outlook": (
-        "🌍 رؤية المؤسسات الكبرى — رائد\n"
-        "━━━━━━━━━━━━━━━━━━\n\n"
-        "⏳ جاري تحديث البيانات من المصادر الرسمية...\n\n"
-        "💡 للاستفادة من آخر التوقعات:\n"
-        "• BlackRock: blackrock.com/insights\n"
-        "• Vanguard: vanguard.com/research\n"
-        "• Morningstar: morningstar.com/research\n\n"
-        "⚠️ رأي استرشادي — القرار النهائي للمستخدم\n"
-        "🤖 رائد التداول الذكي"
-    ),
+    # outlook_fallback_fix: كان البديل رسالة "جاري تحديث البيانات…" ثابتة بلا أي
+    # بيانات (تبدو وكأن التحميل لم يكتمل)، وتتضمن ترويسة وتذييلاً مكرَّرَين.
+    # الآن البديل سطر واحد صريح؛ والمستدعي (/outlook) يبني بديله من البيانات الحية.
+    "outlook": "⚠️ تعذّر التحقق من رؤية المؤسسات الآن — أعد المحاولة بعد قليل",
     "signal": "⚠️ تعذّر التحقق من صحة الإشارة — أعد المحاولة",
     "analyze": "⚠️ تعذّر إكمال التحليل — أعد المحاولة",
     "plan": "⚠️ تعذّر إنشاء الخطة — أعد المحاولة",
@@ -187,9 +180,14 @@ class AuditingAgent:
         if not approved:
             return False, _FALLBACK_MESSAGES["outlook"]
         
-        # تحقق إضافي: هل يذكر المؤسسات الثلاث؟
-        mentions = sum(1 for inst in ["BlackRock", "Vanguard", "Morningstar"] 
-                      if inst in content)
+        # تحقق إضافي: هل يذكر المؤسسات الثلاث؟ (مع تطبيع الصيغ: Black Rock / بلاك روك ...)
+        _norm = re.sub(r"[\s\-_]+", "", content).lower()
+        _aliases = {
+            "BlackRock": ("blackrock", "بلاكروك"),
+            "Vanguard": ("vanguard", "فانجارد", "فانغارد"),
+            "Morningstar": ("morningstar", "مورنينجستار", "مورنينغستار"),
+        }
+        mentions = sum(1 for names in _aliases.values() if any(n in _norm for n in names))
         if mentions < 2:
             logger.warning("auditing_agent: /outlook لا يذكر المؤسسات")
             return False, _FALLBACK_MESSAGES["outlook"]

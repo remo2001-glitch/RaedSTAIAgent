@@ -46,6 +46,9 @@ class MarketEvent:
     hours_after:  int = 2       # ساعات بعد الحدث تنتهي القيود
     crypto_impact: float = 0.5  # 0–1 درجة تأثير على الكريبتو
     source:      str = "manual"
+    # event_scope_fix: "all" = حدث ماكرو يؤثر على كل الأصول؛ "crypto" = خاص
+    # بسوق الكريبتو (مثل انتهاء خيارات BTC) فلا يُعرَض في خطة أصول مُرمَّزة فقط.
+    scope:       str = "all"
 
 
 @dataclass
@@ -71,29 +74,33 @@ def _get_recurring_events() -> List[MarketEvent]:
 
     events = []
 
-    # ── FOMC (كل 6 أسابيع تقريباً) ─────────────────────────
-    # نُضيف نموذج للتوضيح — في الإنتاج يُجلب من API
-    next_fomc = _next_occurrence_of_weekday(3, hour_utc=18)  # أربعاء 6م UTC
-    events.append(MarketEvent(
-        name="FOMC Meeting", name_ar="اجتماع الفيدرالي الأمريكي",
-        severity=EventSeverity.HIGH,
-        event_time=next_fomc,
-        hours_before=6, hours_after=3,
-        crypto_impact=0.85,
-    ))
+    # ── FOMC — جدول 2026 الرسمي (يوم القرار، 2:00م نيويورك = 18:00 UTC) ──
+    # events_calendar_fix: كان الموعد يُحسَب "أقرب يوم خميس" دائماً (أي كل أسبوع!)
+    # بينما اجتماعات FOMC ثمانية فقط في السنة. الآن: جدول فعلي لعام 2026؛
+    # وإن انتهى الجدول لا يُعرَض موعد مُخمَّن (أفضل من موعد خاطئ).
+    next_fomc = _next_fomc_time()
+    if next_fomc:
+        events.append(MarketEvent(
+            name="FOMC Meeting", name_ar="اجتماع الفيدرالي الأمريكي",
+            severity=EventSeverity.HIGH,
+            event_time=next_fomc,
+            hours_before=6, hours_after=3,
+            crypto_impact=0.85,
+        ))
 
-    # ── CPI (أول أربعاء من كل شهر تقريباً) ─────────────────
-    next_cpi = _next_occurrence_of_weekday(2, hour_utc=12, skip_weeks=2)
+    # ── CPI — موعد تقريبي (منتصف الشهر، أقرب أربعاء لليوم 13) ──────────
+    # لا نملك جدول BLS الرسمي هنا؛ يُوسَم صراحةً "تقريبي" كي لا يُعرَض كموعد مؤكد.
+    next_cpi = _approx_cpi_time()
     events.append(MarketEvent(
-        name="US CPI Release", name_ar="مؤشر التضخم الأمريكي CPI",
+        name="US CPI Release", name_ar="مؤشر التضخم الأمريكي CPI (موعد تقريبي)",
         severity=EventSeverity.HIGH,
         event_time=next_cpi,
         hours_before=3, hours_after=2,
         crypto_impact=0.80,
     ))
 
-    # ── NFP (أول جمعة من كل شهر) ────────────────────────────
-    next_nfp = _next_occurrence_of_weekday(4, hour_utc=12, skip_weeks=1)
+    # ── NFP (أول جمعة من كل شهر، 8:30 نيويورك) ───────────────────────────
+    next_nfp = _first_weekday_of_month(4, hour_utc=13, minute=30)
     events.append(MarketEvent(
         name="Non-Farm Payrolls", name_ar="الوظائف غير الزراعية NFP",
         severity=EventSeverity.MEDIUM,
@@ -102,8 +109,9 @@ def _get_recurring_events() -> List[MarketEvent]:
         crypto_impact=0.60,
     ))
 
-    # ── Bitcoin Options Expiry (آخر جمعة من الشهر — Deribit) ─
-    next_expiry = _next_occurrence_of_weekday(4, hour_utc=8, from_end_of_month=True)
+    # ── Bitcoin Options Expiry (آخر جمعة من الشهر، 08:00 UTC — Deribit) ──
+    # كان from_end_of_month يُتجاهَل فيظهر "أقرب جمعة" (خلل موثَّق: 162 ساعة).
+    next_expiry = _last_weekday_of_month(4, hour_utc=8)
     events.append(MarketEvent(
         name="BTC Options Expiry", name_ar="انتهاء عقود خيارات BTC",
         severity=EventSeverity.MEDIUM,
@@ -111,6 +119,7 @@ def _get_recurring_events() -> List[MarketEvent]:
         hours_before=4, hours_after=2,
         crypto_impact=0.90,
         source="deribit",
+        scope="crypto",
     ))
 
     return [e for e in events if e.event_time > now - 3600]
@@ -297,8 +306,10 @@ class EventRiskFilter:
     # ═══════════════════════════════════════════════════════════
     # 5. قائمة الأحداث القادمة
     # ═══════════════════════════════════════════════════════════
-    def upcoming_events(self, hours_ahead: int = 48) -> List[MarketEvent]:
-        """قائمة الأحداث المتوقعة في الـ N ساعة القادمة."""
+    def upcoming_events(self, hours_ahead: int = 48,
+                        asset_scope: str = "all") -> List[MarketEvent]:
+        """قائمة الأحداث المتوقعة في الـ N ساعة القادمة.
+        asset_scope="tokenized" يستبعد الأحداث الخاصة بالكريبتو فقط."""
         all_events = (
             _get_recurring_events() +
             self._manual_events +
@@ -306,7 +317,9 @@ class EventRiskFilter:
         )
         now    = time.time()
         cutoff = now + hours_ahead * 3600
-        return [e for e in all_events if now <= e.event_time <= cutoff]
+        return [e for e in all_events
+                if now <= e.event_time <= cutoff
+                and not (asset_scope == "tokenized" and getattr(e, "scope", "all") == "crypto")]
 
     # ═══════════════════════════════════════════════════════════
     # 6. تنسيق التقارير
@@ -330,8 +343,8 @@ class EventRiskFilter:
         ]
         return "\n".join(lines)
 
-    def format_upcoming_ar(self, hours: int = 168) -> str:
-        events = self.upcoming_events(hours)
+    def format_upcoming_ar(self, hours: int = 168, asset_scope: str = "all") -> str:
+        events = self.upcoming_events(hours, asset_scope=asset_scope)
         if not events:
             return f"✅ لا أحداث مهمة خلال الـ {hours//24} أيام القادمة ({hours} ساعة)"
 
@@ -363,6 +376,84 @@ class EventRiskFilter:
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
+# جدول قرارات FOMC لعام 2026 (اليوم الثاني من الاجتماع) — 18:00 UTC
+_FOMC_2026_DECISIONS = [
+    (2026, 1, 28), (2026, 3, 18), (2026, 4, 29), (2026, 6, 17),
+    (2026, 7, 29), (2026, 9, 16), (2026, 10, 28), (2026, 12, 9),
+]
+
+
+def _utc_now():
+    import datetime
+    return datetime.datetime.utcnow()
+
+
+def _to_ts(dt) -> float:
+    import datetime
+    return dt.replace(tzinfo=datetime.timezone.utc).timestamp()
+
+
+def _next_fomc_time() -> Optional[float]:
+    import datetime
+    now = _utc_now()
+    for y, m, d in _FOMC_2026_DECISIONS:
+        dt = datetime.datetime(y, m, d, 18, 0, 0)
+        if dt > now:
+            return _to_ts(dt)
+    return None
+
+
+def _first_weekday_of_month(weekday: int, hour_utc: int = 12, minute: int = 0) -> float:
+    """أقرب "أول <weekday>" في شهر قادم (أو الحالي إن لم يَحِن بعد)."""
+    import datetime
+    now = _utc_now()
+    y, m = now.year, now.month
+    for _ in range(3):
+        first = datetime.datetime(y, m, 1, hour_utc, minute)
+        first += datetime.timedelta(days=(weekday - first.weekday()) % 7)
+        if first > now:
+            return _to_ts(first)
+        m += 1
+        if m > 12:
+            m, y = 1, y + 1
+    return _to_ts(first)
+
+
+def _last_weekday_of_month(weekday: int, hour_utc: int = 8, minute: int = 0) -> float:
+    """أقرب "آخر <weekday>" في الشهر (الحالي إن لم يَحِن، وإلا القادم)."""
+    import datetime
+    now = _utc_now()
+    y, m = now.year, now.month
+    for _ in range(3):
+        ny, nm = (y + 1, 1) if m == 12 else (y, m + 1)
+        last = datetime.datetime(ny, nm, 1, hour_utc, minute) - datetime.timedelta(days=1)
+        last -= datetime.timedelta(days=(last.weekday() - weekday) % 7)
+        if last > now:
+            return _to_ts(last)
+        y, m = ny, nm
+    return _to_ts(last)
+
+
+def _approx_cpi_time() -> float:
+    """موعد تقريبي لـ CPI: أقرب أربعاء لليوم 13 من الشهر (13:30 UTC)."""
+    import datetime
+    now = _utc_now()
+    y, m = now.year, now.month
+    for _ in range(3):
+        base = datetime.datetime(y, m, 13, 13, 30)
+        delta = (2 - base.weekday())
+        if delta > 3:
+            delta -= 7
+        if delta < -3:
+            delta += 7
+        dt = base + datetime.timedelta(days=delta)
+        if dt > now:
+            return _to_ts(dt)
+        m += 1
+        if m > 12:
+            m, y = 1, y + 1
+    return _to_ts(dt)
+
 def _next_occurrence_of_weekday(weekday: int, hour_utc: int = 12,
                                   skip_weeks: int = 0,
                                   from_end_of_month: bool = False) -> float:

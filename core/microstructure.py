@@ -508,7 +508,9 @@ class MicrostructureLayer:
             lines += [
                 f"• عمق الشراء: ${profile.bid_depth_usd:,.0f}",
                 f"• عمق البيع:  ${profile.ask_depth_usd:,.0f}",
-                f"• الاختلال:   {profile.imbalance:.0%} "
+                # imbalance_label_fix: "الاختلال 43%" كان يوحي أن الرقم نسبة اختلال بينما
+                # هو حصة الشراء من إجمالي العمق (50% = متوازن) — نوضحه صراحةً.
+                f"• حصة الشراء من العمق: {profile.imbalance:.0%} "
                 f"({_imbalance_label(profile.imbalance)})",
             ]
 
