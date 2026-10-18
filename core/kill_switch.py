@@ -263,7 +263,7 @@ class HumanOverrideLayer:
     def pending_list_ar(self) -> str:
         self.cleanup_expired()
         if not self._pending:
-            return "✅ لا يوجد طلبات موافقة معلقة"
+            return "✅ لا توجد طلبات موافقة معلقة"
         lines = ["👤 *طلبات الموافقة المعلقة*\n"]
         for pid, p in self._pending.items():
             rem = max(0, p.expires_at - time.time()) / 60

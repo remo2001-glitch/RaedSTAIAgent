@@ -105,7 +105,8 @@ class DriftMonitor:
                 drift_pct=0, drift_level="none",
                 signals_evaluated=n,
                 last_update=time.time(),
-                recommendation_ar=f"⏳ {n}/{self.MIN_SIGNALS} إشارة — نحتاج المزيد للتقييم",
+                recommendation_ar=(f"⏳ مراقب الانحراف: {n}/{self.MIN_SIGNALS} إشارة مُقيَّمة "
+                                   f"— يلزم {self.MIN_SIGNALS - n} إضافية لتقييم الانحراف"),
                 needs_recalibration=False,
             )
 

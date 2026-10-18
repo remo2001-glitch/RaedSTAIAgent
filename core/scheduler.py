@@ -383,8 +383,10 @@ class Scheduler:
             except ValueError:
                 return "التقرير الشهري: يوم 3 من الشهر القادم 1 ظهراً"
         hours = max(0, (nxt - now).total_seconds() / 3600)
+        _d, _r = divmod(int(round(hours)), 24)
+        _after = (f"بعد {_d} يوم" + (f" و{_r} ساعة" if _r else "")) if hours >= 48 else f"بعد {hours:.0f} ساعة"
         return (f"التقرير الشهري: "
-                f"{nxt.strftime('%Y-%m-%d')} يوم 3 1 ظهراً — بعد {hours:.0f} ساعة")
+                f"{nxt.strftime('%Y-%m-%d')} يوم 3 1 ظهراً — {_after}")
 
 
 # ── Helper ────────────────────────────────────────────────────
