@@ -68,22 +68,16 @@ def parse_quote_pair(symbol: str) -> Optional[Tuple[str, str]]:
 
 
 def _fmt_pair_price(price: float, quote: str) -> str:
-    """تنسيق سعر زوج BTC/ETH — بدون '$'، مع لاحقة الوحدة."""
+    """تنسيق سعر زوج BTC/ETH — بدون '$'، مع لاحقة الوحدة (دقة موحّدة مع handlers.analysis)."""
+    from core.thresholds import quote_decimals
     if price <= 0:        return f"0 {quote}"
-    elif price >= 1:      return f"{price:,.4f} {quote}"
-    elif price >= 0.001:  return f"{price:.6f} {quote}"
-    elif price >= 1e-6:   return f"{price:.8f} {quote}"
-    else:                 return f"{price:.10f} {quote}"
+    return f"{price:,.{quote_decimals(price)}f} {quote}"
 
 
 def _pair_price_decimals(value: float) -> int:
-    """عدد المنازل العشرية حسب فئة _fmt_pair_price لقيمة واحدة (إصلاح #195)."""
-    v = abs(value)
-    if v <= 0:       return 4
-    elif v >= 1:     return 4
-    elif v >= 0.001: return 6
-    elif v >= 1e-6:  return 8
-    else:            return 10
+    """عدد المنازل العشرية لسعر زوج (مصدر واحد: core.thresholds.quote_decimals)."""
+    from core.thresholds import quote_decimals
+    return quote_decimals(value)
 
 
 def _fmt_pair_price_pair(a: float, b: float, quote: str) -> Tuple[str, str]:
@@ -98,7 +92,7 @@ def _fmt_usdt_price(price: float) -> str:
     """تنسيق سعر بالدولار — للفقرة المرجعية عندما يكون التقرير
     الأساسي بوحدة BTC/ETH (الزوج هو الأساس)."""
     if price <= 0:        return "$0"
-    elif price >= 1000:   return f"${price:,.2f}"
+    elif price >= 10:     return f"${price:,.2f}"
     elif price >= 1:      return f"${price:,.4f}"
     elif price >= 0.001:  return f"${price:.6f}"
     elif price >= 1e-6:   return f"${price:.8f}"
