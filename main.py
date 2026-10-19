@@ -28,14 +28,45 @@ from core.raed_engine import RaedEngine
 
 # ── Logging ────────────────────────────────────────────────────
 os.makedirs("logs", exist_ok=True)
+import re as _re_log
+
+
+class _RedactFilter(logging.Filter):
+    """يُخفي توكن البوت ومفاتيح API من أي سجل (httpx يطبع الرابط الكامل)."""
+    _PATTERNS = [
+        (_re_log.compile(r"/bot\d+:[A-Za-z0-9_-]{20,}"), "/bot<REDACTED>"),
+        (_re_log.compile(r"\b\d{6,}:[A-Za-z0-9_-]{30,}\b"), "<REDACTED_TOKEN>"),
+        (_re_log.compile(r"gsk_[A-Za-z0-9]{20,}"), "gsk_<REDACTED>"),
+    ]
+
+    def filter(self, record):
+        try:
+            msg = record.getMessage()
+            red = msg
+            for pat, rep in self._PATTERNS:
+                red = pat.sub(rep, red)
+            if red != msg:
+                record.msg = red
+                record.args = ()
+        except Exception:
+            pass
+        return True
+
+
+_log_handlers = [
+    logging.StreamHandler(),
+    logging.FileHandler("logs/raed.log", encoding="utf-8"),
+]
+for _h in _log_handlers:
+    _h.addFilter(_RedactFilter())
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler("logs/raed.log", encoding="utf-8"),
-    ]
+    handlers=_log_handlers,
 )
+# httpx يسجّل كل طلب بالرابط الكامل (يتضمن التوكن) — نخفضه إلى WARNING
+for _n in ("httpx", "httpcore"):
+    logging.getLogger(_n).setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # ── متغيرات البيئة ─────────────────────────────────────────────
@@ -300,7 +331,23 @@ async def post_init(app: Application):
                     parse_mode=pm, disable_web_page_preview=True)
                 sent += 1
             except Exception as e:
-                logger.warning(f"broadcast to {uid}: {e}")
+                _err = str(e)
+                if "parse" in _err.lower() or "entities" in _err.lower():
+                    # فشل Markdown → أعد المحاولة كنص عادي بدل فقد التقرير
+                    try:
+                        await app.bot.send_message(
+                            chat_id=uid, text=message.replace("*", ""),
+                            disable_web_page_preview=True)
+                        sent += 1
+                        continue
+                    except Exception as e2:
+                        _err = str(e2)
+                if "chat not found" in _err.lower():
+                    logger.warning(
+                        f"broadcast to {uid}: Chat not found — تحقق من الرقم "
+                        f"(OWNER_CHAT_ID/ADMIN_IDS) أو أن المستخدم بدأ البوت بـ /start")
+                else:
+                    logger.warning(f"broadcast to {uid}: {_err}")
         if sent:
             logger.info(f"✅ Broadcast أُرسل لـ {sent} مستخدم")
 
