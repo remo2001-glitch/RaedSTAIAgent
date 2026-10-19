@@ -644,7 +644,8 @@ def register_with_scheduler(engine, scheduler) -> bool:
                             continue
 
                 redis_client = getattr(engine, "redis", None) or getattr(engine, "_redis", None)
-                admin_id     = int(engine.config.get("ADMIN_TELEGRAM_ID", 6747412518))
+                from core.admin_ids import get_primary_admin_id
+                admin_id     = int(engine.config.get("ADMIN_TELEGRAM_ID") or get_primary_admin_id())
 
                 await run_weekly_review(
                     project_files=project_files,
