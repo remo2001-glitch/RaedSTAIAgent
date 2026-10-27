@@ -4,6 +4,7 @@
 """
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 from loguru import logger
 
@@ -284,7 +285,6 @@ async def cmd_vtrades(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     from core.state_manager import state_manager as _sm_vt
     from core.virtual_wallet import VirtualWallet as _VW_vt
-    from core.data_layer import DataLayer
 
     vw_data = _sm_vt.get_virtual_wallet(user_id) or {}
     vw = _VW_vt(vw_data) if vw_data else _VW_vt({})

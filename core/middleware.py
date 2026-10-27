@@ -37,7 +37,18 @@ def require_tier(command: str):
                         )
                     return
             except Exception as e:
+                # فشل التحقق = رفض (fail-closed): لا نمرّر أمراً لم نتأكد من صلاحيته
                 _mw_logger.error(f"middleware ({command}): {e}")
+                try:
+                    if update.message:
+                        await update.message.reply_text(
+                            "⚠️ تعذّر التحقق من صلاحياتك الآن، أعد المحاولة بعد قليل.")
+                    elif update.callback_query:
+                        await update.callback_query.answer(
+                            "⚠️ تعذّر التحقق من الصلاحيات", show_alert=True)
+                except Exception:
+                    pass
+                return
             # تذكير الاستبيان (T4)
             try:
                 from core.state_manager import state_manager as _sm_mw

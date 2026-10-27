@@ -18,6 +18,7 @@ import urllib.parse
 import urllib.request
 import ssl
 from dataclasses import dataclass, field
+from decimal import Decimal, ROUND_DOWN, InvalidOperation
 from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,53 @@ class Balance:
     total:     float
 
 
+@dataclass
+class ProtectResult:
+    """نتيجة وضع أوامر SL/TP على المنصة نفسها."""
+    success:  bool
+    mode:     str  = "none"   # oco | separate | none
+    sl_id:    str  = ""
+    tp_id:    str  = ""
+    group_id: str  = ""       # orderListId (Binance) / algoId (OKX)
+    error:    str  = ""
+
+
+def _to_dec(v) -> Decimal:
+    try:
+        return Decimal(str(v))
+    except (InvalidOperation, ValueError, TypeError):
+        return Decimal(0)
+
+
+def _plain(d: Decimal) -> str:
+    """Decimal → نص عشري عادي بلا صيغة علمية ولا أصفار زائدة."""
+    if d == d.to_integral_value():
+        return str(int(d))
+    return format(d.normalize(), "f")
+
+
+def _floor_to_step(value, step) -> Decimal:
+    v, st = _to_dec(value), _to_dec(step)
+    if st <= 0:
+        return v
+    return (v / st).to_integral_value(rounding=ROUND_DOWN) * st
+
+
+def _round_to_tick(value, tick) -> Decimal:
+    v, t = _to_dec(value), _to_dec(tick)
+    if t <= 0:
+        return v
+    return (v / t).to_integral_value(rounding="ROUND_HALF_UP") * t
+
+
+def _decimals_step(n) -> Decimal:
+    """Bitget/MEXC تعطي عدد المنازل → الخطوة."""
+    try:
+        return Decimal(1).scaleb(-int(n))
+    except Exception:
+        return Decimal(0)
+
+
 # ═══════════════════════════════════════════════════════════════
 # Base Exchange
 # ═══════════════════════════════════════════════════════════════
@@ -72,6 +120,64 @@ class BaseExchange:
         self.api_key    = api_key.strip()
         self.api_secret = api_secret.strip()
         self.testnet    = testnet
+        self._rules_cache: Dict[str, tuple] = {}   # symbol → (ts, rules)
+
+    # ── قواعد الرمز (خطوة الكمية/السعر/الحد الأدنى) ─────────────
+    SUPPORTS_PROTECTION = False   # هل المنصة تدعم SL/TP على المنصة؟
+
+    async def _fetch_rules(self, symbol: str) -> dict:
+        """تُعاد كتابتها في كل منصة: {step, min_qty, tick, min_notional} (Decimal)."""
+        return {}
+
+    async def get_symbol_rules(self, symbol: str) -> dict:
+        sym = symbol.upper()
+        hit = self._rules_cache.get(sym)
+        if hit and time.time() - hit[0] < 6 * 3600:
+            return hit[1]
+        try:
+            rules = await self._fetch_rules(sym)
+        except Exception as e:
+            logger.warning(f"{getattr(self,'EXCHANGE_NAME','?')} rules {sym}: {e}")
+            rules = {}
+        if rules and rules.get("step"):
+            self._rules_cache[sym] = (time.time(), rules)
+        return rules or {}
+
+    async def normalize_qty(self, symbol: str, qty: float) -> tuple:
+        """يقرّب الكمية للأسفل حسب خطوة المنصة. يُعيد (نص الكمية، خطأ)."""
+        rules = await self.get_symbol_rules(symbol)
+        q = _to_dec(qty)
+        if rules.get("step"):
+            q = _floor_to_step(q, rules["step"])
+        else:
+            q = q.quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
+        if q <= 0:
+            return "", "الكمية بعد التقريب صفر"
+        mn = rules.get("min_qty")
+        if mn and q < _to_dec(mn):
+            return "", f"الكمية {_plain(q)} أقل من الحد الأدنى {_plain(_to_dec(mn))}"
+        return _plain(q), ""
+
+    async def normalize_price(self, symbol: str, price: float) -> str:
+        rules = await self.get_symbol_rules(symbol)
+        p = _to_dec(price)
+        if rules.get("tick"):
+            p = _round_to_tick(p, rules["tick"])
+        else:
+            p = p.quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
+        return _plain(p)
+
+    # ── حماية SL/TP على المنصة (افتراضياً غير مدعومة) ────────────
+    async def place_protection(self, symbol: str, qty: float,
+                                sl: float, tp: float) -> "ProtectResult":
+        return ProtectResult(False, error="غير مدعوم في هذه المنصة")
+
+    async def cancel_protection(self, symbol: str, prot: dict) -> bool:
+        return True
+
+    async def protection_status(self, symbol: str, prot: dict) -> dict:
+        """{"state": live|tp|sl|gone|unknown, "price": float}"""
+        return {"state": "unknown", "price": 0.0}
 
     def _sign(self, data: str) -> str:
         return hmac.new(
@@ -133,7 +239,7 @@ class BinanceExchange(BaseExchange):
             params["signature"] = self._sign(query)
 
         full_url = url
-        if method == "GET" and params:
+        if method in ("GET", "DELETE") and params:
             full_url = f"{url}?{urllib.parse.urlencode(params)}"
 
         headers = {
@@ -167,33 +273,39 @@ class BinanceExchange(BaseExchange):
         side: "BUY" | "SELL"
         order_type: "MARKET" | "LIMIT"
         """
+        q_str, q_err = await self.normalize_qty(symbol, qty)
+        if q_err:
+            return OrderResult(success=False, error=q_err, exchange="binance")
         params = {
             "symbol":    f"{symbol.upper()}USDT",
             "side":      side.upper(),
             "type":      order_type.upper(),
-            "quantity":  f"{qty:.6f}",
+            "quantity":  q_str,
         }
         if order_type.upper() == "LIMIT" and price > 0:
-            params["price"]       = f"{price:.2f}"
+            params["price"]       = await self.normalize_price(symbol, price)
             params["timeInForce"] = "GTC"
 
         url = f"{self._base}/api/v3/order"
         data = await self._async_request(url, "POST", params, signed=True)
 
-        if "error" in data or "code" in data and data.get("code", 0) < 0:
+        if "error" in data or ("code" in data and data.get("code", 0) < 0):
             return OrderResult(
                 success=False, error=str(data), exchange="binance")
 
+        executed = float(data.get("executedQty", 0) or 0)
+        quote    = float(data.get("cummulativeQuoteQty", 0) or 0)
+        avg      = (quote / executed) if executed > 0 and quote > 0 else float(data.get("price", 0) or 0)
         return OrderResult(
             success=True,
             order_id=str(data.get("orderId", "")),
             symbol=symbol.upper(),
             side=data.get("side", ""),
-            qty=float(data.get("origQty", qty)),
-            price=float(data.get("price", 0) or data.get("cummulativeQuoteQty", 0) / max(float(data.get("executedQty", qty) or qty), 1e-8)),
+            qty=float(data.get("origQty", qty) or qty),
+            price=float(data.get("price", 0) or 0),
             status=data.get("status", ""),
-            filled_qty=float(data.get("executedQty", 0)),
-            avg_price=float(data.get("price", price)),
+            filled_qty=executed,
+            avg_price=avg,
             exchange="binance",
         )
 
@@ -209,18 +321,107 @@ class BinanceExchange(BaseExchange):
         data   = await self._async_request(url, "GET", params, signed=True)
         if "error" in data:
             return OrderResult(success=False, error=str(data))
+        executed = float(data.get("executedQty", 0) or 0)
+        quote    = float(data.get("cummulativeQuoteQty", 0) or 0)
+        avg      = (quote / executed) if executed > 0 and quote > 0 else float(data.get("price", 0) or 0)
         return OrderResult(
             success=True,
             order_id=str(data.get("orderId", "")),
             symbol=symbol.upper(),
             side=data.get("side", ""),
-            qty=float(data.get("origQty", 0)),
-            price=float(data.get("price", 0)),
+            qty=float(data.get("origQty", 0) or 0),
+            price=float(data.get("price", 0) or 0),
             status=data.get("status", ""),
-            filled_qty=float(data.get("executedQty", 0)),
-            avg_price=float(data.get("price", 0)),
+            filled_qty=executed,
+            avg_price=avg,
             exchange="binance",
         )
+
+    SUPPORTS_PROTECTION = True
+
+    async def _fetch_rules(self, symbol: str) -> dict:
+        data = await self._async_request(
+            f"{self._base}/api/v3/exchangeInfo", "GET",
+            {"symbol": f"{symbol}USDT"})
+        syms = data.get("symbols") or []
+        if not syms:
+            return {}
+        out = {}
+        for f in syms[0].get("filters", []):
+            t = f.get("filterType")
+            if t == "LOT_SIZE":
+                out["step"] = _to_dec(f.get("stepSize"))
+                out["min_qty"] = _to_dec(f.get("minQty"))
+            elif t == "PRICE_FILTER":
+                out["tick"] = _to_dec(f.get("tickSize"))
+            elif t in ("NOTIONAL", "MIN_NOTIONAL"):
+                out["min_notional"] = _to_dec(f.get("minNotional"))
+        return out
+
+    async def place_protection(self, symbol: str, qty: float,
+                                sl: float, tp: float) -> ProtectResult:
+        """OCO بيع: LIMIT_MAKER عند TP + STOP_LOSS_LIMIT عند SL."""
+        q_str, q_err = await self.normalize_qty(symbol, qty)
+        if q_err:
+            return ProtectResult(False, error=q_err)
+        sl_s = await self.normalize_price(symbol, sl)
+        slp  = await self.normalize_price(symbol, sl * 0.997)
+        tp_s = await self.normalize_price(symbol, tp)
+        params = {
+            "symbol": f"{symbol.upper()}USDT", "side": "SELL",
+            "quantity": q_str,
+            "aboveType": "LIMIT_MAKER", "abovePrice": tp_s,
+            "belowType": "STOP_LOSS_LIMIT", "belowStopPrice": sl_s,
+            "belowPrice": slp, "belowTimeInForce": "GTC",
+        }
+        data = await self._async_request(
+            f"{self._base}/api/v3/orderList/oco", "POST", params, signed=True)
+        if "error" in data or "orderListId" not in data:
+            return ProtectResult(False, error=str(data)[:200])
+        sl_id = tp_id = ""
+        for o in data.get("orderReports") or data.get("orders") or []:
+            typ = str(o.get("type", ""))
+            if typ == "LIMIT_MAKER":
+                tp_id = str(o.get("orderId", ""))
+            elif typ.startswith("STOP_LOSS"):
+                sl_id = str(o.get("orderId", ""))
+        return ProtectResult(True, mode="oco", sl_id=sl_id, tp_id=tp_id,
+                             group_id=str(data.get("orderListId")))
+
+    async def cancel_protection(self, symbol: str, prot: dict) -> bool:
+        gid = prot.get("group_id")
+        if not gid:
+            return True
+        data = await self._async_request(
+            f"{self._base}/api/v3/orderList", "DELETE",
+            {"symbol": f"{symbol.upper()}USDT", "orderListId": gid},
+            signed=True)
+        if "error" not in data:
+            return True
+        # أُلغي أو نُفِّذ سابقاً؟
+        st = await self.protection_status(symbol, prot)
+        return st.get("state") in ("gone", "tp", "sl")
+
+    async def protection_status(self, symbol: str, prot: dict) -> dict:
+        gid = prot.get("group_id")
+        if not gid:
+            return {"state": "unknown", "price": 0.0}
+        data = await self._async_request(
+            f"{self._base}/api/v3/orderList", "GET",
+            {"orderListId": gid}, signed=True)
+        if "error" in data:
+            return {"state": "unknown", "price": 0.0}
+        status = str(data.get("listOrderStatus", ""))
+        if status == "EXECUTING":
+            return {"state": "live", "price": 0.0}
+        for key, state in (("tp_id", "tp"), ("sl_id", "sl")):
+            oid = prot.get(key)
+            if not oid:
+                continue
+            o = await self.get_order(symbol, oid)
+            if o.success and o.status == "FILLED":
+                return {"state": state, "price": o.avg_price}
+        return {"state": "gone", "price": 0.0}
 
     async def get_balance(self, asset: str = "USDT",
                            account_type: str = "spot") -> Balance:
@@ -360,15 +561,22 @@ class BybitExchange(BaseExchange):
         side: "Buy" | "Sell"
         order_type: "Market" | "Limit"
         """
+        q_str, q_err = await self.normalize_qty(symbol, qty)
+        if q_err:
+            return OrderResult(success=False, error=q_err, exchange="bybit")
+        side_n = "Buy" if side.lower() in ("buy", "long") else "Sell"
         params = {
             "category":  "spot",
             "symbol":    f"{symbol.upper()}USDT",
-            "side":      side.capitalize(),
+            "side":      side_n,
             "orderType": order_type.capitalize(),
-            "qty":       f"{qty:.6f}",
+            "qty":       q_str,
         }
+        if order_type.lower() == "market":
+            # شراء Market في Spot يُفسَّر افتراضياً بقيمة USDT — نحدد العملة الأساس صراحةً
+            params["marketUnit"] = "baseCoin"
         if order_type.lower() == "limit" and price > 0:
-            params["price"]       = f"{price:.4f}"
+            params["price"]       = await self.normalize_price(symbol, price)
             params["timeInForce"] = "GTC"
 
         url  = f"{self._base}/v5/order/create"
@@ -386,26 +594,32 @@ class BybitExchange(BaseExchange):
             success=True,
             order_id=result.get("orderId", ""),
             symbol=symbol.upper(),
-            side=side.capitalize(),
-            qty=qty,
+            side=side_n,
+            qty=float(q_str),
             price=price,
             status="NEW",
             exchange="bybit",
         )
 
-    async def cancel_order(self, symbol: str, order_id: str) -> bool:
+    async def cancel_order(self, symbol: str, order_id: str,
+                            order_filter: str = "") -> bool:
         url    = f"{self._base}/v5/order/cancel"
         params = {"category": "spot",
                    "symbol": f"{symbol.upper()}USDT",
                    "orderId": order_id}
+        if order_filter:
+            params["orderFilter"] = order_filter
         data   = await self._async_request(url, "POST", params, signed=True)
         return data.get("retCode", -1) == 0
 
-    async def get_order(self, symbol: str, order_id: str) -> OrderResult:
+    async def get_order(self, symbol: str, order_id: str,
+                         order_filter: str = "") -> OrderResult:
         url    = f"{self._base}/v5/order/realtime"
         params = {"category": "spot",
                    "symbol": f"{symbol.upper()}USDT",
                    "orderId": order_id}
+        if order_filter:
+            params["orderFilter"] = order_filter
         data   = await self._async_request(url, "GET", params, signed=True)
         if data.get("retCode", -1) != 0:
             return OrderResult(success=False,
@@ -428,6 +642,80 @@ class BybitExchange(BaseExchange):
             fee=float(o.get("cumExecFee", 0) or 0),
             exchange="bybit",
         )
+
+    SUPPORTS_PROTECTION = True
+
+    async def _fetch_rules(self, symbol: str) -> dict:
+        data = await self._async_request(
+            f"{self._base}/v5/market/instruments-info", "GET",
+            {"category": "spot", "symbol": f"{symbol}USDT"})
+        lst = (data.get("result") or {}).get("list") or []
+        if data.get("retCode", -1) != 0 or not lst:
+            return {}
+        it = lst[0]
+        lot = it.get("lotSizeFilter") or {}
+        prc = it.get("priceFilter") or {}
+        return {"step": _to_dec(lot.get("basePrecision")),
+                "min_qty": _to_dec(lot.get("minOrderQty")),
+                "tick": _to_dec(prc.get("tickSize")),
+                "min_notional": _to_dec(lot.get("minOrderAmt"))}
+
+    async def _stop_order(self, symbol: str, qty_str: str, trigger: str) -> tuple:
+        params = {"category": "spot", "symbol": f"{symbol.upper()}USDT",
+                  "side": "Sell", "orderType": "Market", "qty": qty_str,
+                  "marketUnit": "baseCoin", "triggerPrice": trigger,
+                  "orderFilter": "StopOrder"}
+        data = await self._async_request(
+            f"{self._base}/v5/order/create", "POST", params, signed=True)
+        if data.get("retCode", -1) != 0:
+            return "", str(data.get("retMsg", ""))[:150]
+        return (data.get("result") or {}).get("orderId", ""), ""
+
+    async def place_protection(self, symbol: str, qty: float,
+                                sl: float, tp: float) -> ProtectResult:
+        """أمران شرطيان (StopOrder) لا يحجزان الرصيد حتى التفعيل."""
+        q_str, q_err = await self.normalize_qty(symbol, qty)
+        if q_err:
+            return ProtectResult(False, error=q_err)
+        sl_id, e1 = await self._stop_order(
+            symbol, q_str, await self.normalize_price(symbol, sl))
+        if not sl_id:
+            return ProtectResult(False, error=f"SL: {e1}")
+        tp_id, e2 = await self._stop_order(
+            symbol, q_str, await self.normalize_price(symbol, tp))
+        if not tp_id:
+            await self.cancel_order(symbol, sl_id, "StopOrder")
+            return ProtectResult(False, error=f"TP: {e2}")
+        return ProtectResult(True, mode="separate", sl_id=sl_id, tp_id=tp_id)
+
+    async def cancel_protection(self, symbol: str, prot: dict) -> bool:
+        ok = True
+        for key in ("sl_id", "tp_id"):
+            oid = prot.get(key)
+            if not oid:
+                continue
+            if not await self.cancel_order(symbol, oid, "StopOrder"):
+                o = await self.get_order(symbol, oid, "StopOrder")
+                if not (o.success and o.status in ("Cancelled", "Deactivated",
+                                                   "Filled", "Rejected")):
+                    ok = False
+        return ok
+
+    async def protection_status(self, symbol: str, prot: dict) -> dict:
+        states = {}
+        for key, name in (("tp_id", "tp"), ("sl_id", "sl")):
+            oid = prot.get(key)
+            if not oid:
+                continue
+            o = await self.get_order(symbol, oid, "StopOrder")
+            if not o.success:
+                return {"state": "unknown", "price": 0.0}
+            if o.status == "Filled":
+                return {"state": name, "price": o.avg_price}
+            states[name] = o.status
+        if states and all(v in ("Untriggered", "New", "Triggered") for v in states.values()):
+            return {"state": "live", "price": 0.0}
+        return {"state": "gone", "price": 0.0}
 
     async def get_balance(self, asset: str = "USDT",
                            account_type: str = "spot") -> Balance:
@@ -580,26 +868,35 @@ class OKXExchange(BaseExchange):
                            trade_mode: str = "cash") -> OrderResult:
         """trade_mode: cash=Spot | cross=Margin | isolated=Isolated"""
         inst_id = f"{symbol.upper()}-USDT"
+        q_str, q_err = await self.normalize_qty(symbol, qty)
+        if q_err:
+            return OrderResult(success=False, error=q_err, exchange="okx")
+        is_buy = side.lower() in ("buy", "long")
         params  = {
             "instId":   inst_id,
             "tdMode":   trade_mode,
-            "side":     "buy" if side.lower() in ("buy","long") else "sell",
+            "side":     "buy" if is_buy else "sell",
             "ordType":  "market" if order_type.lower() == "market" else "limit",
-            "sz":       f"{qty:.6f}",
+            "sz":       q_str,
         }
+        if order_type.lower() == "market" and trade_mode == "cash":
+            # شراء Market في Spot يُفسَّر افتراضياً بقيمة USDT — نحدد العملة الأساس صراحةً
+            params["tgtCcy"] = "base_ccy"
         if order_type.lower() == "limit" and price > 0:
-            params["px"] = f"{price:.4f}"
+            params["px"] = await self.normalize_price(symbol, price)
 
         data = await self._async_request(
             f"{self._base}/api/v5/trade/order", "POST", params, signed=True)
-        if data.get("code") != "0":
-            return OrderResult(success=False, error=data.get("msg",""),
-                                exchange="okx")
-        d = data.get("data", [{}])[0]
+        d = (data.get("data") or [{}])[0]
+        if data.get("code") != "0" or str(d.get("sCode", "0")) != "0":
+            return OrderResult(
+                success=False,
+                error=d.get("sMsg") or data.get("msg", "") or str(data)[:150],
+                exchange="okx")
         return OrderResult(
             success=True, order_id=d.get("ordId",""),
             symbol=symbol.upper(), side=side,
-            qty=qty, price=price, status="NEW", exchange="okx")
+            qty=float(q_str), price=price, status="NEW", exchange="okx")
 
     async def cancel_order(self, symbol: str, order_id: str) -> bool:
         data = await self._async_request(
@@ -622,6 +919,77 @@ class OKXExchange(BaseExchange):
             qty=float(d.get("sz",0)), price=float(d.get("px",0) or 0),
             status=d.get("state",""), filled_qty=float(d.get("fillSz",0) or 0),
             avg_price=float(d.get("avgPx",0) or 0), exchange="okx")
+
+    SUPPORTS_PROTECTION = True
+
+    async def _fetch_rules(self, symbol: str) -> dict:
+        data = await self._async_request(
+            f"{self._base}/api/v5/public/instruments", "GET",
+            {"instType": "SPOT", "instId": f"{symbol}-USDT"})
+        lst = data.get("data") or []
+        if data.get("code") != "0" or not lst:
+            return {}
+        it = lst[0]
+        return {"step": _to_dec(it.get("lotSz")),
+                "min_qty": _to_dec(it.get("minSz")),
+                "tick": _to_dec(it.get("tickSz"))}
+
+    async def place_protection(self, symbol: str, qty: float,
+                                sl: float, tp: float) -> ProtectResult:
+        """OCO algo: TP/SL تنفيذ Market عند التفعيل."""
+        q_str, q_err = await self.normalize_qty(symbol, qty)
+        if q_err:
+            return ProtectResult(False, error=q_err)
+        params = {
+            "instId": f"{symbol.upper()}-USDT", "tdMode": "cash",
+            "side": "sell", "ordType": "oco", "sz": q_str,
+            "tpTriggerPx": await self.normalize_price(symbol, tp), "tpOrdPx": "-1",
+            "slTriggerPx": await self.normalize_price(symbol, sl), "slOrdPx": "-1",
+        }
+        data = await self._async_request(
+            f"{self._base}/api/v5/trade/order-algo", "POST", params, signed=True)
+        d = (data.get("data") or [{}])[0]
+        if data.get("code") != "0" or str(d.get("sCode", "0")) != "0" \
+                or not d.get("algoId"):
+            return ProtectResult(
+                False, error=d.get("sMsg") or data.get("msg", "") or str(data)[:150])
+        return ProtectResult(True, mode="oco", group_id=str(d["algoId"]))
+
+    async def cancel_protection(self, symbol: str, prot: dict) -> bool:
+        gid = prot.get("group_id")
+        if not gid:
+            return True
+        data = await self._async_request(
+            f"{self._base}/api/v5/trade/cancel-algos", "POST",
+            [{"algoId": gid, "instId": f"{symbol.upper()}-USDT"}], signed=True)
+        d = (data.get("data") or [{}])[0]
+        if data.get("code") == "0" and str(d.get("sCode", "0")) == "0":
+            return True
+        st = await self.protection_status(symbol, prot)
+        return st.get("state") in ("gone", "tp", "sl")
+
+    async def protection_status(self, symbol: str, prot: dict) -> dict:
+        gid = prot.get("group_id")
+        if not gid:
+            return {"state": "unknown", "price": 0.0}
+        data = await self._async_request(
+            f"{self._base}/api/v5/trade/order-algo", "GET",
+            {"algoId": gid}, signed=True)
+        lst = data.get("data") or []
+        if data.get("code") != "0" or not lst:
+            return {"state": "unknown", "price": 0.0}
+        d = lst[0]
+        state = d.get("state", "")
+        if state in ("live", "pause"):
+            return {"state": "live", "price": 0.0}
+        if state in ("effective", "partially_effective"):
+            side = str(d.get("actualSide", "")).lower()
+            px = float(d.get("actualPx", 0) or 0)
+            if px <= 0 and d.get("ordId"):
+                o = await self.get_order(symbol, d["ordId"])
+                px = o.avg_price if o.success else 0.0
+            return {"state": "tp" if side == "tp" else "sl", "price": px}
+        return {"state": "gone", "price": 0.0}
 
     async def get_balance(self, asset: str = "USDT",
                            account_type: str = "spot") -> Balance:
@@ -792,15 +1160,30 @@ class BitgetExchange(BaseExchange):
     async def place_order(self, symbol: str, side: str, qty: float,
                            order_type: str = "MARKET",
                            price: float = 0) -> OrderResult:
+        q_str, q_err = await self.normalize_qty(symbol, qty)
+        if q_err:
+            return OrderResult(success=False, error=q_err, exchange="bitget")
+        is_buy   = side.lower() in ("buy", "long")
+        is_mkt   = order_type.lower() == "market"
+        size_str = q_str
+        if is_buy and is_mkt:
+            # Bitget: شراء Market يأخذ size بعملة التسعير (USDT) لا العملة الأساس
+            px = await self.get_price(symbol)
+            if px <= 0:
+                return OrderResult(success=False, error="تعذّر جلب السعر لحساب قيمة الشراء",
+                                   exchange="bitget")
+            quote = (_to_dec(q_str) * _to_dec(px)).quantize(
+                Decimal("0.0001"), rounding=ROUND_DOWN)
+            size_str = _plain(quote)
         params = {
             "symbol":    f"{symbol.upper()}USDT",
-            "side":      "buy" if side.lower() in ("buy","long") else "sell",
-            "orderType": "market" if order_type.lower() == "market" else "limit",
+            "side":      "buy" if is_buy else "sell",
+            "orderType": "market" if is_mkt else "limit",
             "force":     "gtc",
-            "size":      f"{qty:.6f}",
+            "size":      size_str,
         }
         if order_type.lower() == "limit" and price > 0:
-            params["price"] = f"{price:.4f}"
+            params["price"] = await self.normalize_price(symbol, price)
         data = await self._async_request(
             f"{self.BASE}/api/v2/spot/trade/place-order",
             "POST", params, signed=True)
@@ -809,7 +1192,7 @@ class BitgetExchange(BaseExchange):
         d = data.get("data", {})
         return OrderResult(
             success=True, order_id=d.get("orderId",""),
-            symbol=symbol.upper(), side=side, qty=qty, price=price,
+            symbol=symbol.upper(), side=side, qty=float(q_str), price=price,
             status="NEW", exchange="bitget")
 
     async def cancel_order(self, symbol: str, order_id: str) -> bool:
@@ -827,12 +1210,101 @@ class BitgetExchange(BaseExchange):
         if str(data.get("code","")) != "00000":
             return OrderResult(success=False, error=data.get("msg"), exchange="bitget")
         d = data.get("data", {})
+        if isinstance(d, list):
+            d = d[0] if d else {}
+        filled = float(d.get("baseVolume", 0) or d.get("fillSize", 0) or 0)
+        avg = float(d.get("priceAvg", 0) or 0)
+        if avg <= 0 and filled > 0:
+            quote = float(d.get("quoteVolume", 0) or 0)
+            avg = quote / filled if quote > 0 else 0.0
         return OrderResult(
             success=True, order_id=d.get("orderId",""),
             symbol=symbol.upper(), side=d.get("side",""),
-            qty=float(d.get("size",0)), price=float(d.get("price",0) or 0),
-            status=d.get("status",""), filled_qty=float(d.get("fillSize",0) or 0),
-            avg_price=float(d.get("priceAvg",0) or 0), exchange="bitget")
+            qty=float(d.get("size",0) or 0), price=float(d.get("price",0) or 0),
+            status=d.get("status",""), filled_qty=filled,
+            avg_price=avg, exchange="bitget")
+
+    SUPPORTS_PROTECTION = True
+
+    async def _fetch_rules(self, symbol: str) -> dict:
+        data = await self._async_request(
+            f"{self.BASE}/api/v2/spot/public/symbols", "GET",
+            {"symbol": f"{symbol}USDT"})
+        lst = data.get("data") or []
+        if str(data.get("code", "")) != "00000" or not lst:
+            return {}
+        it = lst[0]
+        return {"step": _decimals_step(it.get("quantityPrecision", 8)),
+                "min_qty": _to_dec(it.get("minTradeAmount")),
+                "tick": _decimals_step(it.get("pricePrecision", 8)),
+                "min_notional": _to_dec(it.get("minTradeUSDT"))}
+
+    async def _plan_order(self, symbol: str, q_str: str, trigger: str) -> tuple:
+        params = {"symbol": f"{symbol.upper()}USDT", "side": "sell",
+                  "triggerPrice": trigger, "orderType": "market",
+                  "triggerType": "fill_price", "size": q_str,
+                  "planType": "amount"}
+        data = await self._async_request(
+            f"{self.BASE}/api/v2/spot/trade/place-plan-order", "POST",
+            params, signed=True)
+        if str(data.get("code", "")) != "00000":
+            return "", str(data.get("msg", ""))[:150]
+        return str((data.get("data") or {}).get("orderId", "")), ""
+
+    async def place_protection(self, symbol: str, qty: float,
+                                sl: float, tp: float) -> ProtectResult:
+        """أمرا Plan منفصلان (SL وTP) — يُلغى أحدهما عند تنفيذ الآخر."""
+        q_str, q_err = await self.normalize_qty(symbol, qty)
+        if q_err:
+            return ProtectResult(False, error=q_err)
+        sl_id, e1 = await self._plan_order(
+            symbol, q_str, await self.normalize_price(symbol, sl))
+        if not sl_id:
+            return ProtectResult(False, error=f"SL: {e1}")
+        tp_id, e2 = await self._plan_order(
+            symbol, q_str, await self.normalize_price(symbol, tp))
+        if not tp_id:
+            await self._cancel_plan(symbol, sl_id)
+            return ProtectResult(False, error=f"TP: {e2}")
+        return ProtectResult(True, mode="separate", sl_id=sl_id, tp_id=tp_id)
+
+    async def _cancel_plan(self, symbol: str, oid: str) -> bool:
+        data = await self._async_request(
+            f"{self.BASE}/api/v2/spot/trade/cancel-plan-order", "POST",
+            {"orderId": oid, "symbol": f"{symbol.upper()}USDT"}, signed=True)
+        return str(data.get("code", "")) == "00000"
+
+    async def _live_plan_ids(self, symbol: str):
+        data = await self._async_request(
+            f"{self.BASE}/api/v2/spot/trade/current-plan-order", "GET",
+            {"symbol": f"{symbol.upper()}USDT", "limit": "100"}, signed=True)
+        if str(data.get("code", "")) != "00000":
+            return None
+        d = data.get("data") or {}
+        rows = d.get("orderList") if isinstance(d, dict) else d
+        return {str(r.get("orderId")) for r in (rows or [])}
+
+    async def cancel_protection(self, symbol: str, prot: dict) -> bool:
+        live = await self._live_plan_ids(symbol)
+        ok = True
+        for key in ("sl_id", "tp_id"):
+            oid = prot.get(key)
+            if not oid:
+                continue
+            if live is not None and oid not in live:
+                continue                       # لم يعد قائماً (نُفِّذ/أُلغي)
+            if not await self._cancel_plan(symbol, oid):
+                ok = False
+        return ok
+
+    async def protection_status(self, symbol: str, prot: dict) -> dict:
+        live = await self._live_plan_ids(symbol)
+        if live is None:
+            return {"state": "unknown", "price": 0.0}
+        ids = [prot.get("sl_id"), prot.get("tp_id")]
+        if all(i in live for i in ids if i):
+            return {"state": "live", "price": 0.0}
+        return {"state": "gone", "price": 0.0}
 
     async def get_balance(self, asset: str = "USDT",
                            account_type: str = "spot") -> Balance:
@@ -987,11 +1459,12 @@ class MEXCExchange(BaseExchange):
             "User-Agent":    "RaedTradingAgent/2.0",
         }
 
-        if method == "GET":
+        if method in ("GET", "DELETE"):
+            # DELETE (إلغاء أمر) يتطلب المعاملات في الـ query لا في الـ body
             qs       = urllib.parse.urlencode(sorted(params.items()))
             full_url = f"{url}?{qs}" + (f"&signature={sig}" if signed else "")
             req      = urllib.request.Request(
-                full_url, headers=headers, method="GET")
+                full_url, headers=headers, method=method)
         else:
             # POST: params في body والـ signature في URL query string
             body_str = urllib.parse.urlencode(sorted(params.items()))
@@ -1014,18 +1487,36 @@ class MEXCExchange(BaseExchange):
             logger.error(f"MEXC error: {e}")
             return {"error": str(e)}
 
+    async def _fetch_rules(self, symbol: str) -> dict:
+        data = await self._async_request(
+            f"{self.BASE}/api/v3/exchangeInfo", "GET",
+            {"symbol": f"{symbol}USDT"})
+        syms = data.get("symbols") or []
+        if not syms:
+            return {}
+        it = syms[0]
+        step = _to_dec(it.get("baseSizePrecision"))
+        if step <= 0:
+            step = _decimals_step(it.get("baseAssetPrecision", 8))
+        return {"step": step,
+                "tick": _decimals_step(it.get("quoteAssetPrecision", 8)),
+                "min_notional": _to_dec(it.get("quoteAmountPrecision"))}
+
     async def place_order(self, symbol: str, side: str, qty: float,
                            order_type: str = "MARKET",
                            price: float = 0) -> OrderResult:
         import asyncio
+        q_str, q_err = await self.normalize_qty(symbol, qty)
+        if q_err:
+            return OrderResult(success=False, error=q_err, exchange="mexc")
         params = {
             "symbol":   f"{symbol.upper()}USDT",
             "side":     "BUY" if side.lower() in ("buy","long") else "SELL",
             "type":     order_type.upper(),
-            "quantity": f"{round(qty, 2):.2f}",
+            "quantity": q_str,
         }
         if order_type.upper() == "LIMIT" and price > 0:
-            params["price"]       = f"{price:.8f}".rstrip("0").rstrip(".")
+            params["price"]       = await self.normalize_price(symbol, price)
             params["timeInForce"] = "GTC"
         # M#93: استخدام _request مباشرة في thread منفصل
         try:
@@ -1039,11 +1530,12 @@ class MEXCExchange(BaseExchange):
             err_msg = data.get("msg", str(data))
             logger.error(f"MEXC place_order failed: {err_msg}")
             return OrderResult(success=False, error=err_msg, exchange="mexc")
+        # رد الإنشاء لا يحوي التنفيذ الفعلي — يؤكده OrderManager عبر get_order
         return OrderResult(
             success=True, order_id=str(data.get("orderId","")),
-            symbol=symbol.upper(), side=side, qty=qty, price=price,
-            filled_qty=float(data.get("executedQty", qty) or qty),
-            avg_price=float(data.get("price", price) or price),
+            symbol=symbol.upper(), side=side, qty=float(q_str), price=price,
+            filled_qty=float(data.get("executedQty", 0) or 0),
+            avg_price=0.0,
             status=data.get("status","NEW"), exchange="mexc")
 
     async def cancel_order(self, symbol: str, order_id: str) -> bool:
@@ -1060,12 +1552,15 @@ class MEXCExchange(BaseExchange):
             signed=True)
         if "error" in data:
             return OrderResult(success=False, error=str(data), exchange="mexc")
+        executed = float(data.get("executedQty", 0) or 0)
+        quote    = float(data.get("cummulativeQuoteQty", 0) or 0)
+        avg      = (quote / executed) if executed > 0 and quote > 0 else float(data.get("price", 0) or 0)
         return OrderResult(
             success=True, order_id=str(data.get("orderId","")),
             symbol=symbol.upper(), side=data.get("side",""),
-            qty=float(data.get("origQty",0)), price=float(data.get("price",0) or 0),
-            status=data.get("status",""), filled_qty=float(data.get("executedQty",0)),
-            avg_price=float(data.get("price",0) or 0), exchange="mexc")
+            qty=float(data.get("origQty",0) or 0), price=float(data.get("price",0) or 0),
+            status=data.get("status",""), filled_qty=executed,
+            avg_price=avg, exchange="mexc")
 
     async def get_balance(self, asset: str = "USDT",
                            account_type: str = "spot") -> Balance:
