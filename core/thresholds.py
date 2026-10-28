@@ -52,6 +52,22 @@ def fear_greed_zone(value) -> tuple:
     return ("خوف شديد", "😱")
 
 
+def volume_word(v) -> str:
+    """batch44: وصف عربي واحد لنسبة الحجم في كل الأوامر (كان «عادي» في Volume Profile و«أقل من المتوسط»
+    في سجل الجودة لنفس 0.84x). ≥1.5 مرتفع | 1.0–1.5 عادي | 0.5–1.0 أقل من المتوسط | <0.5 ضعيف."""
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return "غير متاح"
+    if x >= 1.5:
+        return "مرتفع"
+    if x >= 1.0:
+        return "عادي"
+    if x >= VOL_WEAK:
+        return "أقل من المتوسط"
+    return "ضعيف"
+
+
 def quote_decimals(value) -> int:
     """منازل عشرية لأسعار الأزواج المقوَّمة بـBTC/ETH: ≥5 أرقام معنوية (مصدر واحد لكل الأوامر)."""
     try:

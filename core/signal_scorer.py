@@ -3,6 +3,10 @@ signal_scorer.py — نظام تقييم جودة إشارات رائد التد
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 يُقيّم كل إشارة قبل الإرسال ويُعطيها درجة 0-100 + حكم نهائي.
 
+batch44 (قرار رحال، بند 7): الدرجة تقيس بنية الصفقة فقط (SL/TP/ATR/سيولة/اتساق/نوع الأصل — 80 نقطة؛ والدرجة تبقى
+«100 − الخصومات المعروضة»). الثقة (EV) والتأكيدات لا تُخصمان من الدرجة لأنهما تُطبَّقان أصلاً في Confidence Score وحجم
+الصفقة وسقف الحكم (ازدواج خصم سابق: EV -10 وتأكيدات -10 من سبب واحد هو ضعف الثقة/اتجاه محايد).
+
 الأحكام:
   PASS         ≥ 75  — إشارة قوية
   CONDITIONAL  55-74 — إشارة مقبولة بشروط
@@ -156,37 +160,27 @@ def evaluate_signal(s: SignalInput) -> dict:
         reasons.append("أ: time exit أو sizing ناقص (-5)")
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    # ب. R/R & EV — 20 نقطة
+    # ب. R/R — 10 نقاط (batch44: EV خرج من الدرجة — يُعرض كملاحظة فقط)
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     score_b = 0
-    if s.rr_ratio is not None and s.confidence_pct is not None:
-        be = break_even_win_rate(s.rr_ratio)
-        ev_margin = s.confidence_pct - be
-        # batch36 (قرار رحال — خصم خطي بدل العتبات): مساهمة EV متصلة: +10 عند هامش ≥ +10، 5 عند 0، 0 عند ≤ -10
-        _ev_c = float(int(round(max(0.0, min(10.0, 5.0 + 0.5 * ev_margin)))))  # تقريب لعدد صحيح كي تطابق الخصومات المعروضة الدرجة
-        score_b += _ev_c
-        _ev_ded = int(round(10.0 - _ev_c))
-        if ev_margin >= 10 or _ev_ded == 0:
-            pass
-        elif ev_margin >= 0:
-            reasons.append(f"ب: هامش EV ضيق ({ev_margin:.1f}%) — يُفضَّل +10% (-{_ev_ded})")
-        elif ev_margin >= -2.0:
-            reasons.append(f"ب: EV سلبي طفيف (ثقة {s.confidence_pct:.0f}% < break-even {be:.1f}%) (-{_ev_ded})")
-        else:
-            reasons.append(f"ب: EV سلبي (ثقة {s.confidence_pct:.0f}% < break-even {be:.1f}%) (-{_ev_ded})")
+    if s.rr_ratio is not None:
+        if s.confidence_pct is not None:
+            be = break_even_win_rate(s.rr_ratio)
+            ev_margin = s.confidence_pct - be
+            if ev_margin < 0:
+                reasons.append(
+                    f"ب: EV سلبي (ثقة {s.confidence_pct:.0f}% < break-even {be:.1f}%) — "
+                    "يُطبَّق عبر حد الدخول وسقف الحكم، بلا خصم من هذه الدرجة (0)")
 
-        # rr_rounding_fix (#311): نفس مشكلة conf_rounding_fix (#296) — رقمان
-        # مختلفان فعلياً (مثال: 1.49 و1.51) قد يُعرضان كلاهما ".1f" كـ"1.5"،
-        # فيبدوان متناقضين نصياً حين يقعان في فرعين مختلفين من الشرط (واحد
-        # "ضعيف <1.5" والآخر "مقبول لكن دون 2:1") — لوحظ بين XSPY وXSPCX.
-        # الإصلاح: عرض منزلتين عشريتين عند التقارب من حدود 1.5 أو 2.0.
+        # rr_rounding_fix (#311): رقمان مختلفان فعلياً (1.49 و1.51) قد يُعرضان كلاهما "1.5" فيبدوان متناقضين؛
+        # عند التقارب من حدود 1.5 أو 2.0 نعرض منزلتين.
         def _rr_fmt(v: float) -> str:
             for _b in (1.5, 2.0):
                 if abs(round(v, 1) - _b) < 1e-9:
                     return f"{v:.2f}"
             return f"{v:.1f}"
 
-        # batch36: مساهمة R/R متصلة: 10 عند ≥ 2.0، 0 عند ≤ 0.8 (كانت قفزات 3 ← 7 ← 10 عند 1.5 و2.0)
+        # batch36: مساهمة R/R متصلة: 10 عند ≥ 2.0، 0 عند ≤ 0.8
         _rr_c = float(int(round(max(0.0, min(10.0, 10.0 * (float(s.rr_ratio) - 0.8) / 1.2)))))
         score_b += _rr_c
         _rr_ded = int(round(10.0 - _rr_c))
@@ -196,11 +190,9 @@ def evaluate_signal(s: SignalInput) -> dict:
             reasons.append(f"ب: R/R = 1:{_rr_fmt(s.rr_ratio)} مقبول لكن دون 2:1 (-{_rr_ded})")
         else:
             reasons.append(f"ب: R/R = 1:{_rr_fmt(s.rr_ratio)} ضعيف (< 1.5) (-{_rr_ded})")
-    elif s.rr_ratio is None:
-        score_b += 5  # انتظر تأكيد — نقطة وسط
-        reasons.append("ب: R/R غير محسوب بعد — 5/20 مؤقتاً (-15)")
     else:
-        reasons.append("ب: بيانات R/R أو الثقة ناقصة (-20)")
+        score_b += 5  # انتظر تأكيد — نقطة وسط
+        reasons.append("ب: R/R غير محسوب بعد — 5/10 مؤقتاً (-5)")
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     # ج. ATR والوقف/الأهداف — 15 نقطة
@@ -317,20 +309,20 @@ def evaluate_signal(s: SignalInput) -> dict:
             reasons.append("ز2: لا تأكيد إضافي من مصدر/إطار مستقل (-3)")
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    # ز. التأكيدات / Confluence — 10 نقاط
+    # ز. التأكيدات / Confluence — بلا نقاط (ملاحظة وسقف فقط)
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    conf_map = {4: 10, 3: 10, 2: 6, 1: 2, 0: 0}
-    score_g = conf_map.get(min(s.confirmations_met, 4), 0)
+    # batch44 (بند 7): التأكيدات لا تُخصم من الدرجة — تُطبَّق في الثقة (+3% لكل تأكيد) وحجم الصفقة
+    # (<2 ⇒ 0%) وسقف الحكم أدناه؛ تُعرض هنا كملاحظة فقط.
     if s.confirmations_met < 2:
-        reasons.append(f"ز: تأكيدات {s.confirmations_met}/4 — غير كافية (-{10 - score_g})")
-    elif score_g < 10:
-        # batch21: خصم -4 لتأكيدين فقط كان يُحتسب دون ظهوره في الملاحظات
-        reasons.append(f"ز: تأكيدات {s.confirmations_met}/4 — الحد الأدنى فقط (-{10 - score_g})")
+        reasons.append(f"ز: تأكيدات {s.confirmations_met}/4 — غير كافية؛ تُطبَّق عبر سقف الحكم وحجم 0% "
+                       "بلا خصم من الدرجة (0)")
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     # الإجمالي
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    total = score_a + score_b + score_c + score_d + score_e + score_f + score_g
+    # بنية الصفقة فقط (80 نقطة): بند EV وبند التأكيدات (20 نقطة سابقاً) خرجا من الدرجة، فتبقى القاعدة
+    # «الدرجة = 100 − مجموع الخصومات المعروضة» صحيحة (لا خصم مخفي ولا معايرة تُربك مجموع الملاحظات).
+    total = 20 + score_a + score_b + score_c + score_d + score_e + score_f
     total = int(round(max(0, min(100, total))))
     verdict = _verdict_label(total)
 

@@ -575,7 +575,14 @@ def _calc_price_forecast(candles: list, days: int = 30,
         time_factor   = (days ** 0.5)   # sqrt(30) ≈ 5.5 بدلاً من 30
 
         bull_case_raw = price * (1 + daily_move * time_factor * 0.6 * combined_mult * wyckoff_boost)
-        base_case_raw = price * (1 + daily_move * time_factor * 0.25 * combined_mult)
+        # batch44: السيناريو الأساسي يتبع اتجاه EMA (كان دائماً صاعداً حتى مع «الاتجاه هابط» → تناقض ظاهري:
+        # اتجاه هابط وسيناريو محتمل +5.4%). الهابط يُحسب بنفس منطق المتحفظ (القسمة على المضاعف)، والجانبي ≈ بلا تغيير.
+        if trend == "bearish":
+            base_case_raw = price * (1 - daily_move * time_factor * 0.25 / max(combined_mult, 0.5))
+        elif trend == "neutral":
+            base_case_raw = price
+        else:
+            base_case_raw = price * (1 + daily_move * time_factor * 0.25 * combined_mult)
         bear_case_raw = price * (1 - daily_move * time_factor * 0.4 / combined_mult)
 
         # حد أقصى للتغيير: ±50% لـ 30 يوم (واقعي حتى لـ BTC)
@@ -610,6 +617,8 @@ def _calc_price_forecast(candles: list, days: int = 30,
             "fib_t3":       round(fib_target3, 8),
             "fib_s1":       round(fib_support1, 8),
             "fib_s2":       round(fib_support2, 8),
+            "recent_low":   round(recent_low, 8),
+            "recent_high":  round(recent_high, 8),
             "confidence":   round(confidence, 2),
             "combined_mult":round(combined_mult, 3),
             # إصلاح #984: trend_dir لإظهار Elliott بشكل صحيح
@@ -617,6 +626,21 @@ def _calc_price_forecast(candles: list, days: int = 30,
         }
     except Exception:
         return {}
+
+
+def _vol_word(v) -> str:
+    from core.thresholds import volume_word
+    return volume_word(v)
+
+
+def _far_note(target, bull) -> str:
+    """batch44: هدف فيبوناتشي (امتداد Elliott) يتجاوز سيناريو الـ30 يوم المتفائل → يُوسَم بدل عرضه كأنه ضمن النطاق."""
+    try:
+        if float(target) > float(bull) * 1.05:
+            return " — امتداد بعيد يتجاوز سيناريو 30 يوم"
+    except (TypeError, ValueError):
+        pass
+    return ""
 
 
 def _format_forecast_ar(symbol: str, price: float, fc: dict, days: int = 30) -> str:
@@ -647,10 +671,12 @@ def _format_forecast_ar(symbol: str, price: float, fc: dict, days: int = 30) -> 
         "",
         f"🔮 *تنبؤ {symbol} — {days} يوم القادمة*",
         "━━━━━━━━━━━━━━━━━━",
-        f"• الاتجاه: {trend_ar} | الثقة: {conf_bar} {conf:.0%}",
+        # batch44: التسمية توضح أن الاتجاه من ترتيب EMA20/50/200 (متأخر) لا من إشارة الدخول
+        f"• الاتجاه (ترتيب EMA): {trend_ar} | الثقة: {conf_bar} {conf:.0%}",
         f"• RSI: {fc.get('rsi',50):.0f} | ATR: {_fmt_atr_pct(fc.get('atr_pct',0))}%",
         f"• Fear&Greed: {fc.get('fear_greed',50)} | BTC Dom: {fc.get('btc_dom',50):.0f}%",
-        f"• {'🔊 حجم مرتفع (Wyckoff ✅)' if fc.get('wyckoff') else '🔇 حجم عادي'}",
+        (f"• 🔊 حجم مرتفع (Wyckoff ✅) ({fc.get('vol_ratio',0):.2f}x)" if fc.get('wyckoff')
+         else f"• 🔇 حجم {_vol_word(fc.get('vol_ratio', 1.0))} ({fc.get('vol_ratio',0):.2f}x)"),
         "",
         f"📊 *السيناريوهات الـ {days} يوم:*",
         f"  🟢 متفائل (Elliott 5): {p_fmt(bull)} ({bull_pct:+.1f}%)",
@@ -661,8 +687,8 @@ def _format_forecast_ar(symbol: str, price: float, fc: dict, days: int = 30) -> 
         *(
             [
                 f"📐 *أهداف فيبوناتشي (Elliott):*",
-                f"  🎯 هدف 1 (1.272): {p_fmt(fc.get('fib_t1',0))}",
-                f"  🎯 هدف 2 (1.618): {p_fmt(fc.get('fib_t2',0))}",
+                f"  🎯 هدف 1 (1.272): {p_fmt(fc.get('fib_t1',0))}{_far_note(fc.get('fib_t1',0), bull)}",
+                f"  🎯 هدف 2 (1.618): {p_fmt(fc.get('fib_t2',0))}{_far_note(fc.get('fib_t2',0), bull)}",
                 # إصلاح #1076: لا نُظهر الدعم إذا كان أعلى من السعر الحالي
                 *(([f"  🛡️ دعم 1 (0.382): {p_fmt(fc.get('fib_s1',0))}"]
                    if fc.get('fib_s1',0) < price else []) +
@@ -672,10 +698,14 @@ def _format_forecast_ar(symbol: str, price: float, fc: dict, days: int = 30) -> 
             else [
                 f"📐 *مستويات الدعم الرئيسية:*",
                 # إصلاح #1076: لا نُظهر الدعم إذا كان أعلى من السعر الحالي
-                *(([f"  🛡️ دعم 1 (0.382): {p_fmt(fc.get('fib_s1',0))}"]
-                   if fc.get('fib_s1',0) < price else []) +
-                  ([f"  🛡️ دعم 2 (0.618): {p_fmt(fc.get('fib_s2',0))}"]
-                   if fc.get('fib_s2',0) < price else [])),
+                # batch44: كان القسم يظهر فارغاً حين يكون السعر دون مستويي الدعم (هبوط) — نذكر قاع النطاق بدل الفراغ
+                *((([f"  🛡️ دعم 1 (0.382): {p_fmt(fc.get('fib_s1',0))}"]
+                    if fc.get('fib_s1',0) < price else []) +
+                   ([f"  🛡️ دعم 2 (0.618): {p_fmt(fc.get('fib_s2',0))}"]
+                    if fc.get('fib_s2',0) < price else []))
+                  or ([f"  ⚠️ السعر دون مستويي دعم فيبوناتشي (0.382/0.618) — أقرب قاع في آخر 30 يوم: {p_fmt(fc.get('recent_low',0))}"]
+                      if fc.get('recent_low', 0) else
+                      ["  ⚠️ السعر دون مستويي دعم فيبوناتشي — لا دعم أدنى مرصود"])),
             ]
         ),
         "",
@@ -2312,6 +2342,16 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         and round(signal.confidence * 100) >= _t_entry_check_w):
                     _pw_qualified_count += 1
                     _pw_qualified_names.append(str((locals().get('_display_map_pw') or {}).get(sym, sym)))
+                # batch44 (بند 5، قرار رحال): وسم الجاهزية — جاهزة: الشروط الأربعة (RSI/EMA50/الثقة/اتجاه شراء)
+                # كلها متحققة؛ قريبة: ثلاثة منها؛ غير ذلك: انتظار. (ويُرتَّب العرض بها ثم بالثقة.)
+                _n_ok_w = sum([bool(_rsi_ok_w), bool(_ema_ok_w), bool(_dir_ok_w),
+                               round(signal.confidence * 100) >= _t_entry_check_w])
+                if _n_ok_w == 4 and not _g4_blocked_w:
+                    _ready_rank_w, _ready_tag_w = 2, "✅ جاهزة"
+                elif _n_ok_w >= 3 and not _g4_blocked_w:
+                    _ready_rank_w, _ready_tag_w = 1, "🟡 قريبة"
+                else:
+                    _ready_rank_w, _ready_tag_w = 0, "⚪ انتظار"
 
                 # Fibonacci سريع
                 _fib_candles = candles[-30:] if len(candles) >= 30 else candles
@@ -2452,9 +2492,15 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         ]
                 # batch40: سياق الأصل لجمل الأسابيع (مستويات وقيم حالية بدل نص عام)
                 try:
+                    # batch44: ADX من نظام الأصل نفسه (المعروض في «نظام الأصل نفسه») — signal.technicals لا يحوي adx
+                    # فكان يظهر «ADX 0 ✗» رغم ADX=27 في نفس الرسالة.
+                    _adx_ctx = float(((getattr(_reg_a, "metrics", None) or {}).get("adx")) or 0)
+                    if _adx_ctx <= 0:
+                        _adx_ctx = float((getattr(signal, "technicals", None) or {}).get("adx", 0) or 0)
                     _pw_asset_ctx = {
                         "sym": sym, "support": _disp_support, "resistance": _disp_resistance,
-                        "adx": float((getattr(signal, "technicals", None) or {}).get("adx", 0) or 0),
+                        "adx": _adx_ctx, "mr": bool(_is_mr_w), "rsi_t": _rsi_t_w,
+                        "rank": None,
                     }
                 except Exception:
                     _pw_asset_ctx = None
@@ -2494,6 +2540,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"💎 *{_disp_sym_pw}*{price_str}{_pair_inline}",
                     f"  الإشارة: {dir_ar} | الثقة: {signal.confidence:.0%}{conf_warning}",
                     f"  الاستراتيجية: {strat_name}",
+                    f"  🏷️ الجاهزية: {_ready_tag_w} ({_n_ok_w}/4 شروط)",
                 ] + _pw_extra + _synth_pw_line + ([f"  {_sharp_warn(change_24h)}"] if _sharp_warn(change_24h) else []) + entry_lines + ([f"  {_g4_msg_w}"] if _g4_msg_w else []) + [""]
             except Exception as e:
                 logger.warning(f"plan_week {sym}: {e}")
@@ -2513,11 +2560,15 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if _cur:
                 _blocks.append(_cur)
             def _blk_conf(b):
+                # batch44: الجاهزية أولاً (جاهزة > قريبة > انتظار) ثم الثقة تنازلياً؛ كتل الأخطاء أخيراً
+                _rank, _cf = -1, -1
                 for _l in b:
+                    if "الجاهزية:" in _l:
+                        _rank = 2 if "جاهزة" in _l else 1 if "قريبة" in _l else 0
                     _m = _re_sort.search(r"الثقة: (\d+)%", _l)
-                    if _m:
-                        return int(_m.group(1))
-                return -1
+                    if _m and _cf < 0:
+                        _cf = int(_m.group(1))
+                return (_rank, _cf)
             _blocks.sort(key=_blk_conf, reverse=True)
             lines[_pw_coin_start:] = [x for b in _blocks for x in b]
         except Exception as _se:
@@ -2752,8 +2803,14 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                   f"والمقاومة {_fmt_price(_ctx_b40['resistance'])}")
                     if _wk2_cond(symbols).startswith("Fear"):
                         _adx_b40 = _ctx_b40.get("adx") or 0
-                        _wk2_now = (f" [الآن: Fear {fear_val} {'✓' if fear_val < 30 else '✗'} · "
-                                    f"ADX {_adx_b40:.0f} {'✓' if _adx_b40 > 20 else '✗'}]")
+                        _adx_txt = (f"ADX {_adx_b40:.0f} {'✓' if _adx_b40 > 20 else '✗'}"
+                                    if _adx_b40 > 0 else "ADX غير متاح الآن")   # batch44: لا «ADX 0» الوهمي
+                        _wk2_now = (f" [الآن: Fear {fear_val} {'✓' if fear_val < 30 else '✗'} · {_adx_txt}]")
+                    # batch44 (بند 4): شرط الأسبوع 2 يذكر شرط استراتيجية الأصل صراحةً (الارتداد: RSI ≤ 35 ودون EMA50؛
+                    # اتباع الاتجاه: RSI فوق 45 وفوق EMA50) — كان النص يذكر ADX/EMA50 فقط فيناقض استراتيجية الارتداد.
+                    if _ctx_b40:
+                        _wk2_now += (" + شرط الاستراتيجية: RSI ≤ 35 ودون EMA50" if _ctx_b40.get("mr")
+                                     else " + شرط الاستراتيجية: RSI فوق 45 وفوق EMA50")
             except Exception:
                 _wk1_extra = _wk2_now = ""
             week_lines = [

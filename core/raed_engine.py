@@ -524,6 +524,46 @@ class RaedEngine:
         except Exception as e:
             logger.warning(f"_notify_real_users: {e}")
 
+    async def _unified_signal(self, sym: str, onchain_base: dict, fear_val: int, btc_regime, btc_dom: float = 50.0):
+        """batch44 (بند 3، قرار رحال): ثقة المسح التلقائي = ثقة /signal بنفس المسار:
+        شموع 365 يوماً، نظام الأصل نفسه (لا نظام BTC)، مشاعر أخبار الرمز (كاش /signal ≤10د ثم تحليل الأخبار)،
+        لقطة الإشارة المشتركة generate_snapshot، ثم رفع التأكيدات الموحَّد. كان المسح يستخدم news=0 وgenerate
+        ونظام BTC وشموع 100 فيختلف الرقم عن /signal. يُعيد (signal, candles) أو (None, candles) عند قلة الشموع."""
+        candles = await self.data_layer.get_ohlcv(sym, "1d", 365)
+        candles = candles or []
+        if len(candles) < 30:
+            return None, candles
+        try:
+            asset_regime = self.regime_detector.detect(
+                candles, btc_dominance=btc_dom, fear_greed=fear_val, symbol=sym)
+        except Exception as e:
+            logger.debug(f"unified_signal regime {sym}: {e}")
+            asset_regime = btc_regime
+        sentiment = 0.0
+        try:
+            from handlers.analysis import _sent_fresh, _sent_with_fallback
+            _sf = _sent_fresh(sym)
+            if _sf is not None:
+                sentiment = float(_sf)
+            else:
+                news_raw = await asyncio.wait_for(self.data_layer.get_news(currencies=sym), timeout=15.0)
+                news_an = await asyncio.wait_for(
+                    self.news_engine.analyze(news_raw if isinstance(news_raw, list) else [], [sym]), timeout=25.0)
+                sentiment = float(_sent_with_fallback(sym, news_an if isinstance(news_an, dict) else {}) or 0.0)
+        except Exception as e:
+            logger.debug(f"unified_signal sentiment {sym}: {type(e).__name__}: {e} → 0")
+            sentiment = 0.0
+        onchain_e = await self.data_layer.get_signal_enrichment(sym, onchain_base or {})
+        gen = getattr(self.signal_layer, "generate_snapshot", None) or self.signal_layer.generate
+        signal = gen(
+            symbol=sym, candles=candles, onchain_data=onchain_e or {},
+            news_sentiment=sentiment, backtest_win_rate=0.55,
+            macro_data={"fear_greed": fear_val}, regime=asset_regime,
+        )
+        from core.confidence import apply_boost_to_signal as _abs
+        signal = await _abs(self.data_layer, sym, signal, onchain_e or {})
+        return signal, candles
+
     async def check_strong_signals(self, send_fn=None):
         """
         يفحص الإشارات القوية >= 75% ويُرسل تنبيهاً تلقائياً.
@@ -546,26 +586,16 @@ class RaedEngine:
             regime = self.regime_detector.detect(btc_c, fear_greed=fear_val)
 
             alerts = []
+            try:
+                _btc_dom_cs = float(await self.data_layer.get_btc_dominance() or 50.0)
+            except Exception:
+                _btc_dom_cs = 50.0
+            onchain = await self.data_layer.get_onchain()
             for sym in top_symbols:
                 try:
-                    candles = await self.data_layer.get_ohlcv(sym, "1d", 100)
-                    candles = candles or []
-                    if len(candles) < 30:
+                    signal, candles = await self._unified_signal(sym, onchain or {}, fear_val, regime, _btc_dom_cs)
+                    if signal is None:
                         continue
-                    onchain = await self.data_layer.get_onchain()
-                    # إصلاح #34: whale_ratio/funding خاص بكل عملة
-                    onchain = await self.data_layer.get_signal_enrichment(sym, onchain or {})
-                    signal  = self.signal_layer.generate(
-                        symbol=sym, candles=candles,
-                        onchain_data=onchain or {},
-                        news_sentiment=0,
-                        backtest_win_rate=0.55,
-                        macro_data={"fear_greed": fear_val},
-                        regime=regime,
-                    )
-                    # autotrade_confidence_unify (بند 3): نفس رفع التأكيدات المعروض في /signal
-                    from core.confidence import apply_boost_to_signal as _abs
-                    signal = await _abs(self.data_layer, sym, signal, onchain or {})
                     if signal.confidence >= 0.75 and signal.direction != "neutral":
                         # dedup: لا نُرسل نفس الإشارة مرتين في 30 دقيقة
                         _sig_key = f"{sym}_{signal.direction}"
@@ -844,7 +874,11 @@ class RaedEngine:
             all_signals    = []
             _SCAN_STRONG_CONF = 0.65   # batch30: الحد معروض الآن في رسالة المسح
 
-            _scan_list = top_coins[:5]
+            _scan_list = top_coins[:5]   # النطاق 5 عملات (قرار رحال 2026-10-28)
+            try:
+                _btc_dom_scan = float(await self.data_layer.get_btc_dominance() or 50.0)
+            except Exception:
+                _btc_dom_scan = 50.0
             logger.info(f"scan: بدء مسح {len(_scan_list)} عملة من {len(top_coins)} | regime={regime.regime.value} | fear={fear_val}")
             for _ci, coin in enumerate(_scan_list, 1):
                 sym = (coin.get("symbol") or "").upper()
@@ -852,25 +886,10 @@ class RaedEngine:
                     logger.info(f"scan[{_ci}/{len(_scan_list)}]: رمز فارغ — تخطٍّ")
                     continue
                 try:
-                    candles = await self.data_layer.get_ohlcv(sym, "1d", 100)
-                    candles = candles or []
-                    if len(candles) < 30:
+                    signal, candles = await self._unified_signal(sym, onchain, fear_val, regime, _btc_dom_scan)
+                    if signal is None:
                         logger.warning(f"scan[{_ci}/{len(_scan_list)}] {sym}: شموع غير كافية ({len(candles)}<30) — تخطٍّ")
                         continue
-
-                    # إصلاح #34: whale_ratio/funding خاص بكل عملة
-                    onchain_e = await self.data_layer.get_signal_enrichment(sym, onchain)
-                    signal = self.signal_layer.generate(
-                        symbol=sym, candles=candles,
-                        onchain_data=onchain_e,
-                        news_sentiment=0,
-                        backtest_win_rate=0.55,
-                        macro_data={"fear_greed": fear_val},
-                        regime=regime,
-                    )
-                    # autotrade_confidence_unify (بند 3): الثقة المستخدمة للتنفيذ = الثقة المعروضة في /signal
-                    from core.confidence import apply_boost_to_signal as _abs
-                    signal = await _abs(self.data_layer, sym, signal, onchain_e)
                     price_d = await self.data_layer.get_price(sym)
                     price   = float((price_d or {}).get("price") or 0)
 
@@ -994,7 +1013,7 @@ class RaedEngine:
                                             symbol=s["symbol"], setup_type=s["direction"],
                                             direction=s["direction"],
                                             confidence_pct=s["confidence"] * 100,
-                                            confirmations_met=len(_tech_sg.get("conf_flags", []) or []),
+                                            confirmations_met=int(_tech_sg.get("plan_confirmations", 0) or 0),
                                             entry_price=s["price"],
                                             sl_price=float(_pos_sg.get("stop_loss", 0) or 0),
                                             tp1_price=float(_pos_sg.get("take_profit", 0) or 0),

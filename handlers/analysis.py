@@ -238,7 +238,15 @@ def _llm_decision_ctx(sig) -> str:
             return "قرار النظام: إشارة شراء (الدخول مشروط بثقة كافية وتأكيدات)"
         if d == "short":
             return "قرار النظام: إشارة بيع (الدخول مشروط بثقة كافية وتأكيدات)"
-        return "قرار النظام: انتظار — الاتجاه محايد ولا إشارة دخول حالياً"
+        # batch44: ثقة الإشارة + تفريق حالة السوق عن إشارة الدخول (كانت الفقرة تقول «اتجاه هابط» دون ذكر أن الإشارة محايدة)
+        try:
+            _c = float(getattr(sig, "confidence", 0) or 0)
+            _c = _c * 100 if _c <= 1 else _c
+            _cs = f" (الثقة {_c:.0f}% دون حد الدخول)"
+        except (TypeError, ValueError):
+            _cs = ""
+        return ("قرار النظام: انتظار — الاتجاه محايد ولا إشارة دخول حالياً" + _cs +
+                ". اذكر هذا القرار صراحةً في الفقرة، وفرّق بين حالة السوق (هابط/صاعد) وإشارة الدخول (محايدة)")
     except Exception:
         return ""
 
@@ -264,6 +272,9 @@ def _llm_facts_ctx(sig) -> str:
         vr = t.get("vol_ratio")
         if vr:
             bits.append(f"الحجم {float(vr):.2f}x من المتوسط")
+        # batch44 (بند 9): CVD/Whale لا يُحتسبان تأكيداً إلا إذا وافقا اتجاه الإشارة — تُنبَّه الفقرة كي لا ترفعهما
+        if bits and str(getattr(sig, "direction", "neutral") or "neutral").lower() not in ("long", "short"):
+            bits.append("ملاحظة: CVD وWhale مرصودان للعلم فقط ولا يُحتسبان تأكيداً لأن اتجاه الإشارة محايد")
         return "؛ ".join(bits)
     except Exception:
         return ""
@@ -1505,44 +1516,25 @@ def _build_professional_block(
     _whale_sig = _whale.get("signal", "")
     _whale_ratio = float(_whale.get("ratio", 0) or 0)
 
-    # Funding Rate يضيف Confirmation Flag
-    if _fund_pct < -0.01:
-        _conf_flags = list(_conf_flags) + ["Funding Rate سالب (فرصة Longs) ✓"]
-    if _oi_chg < -5:
-        _conf_flags = list(_conf_flags) + ["OI انخفض (تصفية Shorts) ✓"]
-    # T27_fix: Whale > 1.3 = صاعد ✅ | < 0.7 = هابط ⚠️
-    if _whale_ratio > 0:
-        if _whale_ratio >= 1.3:
-            _conf_flags = list(_conf_flags) + [f"Whale Ratio {_whale_ratio:.2f} — أغلبية Long ✓"]
-        elif _whale_ratio <= 0.7:
-            pass  # هابط — لا نُضيفه كـ confirmation
-    # إصلاح #619/#651: Volume Spike يُضاف كـ Confirmation Flag
-    if _vol_ratio >= 1.5:
-        _conf_flags = list(_conf_flags) + [f"Volume Spike {fmt_vol_ratio(_vol_ratio)} ✓"]
-    # signal_logic_fix: RSI extreme
-    # ذروة البيع = فرصة ارتداد → تأكيد ✓
-    # ذروة الشراء = خطر تصحيح → تحذير ⚠️ وليس تأكيداً
-    if rsi < 30:
-        _conf_flags = list(_conf_flags) + [f"RSI ذروة بيع ({rsi:.0f}) ✓"]
-    elif rsi > 70:
-        # RSI>70: تحذير فقط — لا يُعدّ تأكيداً للدخول
-        pass  # لا نضيفه لـ _conf_flags
-    # batch9: CVD أحد التأكيدات الأربعة المعلنة في الرسالة (حجم + CVD + هيكل + RSI) لكنه لم يكن
-    # يُحتسب فعلاً (BTC: CVD +21% مع تأكيدات 0/4). ضغط شراء واضح (≥ +20%) = تأكيد.
+    # batch44 (بند 9): تعريف التأكيدات موحَّد في core/confidence.py (كان هنا نسخة مكرَّرة مستقلة عن الخطط).
+    # التحصيل: Funding سالب | OI | Whale ≥1.3 | حجم ≥1.5x | RSI<30 | CVD ≥+20% | BB<0.15؛
+    # ثم تصفية الاتجاه: أعلام الشراء (ومنها Whale) لا تُحتسب إلا مع اتجاه long، والحجم مع long/short،
+    # وفي المحايد لا يُحتسب شيء. Funding للذهب (بند 1) يُعرض ولا يُحتسب.
+    from core.confidence import (collect_confirmation_flags as _ccf,
+                                 filter_flags_by_direction as _ffd,
+                                 funding_excluded as _fex)
+    _cvd_oc_f = (tech.get("onchain_data", {}) or {}) if isinstance(tech, dict) else {}
     try:
-        _cvd_oc_f = (tech.get("onchain_data", {}) or {}) if isinstance(tech, dict) else {}
         _cvd_pct_f = float(_cvd_oc_f.get("cvd_pct", 0) or 0)
-        if _cvd_oc_f.get("cvd_signal") and _cvd_pct_f >= 20.0:
-            _conf_flags = list(_conf_flags) + [f"CVD شراء ({_cvd_pct_f:+.1f}%) ✓"]
-    except Exception:
-        pass
-    if _bb_pos_v < 0.15:
-        _conf_flags = list(_conf_flags) + ["BB تحت الحد السفلي ✓"]
-    elif _bb_pos_v > 0.85:
-        # bb_fix: BB فوق الحد العلوي = Overbought شديد → تحذير لا تأكيد
-        pass  # لا يُضاف لـ _conf_flags
-    # batch36 (قرار رحال): التشبع والحجم لا يُحتسبان تأكيداً إلا إذا وافقا اتجاه الإشارة
-    from core.confidence import filter_flags_by_direction as _ffd
+    except (TypeError, ValueError):
+        _cvd_pct_f = 0.0
+    _gold_fund_ex = _fex(symbol)
+    _conf_flags = _ccf(
+        rsi=rsi, vol_ratio=_vol_ratio, bb_pos=_bb_pos_v,
+        whale_ratio=_whale_ratio, cvd_signal=_cvd_oc_f.get("cvd_signal"), cvd_pct=_cvd_pct_f,
+        fund_pct=_fund_pct, oi_chg=_oi_chg,
+        base_flags=list(_conf_flags), exclude_funding=_gold_fund_ex,
+    )
     _conf_flags, _flags_ignored = _ffd(_conf_flags, direction)
     _flags_found = len(_conf_flags)
     _confirmed   = _flags_found >= 2
@@ -2030,7 +2022,10 @@ def _build_professional_block(
             (10 if _vol_safe > 3.0 else 5 if _vol_safe > 1.5 else 0) -
             (10 if conf > 0.65 else 0)
         ))
-        _conf_3d_line = f"• اتجاه السوق: {_conf_trend}% | جودة الدخول: {_conf_entry}% | خطر التصحيح: {_reversal_risk}%"
+        # batch44: «خطر التصحيح» يقيس خطر انعكاس صعود (RSI/حجم) لا استمرار الهبوط — التسمية والمستوى توضحان ذلك
+        _rr_lvl = "منخفض" if _reversal_risk < 30 else "متوسط" if _reversal_risk < 60 else "مرتفع"
+        _conf_3d_line = (f"• اتجاه السوق: {_conf_trend}% | جودة الدخول: {_conf_entry}% | "
+                         f"خطر تصحيح الصعود (RSI/حجم): {_reversal_risk}% ({_rr_lvl})")
     except Exception:
         _conf_3d_line = ""
 
@@ -2431,7 +2426,8 @@ def _build_professional_block(
                 _miss.append(f"RSI < 30 (حالياً {rsi:.0f})")
             if not _cvd_oc_m.get("cvd_signal"):
                 _miss.append("CVD غير متاح الآن (لا يمكن التحقق منه)")
-            if _fund_pct >= -0.01 and (_fund.get("source") not in (None, "unknown", "") or _fund_pct != 0):
+            if (_fund_pct >= -0.01 and not _gold_fund_ex
+                    and (_fund.get("source") not in (None, "unknown", "") or _fund_pct != 0)):
                 _miss.append(f"Funding سالب (حالياً {_fund_pct:+.4f}%)")
             if _miss:
                 parts.append("  ↳ الناقص: " + " | ".join(_miss[:4]))
@@ -2450,7 +2446,11 @@ def _build_professional_block(
 
     # T27_fix: Whale > 1.0 = Long صاعد، < 0.5 = Short هابط
     _whale_line = ""
-    if _whale_ratio >= 1.3:
+    if _whale_ratio >= 1.3 and str(direction).lower() != "long":
+        # batch44 (بند 9): Whale لا يُعدّ داعماً إلا إذا وافق اتجاه الإشارة (long)
+        _whale_line = (f"◌ Whale Ratio {_whale_ratio:.2f} 🟢 (أغلبية Long — مرصود فقط: "
+                       f"لا يوافق اتجاه الإشارة الحالي)")
+    elif _whale_ratio >= 1.3:
         _whale_line = f"☑ Whale Ratio {_whale_ratio:.2f} 🟢 (أغلبية Long — قد يكون تحوطاً)"
     elif _whale_ratio > 0 and _whale_ratio <= 0.7:
         _whale_line = f"⚠️ Whale Ratio {_whale_ratio:.2f} 🔴 (أغلبية Short — هابط)"
@@ -2480,9 +2480,12 @@ def _build_professional_block(
         _div_line,
         f"{'☑' if _vol_ratio >= 1.5 else '□'} Volume Spike ≥1.5x (حالياً {fmt_vol_ratio(_vol_ratio)})",
         _reclaim_line,
-        f"{'☑' if tech.get('macd_hist', 0) > 0 else '□'} MACD إيجابي",
+        f"{'☑' if tech.get('macd_hist', 0) > 0 else '□'} MACD إيجابي"
+        + (f" (الهيستوغرام حالياً {float(tech.get('macd_hist', 0) or 0):+.4g})" if isinstance(tech.get('macd_hist', 0), (int, float)) else ""),
         _whale_line,
-        (f"{'☑' if _fund_pct < -0.01 else '□'} Funding Rate داعم للشراء (سالب)"
+        (f"ℹ️ Funding Rate {_fund_pct:+.4f}% — للعلم فقط للذهب (لا يدخل في الثقة ولا التأكيدات)"
+         if (_gold_fund_ex and (_fund.get("source") not in (None, "unknown", "") or _fund_pct != 0))
+         else f"{'☑' if _fund_pct < -0.01 else '□'} Funding Rate داعم للشراء (سالب)"
          if (_fund.get("source") not in (None, "unknown", "") or _fund_pct != 0)
          else ("⚪ Funding Rate غير متاح لهذا الأصل" if (_is_x_asset or _is_perp_asset) else "⚪ Funding Rate غير متاح الآن")),
     ])
@@ -2737,7 +2740,9 @@ def _get_vol_profile_ar(vol_profile: str, vol_ratio: float) -> str:
         if 0.5 <= vol_ratio < 0.8:
             return f"📉 حجم أقل من المتوسط ({fmt_vol_ratio(vol_ratio)}) — طلب ضعيف"
         return f"📉 حجم ضعيف ({fmt_vol_ratio(vol_ratio)}) — غياب طلب"
-    return f"⚪ حجم عادي ({fmt_vol_ratio(vol_ratio)})"
+    # batch44: نفس مفردات سجل الجودة (0.84x «أقل من المتوسط» لا «عادي»)
+    from core.thresholds import volume_word as _vw44
+    return f"⚪ حجم {_vw44(vol_ratio)} ({fmt_vol_ratio(vol_ratio)})"
 
 
 def _get_bb_status_ar(bb_pos: float) -> str:

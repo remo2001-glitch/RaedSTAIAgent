@@ -19,23 +19,35 @@ CONF_BOOST_CAP      = 0.85     # سقف الرفع (لا يُخفِّض ثقة �
 MIN_CONFIRMATIONS   = 2        # الحد الأدنى للتأكيدات
 
 
+def funding_excluded(symbol: Any) -> bool:
+    """batch44 (قرار رحال): Funding للذهب (XAUT/PAXG) يُعرض للعلم فقط ولا يدخل في الثقة/التأكيدات."""
+    try:
+        from core.thresholds import is_commodity_token
+        return bool(is_commodity_token(symbol))
+    except Exception:
+        return False
+
+
 def collect_confirmation_flags(
     *, rsi: float, vol_ratio: float, bb_pos: Optional[float],
     whale_ratio: float, cvd_signal: Any, cvd_pct: float,
     fund_pct: float, oi_chg: float,
     base_flags: Optional[List[str]] = None,
+    exclude_funding: bool = False,
 ) -> List[str]:
-    """يُرجع قائمة نصوص التأكيدات المتحققة (نفس نصوص /signal الأصلية)."""
+    """التعريف الوحيد للتأكيدات (batch44: يستخدمه /signal و/analyze والخطط والمسح — كان في /signal نسخة
+    منفصلة مكرَّرة). يُرجع نصوص المتحقق منها قبل تصفية الاتجاه. exclude_funding للذهب."""
     flags: List[str] = list(base_flags or [])
     try:
-        if fund_pct < -0.01:
+        if fund_pct < -0.01 and not exclude_funding:
             flags.append("Funding Rate سالب (فرصة Longs) ✓")
         if oi_chg < -5:
             flags.append("OI انخفض (تصفية Shorts) ✓")
         if whale_ratio and whale_ratio >= 1.3:
             flags.append(f"Whale Ratio {whale_ratio:.2f} — أغلبية Long ✓")
         if vol_ratio >= 1.5:
-            flags.append(f"Volume Spike {vol_ratio:.1f}x ✓")
+            from core.indicators import fmt_vol_ratio as _fvr
+            flags.append(f"Volume Spike {_fvr(vol_ratio)} ✓")
         if rsi < 30:
             flags.append(f"RSI ذروة بيع ({rsi:.0f}) ✓")
         if cvd_signal and cvd_pct >= 20.0:
@@ -118,7 +130,7 @@ def boosted_confidence_from_signal(
     conf = float(getattr(signal, "confidence", 0) or 0)
     direction = getattr(signal, "direction", "neutral")
     try:
-        rsi = float(round(float(tech.get("rsi", 50) or 50)))
+        rsi = float(tech.get("rsi", 50) or 50)   # batch44: بلا تقريب — نفس /signal
     except (TypeError, ValueError):
         rsi = 50.0
     wd = enriched.get("whale_data") or {}
@@ -140,6 +152,7 @@ def boosted_confidence_from_signal(
         cvd_pct=_f(enriched.get("cvd_pct")),
         fund_pct=_f(enriched.get("funding_rate_pct")),
         oi_chg=_f(oi_chg),
+        exclude_funding=funding_excluded(getattr(signal, "symbol", "")),
     )
     flags, _ign = filter_flags_by_direction(flags, direction)   # batch36: اتجاه الإشارة يحدد ما يُحتسب
     new_conf, boost = apply_confirmation_boost(
