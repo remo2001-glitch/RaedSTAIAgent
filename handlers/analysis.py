@@ -48,6 +48,11 @@ SYMBOL_ALIASES = {
 }
 
 
+def _pct_nz46(x):
+    """batch46: نسبة بخانة عشرية بإشارة؛ ما يُقرَّب إلى صفر يُعرض 0.0 بلا إشارة (لا «-0.0»)."""
+    return "0.0" if abs(x) < 0.05 else f"{x:+.1f}"
+
+
 def normalize_symbol_alias(raw: str) -> str:
     """X1: تطبيع الرموز عبر خريطة المرادفات + fuzzy match."""
     if not raw:
@@ -2115,7 +2120,7 @@ def _build_professional_block(
     elif not _fund_known_b41:
         deriv_lines.append("• Funding Rate: ⚪ غير متاح الآن")
     if _oi_chg != 0:
-        deriv_lines.append(f"• Open Interest (آخر ساعة): {_oi_chg:+.1f}% {_oi_sig}")
+        deriv_lines.append(f"• Open Interest (آخر ساعة): {_pct_nz46(_oi_chg)}% {_oi_sig}")
     elif not _oi_known_b41:
         deriv_lines.append("• Open Interest: ⚪ غير متاح الآن")
     # إصلاح #241-A: Whale/TVL غير ذي صلة للأصول المُرمَّزة غير الرقمية
@@ -2503,7 +2508,9 @@ def _build_professional_block(
         _cl_b45 = [float(c.get("close", 0)) for c in (candles or []) if isinstance(c, dict) and c.get("close")]
         _h_b45 = _mh_b45(_cl_b45)
         if _h_b45 is not None:
-            _hs_b45 = f"{_h_b45:+.4g}" if abs(_h_b45) >= 0.01 else f"{_h_b45:+.2e}"
+            import math as _m46
+            _dec46 = 4 if abs(_h_b45) >= 1 else (2 - int(_m46.floor(_m46.log10(abs(_h_b45)))) if _h_b45 else 2)
+            _hs_b45 = f"{_h_b45:+.4g}" if abs(_h_b45) >= 0.01 else f"{_h_b45:+.{min(_dec46, 10)}f}"
             _macd_line_b45 = (f"{'☑' if _h_b45 > 0 else '□'} MACD إيجابي (الهيستوغرام حالياً {_hs_b45}"
                               f"{' — دون الصفر' if _h_b45 <= 0 else ''})")
     except Exception:
@@ -3101,7 +3108,7 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     _fsig = "⚪ محايد"
                 lines.append(f"• Funding Rate: {_fund_pct:+.4f}% {_fsig}")
             if _oi_chg:
-                lines.append(f"• Open Interest (آخر ساعة): {_oi_chg:+.1f}% {_oi_sig}")
+                lines.append(f"• Open Interest (آخر ساعة): {_pct_nz46(_oi_chg)}% {_oi_sig}")
             if _whale_sig:
                 _wr_txt = f" ({_whale_r:.2f})" if _whale_r > 0 else ""
                 # whale_consistency_fix: توحيد مع /signal
@@ -4581,7 +4588,7 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _fsig = "⚪ محايد"
             deriv_lines.append(f"• Funding Rate: {_fund_pct:+.4f}% {_fsig}")
         if _oi_chg:
-            deriv_lines.append(f"• Open Interest (آخر ساعة): {_oi_chg:+.1f}% {_oi_sig}")
+            deriv_lines.append(f"• Open Interest (آخر ساعة): {_pct_nz46(_oi_chg)}% {_oi_sig}")
         if _whale_sig:
             _wr_txt = f" ({_whale_r:.2f})" if _whale_r > 0 else ""
             # whale_consistency_fix: توحيد التعليق مع /signal

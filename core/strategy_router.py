@@ -879,12 +879,11 @@ def _rsi(closes, period=14):
     return wilder_rsi(closes, period)
 
 def _macd_histogram(closes):
+    """batch46: الهيستوغرام الحقيقي (MACD − EMA9 للـMACD) من core.indicators؛ كان يُرجع صفراً دائماً."""
     if len(closes) < 26: return 0
-    ema12 = _ema(closes, 12)
-    ema26 = _ema(closes, 26)
-    macd  = ema12 - ema26
-    signal = _ema([macd] * 9, 9)  # تبسيط
-    return macd - signal
+    from core.indicators import macd_histogram as _mh
+    h = _mh(closes)
+    return 0 if h is None else h
 
 def _bb_position(closes, period=20):
     if len(closes) < period: return 0.5

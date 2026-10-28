@@ -2039,6 +2039,8 @@ class DataLayer:
                     continue
                 if (_data_cvd or {}).get("data"):
                     break
+            if not _data_cvd.get("data"):
+                logger.info(f"CVD no trades ({symbol} via {_sym_cvd}): {str(_data_cvd)[:120]}")
             if _data_cvd.get("data"):
                 _trades = _data_cvd["data"]
                 _buy_vol  = sum(float(t.get("sz",0)) for t in _trades if t.get("side")=="buy")
@@ -2047,6 +2049,9 @@ class DataLayer:
                 _total = _buy_vol + _sell_vol
                 # CVD_sanity: تحقق من موثوقية البيانات
                 _buy_ratio = _buy_vol / max(_total, 1e-9)
+                if not (_total > 0 and 0.02 < _buy_ratio < 0.98):
+                    # batch46: تشخيص غياب CVD (مثل XAUT) — يظهر في سجلات Railway بدل الصمت
+                    logger.info(f"CVD rejected ({symbol} via {_sym_cvd}): trades={len(_trades)} buy_ratio={_buy_ratio:.3f} total={_total:.4f}")
                 if _total > 0 and 0.02 < _buy_ratio < 0.98:
                     _raw_pct = round(_cvd / max(_total, 1e-9) * 100, 2)
                     # batch13: CVD آخر 100 صفقة يتقلب (-95% → +88%)؛ نعتمد متوسط
