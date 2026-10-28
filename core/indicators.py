@@ -254,3 +254,21 @@ def fmt_atr_pct(v) -> str:
         return f"{round(float(v) + 1e-9, 1):.1f}"
     except Exception:
         return "0.0"
+
+
+def macd_histogram(closes: list, fast: int = 12, slow: int = 26, signal: int = 9):
+    """batch45: هيستوغرام MACD الحقيقي = MACD − EMA9(MACD) على السلسلة كاملة. يُرجع None إن لم تكفِ البيانات.
+    للعرض فقط حالياً؛ دالة strategy_router._macd_histogram تُرجع صفراً دائماً (قرار تسجيل التقني بيد رحال)."""
+    try:
+        f = ema_series(closes, fast)
+        s = ema_series(closes, slow)
+        if not f or not s:
+            return None
+        n = len(s)
+        macd_line = [a - b for a, b in zip(f[-n:], s)]
+        sig = ema_series(macd_line, signal)
+        if not sig:
+            return None
+        return macd_line[-1] - sig[-1]
+    except Exception:
+        return None

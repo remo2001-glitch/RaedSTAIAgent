@@ -509,6 +509,7 @@ class SignalLayer:
             "bias":        bias,
             "rsi":         round(rsi, 1),
             "ema_align":   ema_align,
+            "ema_bear":    bool(price < ema20 < ema50),   # batch45: ترتيب هابط صريح للعرض
             "macd_hist":   round(macd_hist, 6),
             "bb_pos":      round(bb_pos, 3),
             "vol_ratio":   round(vol_ratio, 2),
@@ -666,7 +667,7 @@ class SignalLayer:
             f"ℹ️ النسبة = ميل المصدر (60% فأكثر صعودي، 40% فأقل هبوطي) — لا تعني جودة الإشارة\n"
             f"{_pts_note}\n"
             f"RSI 1D: {rsi_val:.0f} | "
-            f"EMA: {'✅ ترتيب صاعد (سعر>EMA20>EMA50)' if s.technicals.get('ema_align') else '⚪ ليس بترتيب صاعد (سعر>EMA20>EMA50)'} | "
+            f"EMA: {'✅ ترتيب صاعد (سعر>EMA20>EMA50)' if s.technicals.get('ema_align') else ('🔴 ترتيب هابط (سعر<EMA20<EMA50)' if s.technicals.get('ema_bear') else '⚪ ليس بترتيب صاعد (سعر>EMA20>EMA50)')} | "
             f"حجم: {_fvr(vol_r)}"
         )
         if warnings:

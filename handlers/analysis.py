@@ -189,6 +189,10 @@ def _harmonize_llm_text(text, vol_ratio=None, rsi=None):
                     return m.group(1) + fmt_vol_ratio(vr).rstrip("x") + (m.group(3) or "x")
                 return m.group(0)
             out = re.sub(r"((?:نسبة\s+)?(?:الحجم|حجم)[^\d\n]{0,30}?)(\d+\.\d+)(\s*x)?", _v, out)
+        # batch45 (ملاحظة 14): «ضعيف» للحجم تعني <0.5x فقط؛ بين 0.5 و1.0 الوصف الموحّد «أقل من المتوسط»
+        if vr is not None and 0.5 <= vr < 1.0:
+            out = re.sub(r"(حجم(?:\s+التداول)?|الحجم)\s+(?:ال)?ضعيف(?:ة)?", r"\1 أقل من المتوسط", out)
+            out = re.sub(r"(حجم(?:\s+التداول)?|الحجم)\s+الضعيف", r"\1 الأقل من المتوسط", out)
         try:
             r = float(rsi) if rsi is not None else None
         except (TypeError, ValueError):
@@ -261,7 +265,7 @@ def _llm_facts_ctx(sig) -> str:
             bits.append(f"CVD آخر 500 صفقة {float(oc['cvd_pct']):+.1f}% ({str(oc['cvd_signal'])[2:].strip()})")
         fd = t.get("fund_data") or {}
         if isinstance(fd, dict) and fd.get("rate_pct") is not None and (fd.get("source") not in (None, "unknown", "") or float(fd.get("rate_pct") or 0) != 0):
-            bits.append(f"Funding {float(fd['rate_pct']):+.4f}%")
+            bits.append(f"معدل Funding Rate {float(fd['rate_pct']):+.4f}% (ليس CVD)")
         wd = t.get("whale_data") or {}
         wr = wd.get("ratio") if isinstance(wd, dict) else None
         if wr:
@@ -271,10 +275,12 @@ def _llm_facts_ctx(sig) -> str:
             bits.append(f"ADX {float(adx):.0f}")
         vr = t.get("vol_ratio")
         if vr:
-            bits.append(f"الحجم {float(vr):.2f}x من المتوسط")
+            from core.thresholds import volume_word as _vw_b45
+            bits.append(f"الحجم {float(vr):.2f}x من المتوسط ({_vw_b45(vr)} — استخدم هذا الوصف حرفياً)")
         # batch44 (بند 9): CVD/Whale لا يُحتسبان تأكيداً إلا إذا وافقا اتجاه الإشارة — تُنبَّه الفقرة كي لا ترفعهما
         if bits and str(getattr(sig, "direction", "neutral") or "neutral").lower() not in ("long", "short"):
-            bits.append("ملاحظة: CVD وWhale مرصودان للعلم فقط ولا يُحتسبان تأكيداً لأن اتجاه الإشارة محايد")
+            bits.append("ملاحظة: CVD وWhale مرصودان للعلم فقط ولا يُحتسبان تأكيداً لأن اتجاه الإشارة محايد "
+                        "(هذا هو السبب الوحيد، وليس ضعف الحجم)؛ لا تصف أي سيناريو بأنه «الأكثر احتمالاً»")
         return "؛ ".join(bits)
     except Exception:
         return ""
@@ -1221,6 +1227,14 @@ def _build_professional_block(
             _demand_level = min(_demand_level, ns * 0.995)
             # batch30 demand_gap_fix: Demand Zone على بُعد <1.5% من الدعم ليست «دعماً أعمق» ذا معنى
             # (XRKLB: $48.25 مقابل دعم $48.49) — لا نعرض بديلاً بلا فرق عملي.
+            # batch45 (ملاحظة 23): بديل Demand Zone لا يُعرض إن كان على مسافة ≤1% فوق الوقف المتوقع (1.5×ATR تحت الدعم)
+            # (XAUT: Demand $3,957.21 مقابل وقف/إلغاء $3,956.90 فيصبح الدخول بوقف على بُعد 0.01%)
+            try:
+                _sl_proxy = ns * (1 - 1.5 * float(atr_pct) / 100.0) if float(atr_pct) > 0 else 0.0
+            except (TypeError, ValueError):
+                _sl_proxy = 0.0
+            if _sl_proxy > 0 and _demand_level <= _sl_proxy * 1.01:
+                _demand_level = ns  # يُلغي الشرط التالي
             if _demand_level <= ns * 0.985:
                 entry_conds.append(f"4. بديلاً: وصول Demand Zone {_fmt_price(_demand_level)} (دعم أعمق — فقط إن كُسر الدعم أعلاه وظهر ارتداد)")
         # signal_logic_fix: CVD شرط أساسي للدخول
@@ -1505,8 +1519,10 @@ def _build_professional_block(
         _fund_sig = "🟢 سالب (فرصة Long)"
     elif _fund_pct > 0.02:
         _fund_sig = "🔴 مرتفع جداً (ضغط على Longs)"
+    elif _fund_pct > 0.01:
+        _fund_sig = "🟡 إيجابي خفيف"
     elif _fund_pct > 0.005:
-        _fund_sig = "🟡 إيجابي خفيف (محايد)"
+        _fund_sig = "⚪ محايد (إيجابي طفيف)"
     else:
         _fund_sig = _fund.get("signal", "⚪ محايد")
     # Open Interest signal
@@ -1938,8 +1954,10 @@ def _build_professional_block(
                 + ("ضعيف" if _rr_shown < 1.5 else "مقبول لكن دون 2.0")
                 + " (يُفضَّل ≥ 2.0)"
                 # batch40: سبب R/R≈1 البنيوي (هدف 1 من 0.8×ATR مقابل وقف ≥1.5×ATR) بدل تركه لغزاً
-                + (" — الهدف الأول المرجعي أقرب من الوقف فرُفع آلياً إلى 1:1؛ ليس لهذه البنية عائد يفوق المخاطرة"
-                   if (_rr_adjusted_note and _rr_shown <= 1.05) else ""))
+                + ((" — الهدف الأول المرجعي أقرب من الوقف فرُفع آلياً إلى 1:1؛ ليس لهذه البنية عائد يفوق المخاطرة"
+                    if _rr_adjusted_note else
+                    " — الهدف الأول المرجعي بمسافة الوقف تقريباً؛ ليس لهذه البنية عائد يفوق المخاطرة")
+                   if _rr_shown <= 1.05 else ""))
 
     # Worst-Case
     # إصلاح #95: ضمان أن مستويات Worst-Case أعمق من (أو تساوي) SL المعروض،
@@ -2025,7 +2043,7 @@ def _build_professional_block(
         # batch44: «خطر التصحيح» يقيس خطر انعكاس صعود (RSI/حجم) لا استمرار الهبوط — التسمية والمستوى توضحان ذلك
         _rr_lvl = "منخفض" if _reversal_risk < 30 else "متوسط" if _reversal_risk < 60 else "مرتفع"
         _conf_3d_line = (f"• اتجاه السوق: {_conf_trend}% | جودة الدخول: {_conf_entry}% | "
-                         f"خطر تصحيح الصعود (RSI/حجم): {_reversal_risk}% ({_rr_lvl})")
+                         f"خطر تصحيح الصعود (RSI/حجم): {_reversal_risk}% ({_rr_lvl}{' — لا إفراط شراء' if rsi < 50 else ''})")
     except Exception:
         _conf_3d_line = ""
 
@@ -2261,7 +2279,8 @@ def _build_professional_block(
                               if _sz_pct > 0 else "")
 
     entry_lines.extend([
-        f"• وقف الخسارة: {_fmt_price(pro_sl)} (-{_sl_pct_disp:.1f}% من نقطة الدخول)",
+        f"• وقف الخسارة: {_fmt_price(pro_sl)} (-{_sl_pct_disp:.1f}% من "
+        + ("Entry 1" if _entries_distinct else "نقطة الدخول") + ")",
         _rr_line,
         f"• الحجم: {_pos_size_rule}{_atr_position_note}",
     ])
@@ -2405,7 +2424,8 @@ def _build_professional_block(
                      + ("الاتجاه محايد فلا جهة لتأكيدها" if str(direction).lower() not in ("long", "short")
                         else "لا يوافق اتجاه الإشارة") + ")")
     if not _conf_flags and not _flags_ignored:
-        parts.append("  • لا تأكيدات — انتظر 2/4 مؤشرات (حجم + CVD + هيكل + RSI)")
+        parts.append("  • لا تأكيدات — انتظر 2/4 مؤشرات ("
+                     + ("حجم + RSI + CVD + Whale" if _gold_fund_ex else "حجم + RSI + CVD + Whale + Funding سالب") + ")")
     elif not _conf_flags:
         pass
     else:
@@ -2449,7 +2469,8 @@ def _build_professional_block(
     if _whale_ratio >= 1.3 and str(direction).lower() != "long":
         # batch44 (بند 9): Whale لا يُعدّ داعماً إلا إذا وافق اتجاه الإشارة (long)
         _whale_line = (f"◌ Whale Ratio {_whale_ratio:.2f} 🟢 (أغلبية Long — مرصود فقط: "
-                       f"لا يوافق اتجاه الإشارة الحالي)")
+                       + ("الاتجاه محايد فلا جهة لتأكيدها" if str(direction).lower() not in ("long", "short")
+                          else "لا يوافق اتجاه الإشارة الحالي") + ")")
     elif _whale_ratio >= 1.3:
         _whale_line = f"☑ Whale Ratio {_whale_ratio:.2f} 🟢 (أغلبية Long — قد يكون تحوطاً)"
     elif _whale_ratio > 0 and _whale_ratio <= 0.7:
@@ -2474,14 +2495,27 @@ def _build_professional_block(
     else:
         _reclaim_line = "□ دعم غير محدد"
 
+    # batch45 (ملاحظة 2/26): الهيستوغرام في technicals يأتي صفراً دائماً (خط الإشارة المبسّط) فيظهر «+0»؛
+    # للعرض فقط نحسب MACD الحقيقي (12/26/9) من الشموع، ولا نمسّ تسجيل التقني (قرار رحال مطلوب لذلك).
+    _macd_line_b45 = "□ MACD (غير متاح — بيانات غير كافية)"
+    try:
+        from core.indicators import macd_histogram as _mh_b45
+        _cl_b45 = [float(c.get("close", 0)) for c in (candles or []) if isinstance(c, dict) and c.get("close")]
+        _h_b45 = _mh_b45(_cl_b45)
+        if _h_b45 is not None:
+            _hs_b45 = f"{_h_b45:+.4g}" if abs(_h_b45) >= 0.01 else f"{_h_b45:+.2e}"
+            _macd_line_b45 = (f"{'☑' if _h_b45 > 0 else '□'} MACD إيجابي (الهيستوغرام حالياً {_hs_b45}"
+                              f"{' — دون الصفر' if _h_b45 <= 0 else ''})")
+    except Exception:
+        pass
+
     parts.extend([
         "",
         "*📋 Checklist الاستعداد (مؤشرات داعمة للعلم — لا تدخل في تأكيدات 2/4 ولا تؤثر على حجم الصفقة)*",
         _div_line,
         f"{'☑' if _vol_ratio >= 1.5 else '□'} Volume Spike ≥1.5x (حالياً {fmt_vol_ratio(_vol_ratio)})",
         _reclaim_line,
-        f"{'☑' if tech.get('macd_hist', 0) > 0 else '□'} MACD إيجابي"
-        + (f" (الهيستوغرام حالياً {float(tech.get('macd_hist', 0) or 0):+.4g})" if isinstance(tech.get('macd_hist', 0), (int, float)) else ""),
+        _macd_line_b45,
         _whale_line,
         (f"ℹ️ Funding Rate {_fund_pct:+.4f}% — للعلم فقط للذهب (لا يدخل في الثقة ولا التأكيدات)"
          if (_gold_fund_ex and (_fund.get("source") not in (None, "unknown", "") or _fund_pct != 0))
@@ -3059,8 +3093,10 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     _fsig = "🟢 سالب — فرصة Long"
                 elif _fund_pct > 0.02:
                     _fsig = "🔴 مرتفع جداً — ضغط Longs"
+                elif _fund_pct > 0.01:
+                    _fsig = "🟡 إيجابي خفيف"
                 elif _fund_pct > 0.005:
-                    _fsig = "🟡 إيجابي خفيف (محايد)"
+                    _fsig = "⚪ محايد (إيجابي طفيف)"
                 else:
                     _fsig = "⚪ محايد"
                 lines.append(f"• Funding Rate: {_fund_pct:+.4f}% {_fsig}")
@@ -4537,8 +4573,10 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _fsig = "🟢 سالب — فرصة Long"
             elif _fund_pct > 0.02:
                 _fsig = "🔴 مرتفع جداً — ضغط Longs"
+            elif _fund_pct > 0.01:
+                _fsig = "🟡 إيجابي خفيف"
             elif _fund_pct > 0.005:
-                _fsig = "🟡 إيجابي خفيف (محايد)"
+                _fsig = "⚪ محايد (إيجابي طفيف)"
             else:
                 _fsig = "⚪ محايد"
             deriv_lines.append(f"• Funding Rate: {_fund_pct:+.4f}% {_fsig}")
