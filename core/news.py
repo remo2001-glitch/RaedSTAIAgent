@@ -399,6 +399,9 @@ def _strip_mixed_language_artifacts(text: str, price: float = None) -> str:
         w = m.group(1)
         if w.upper() in _TECH_OK or re.fullmatch(r'EMA\d{1,3}', w.upper()):
             return ' ' + w
+        # batch48 (ملاحظة 171): اسم علم (يبدأ بحرف كبير) ملتصق بواو العطف «وPolygon» يُفصَل ويُبقى — كان يُحذف فتبقى جملة «ICE و إلى»
+        if len(w) >= 3 and w[0].isupper() and w[1:].islower():
+            return ' ' + w
         return ' '
     text = re.sub(r'(?<=[\u0600-\u063F\u0641-\u06FF])([a-zA-Z]{2,})(?=[\u0600-\u063F\u0641-\u06FF\s])', _glued_en, text)
     # 3. كلمة إنجليزية ملتصقة بحرف عربي من اليمين
@@ -457,6 +460,8 @@ def _strip_mixed_language_artifacts(text: str, price: float = None) -> str:
             return m.group(0)
     text = re.sub(r'\d+\.?\d*[eE](?P<exp>[-+]?\d+)', _sci_to_decimal, text)
 
+    # batch48 (ملاحظة 172): «BTC (BTC)» تكرار الرمز بين قوسين → «BTC»
+    text = re.sub(r"\b([A-Za-z0-9]{2,10})\s*\(\s*\1\s*\)", r"\1", text)
     return text.strip()
 
 
@@ -676,14 +681,15 @@ class NewsEngine:
             result = await self._call_groq(prompt, GROQ_MODEL)
             if result:
                 result = _clean_news_result(result)
-                result["source"] = f"groq/{GROQ_MODEL}"
+                # batch48 (ملاحظة 170): النموذج الفعلي الذي أجاب (قد يكون بديلاً عند فشل الأول)
+                result["source"] = f"groq/{getattr(self, '_last_groq_model', None) or GROQ_MODEL}"
                 return result
 
             # Fallback: نموذج أصغر وأسرع
             result = await self._call_groq(prompt, GROQ_FALLBACK)
             if result:
                 result = _clean_news_result(result)
-                result["source"] = f"groq/{GROQ_FALLBACK}"
+                result["source"] = f"groq/{getattr(self, '_last_groq_model', None) or GROQ_FALLBACK}"
                 return result
         finally:
             if _temp_session:
@@ -773,6 +779,7 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
                 if result:
                     if _try_model != model:
                         logger.info(f"Groq fallback: نجح {_try_model}")
+                    self._last_groq_model = _try_model
                     return result
             except Exception as _e:
                 _last_error = _e
@@ -1052,7 +1059,7 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
         source = analysis.get("source", "—")
         source_label = (
             "🤖 Groq/GPT-OSS 120B" if "gpt-oss" in source
-            else "🤖 Groq/Llama"    if "groq" in source
+            else (f"🤖 Groq/{source.split('/')[-1]}" if "/" in source else "🤖 Groq") if "groq" in source
             else "📊 تحليل ذاتي"   if "rule" in source
             else source
         )
@@ -1179,7 +1186,7 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
             lines += ["", "⚡ *الأحداث الرئيسية (السلبي أولاً)*",
                       "🔴 سلبي · 🟡 محايد · 🟢 إيجابي — تصنيف آلي بالكلمات المفتاحية"]
             lines += [
-                f"{_news_impact(e)[1]} {_truncate_at_word(_html.unescape(str(e)).replace('_',' ').replace('*',''), 100)}"
+                f"{_news_impact(e)[1]} {_truncate_at_word(_html.unescape(str(e)).replace('_',' ').replace('*',''), 170)}"
                 for e in _sorted_ev if e
             ]
 
@@ -1261,8 +1268,10 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
                             or (_re_news.search(r"\d", _w) and _re_news.search(r"[a-z]", _w) and len(_w) >= 3))
             _shown_tok_sets = [_dist_tokens(e) for e in (events if events else [])]
             _kept_extra = []
-            for _t in extra:
-                _tt = _dist_tokens(_t)
+            # batch48 (ملاحظة 174): المقارنة بالعنوان الإنجليزي الأصلي للخبر الإضافي (الترجمة العربية بلا رموز لاتينية فلا تُطابَق)
+            _raw_for_extra = list(_extra_raw) if len(_extra_raw) == len(extra) else list(extra)
+            for _t, _t_raw_cmp in zip(extra, _raw_for_extra):
+                _tt = _dist_tokens(_t) | _dist_tokens(_t_raw_cmp)
                 if any((len(_tt & _st) >= 2 or any(_strong_tok(_w) for _w in (_tt & _st))) for _st in _shown_tok_sets):
                     continue
                 _kept_extra.append(_t)

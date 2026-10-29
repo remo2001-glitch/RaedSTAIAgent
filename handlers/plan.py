@@ -527,7 +527,17 @@ def _calc_price_forecast(candles: list, days: int = 30,
         ema200 = _ema_last(closes, 200, ema50)
         dow_bull  = price > ema20 > ema50 > ema200   # اتجاه صاعد كامل
         dow_bear  = price < ema20 < ema50 < ema200   # اتجاه هابط كامل
-        trend     = "bullish" if dow_bull else "bearish" if dow_bear else                     "bullish" if ema20 > ema50 else "bearish" if ema20 < ema50 else "neutral"
+        # batch48 (ملاحظة 102): ترتيب جزئي — EMA20>EMA50 لا يعني صعوداً إن كان السعر دون EMA50 (AAVE: «صاعد» والسعر −6.9% دون EMA50)
+        if dow_bull:
+            trend = "bullish"
+        elif dow_bear:
+            trend = "bearish"
+        elif ema20 > ema50:
+            trend = "bullish" if price >= ema50 else "neutral"
+        elif ema20 < ema50:
+            trend = "bearish" if price <= ema50 else "neutral"
+        else:
+            trend = "neutral"
 
         # ── Wyckoff: تحليل الحجم ─────────────────────────────────
         # volume_completed_fix: آخر شمعة مكتملة (core/indicators.py)

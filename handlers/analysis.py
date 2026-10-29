@@ -172,7 +172,7 @@ from core.thresholds import fear_greed_zone as _fgz_an_hdr
 from core.thresholds import DISCLAIMER_LINE as _DISC, synthetic_warning as _synth_warn, commodity_note as _commodity_note, is_commodity_token as _is_commodity
 
 
-def _harmonize_llm_text(text, vol_ratio=None, rsi=None):
+def _harmonize_llm_text(text, vol_ratio=None, rsi=None, cvd_available=None):
     """batch35: توحيد أرقام وتصنيفات نص النموذج مع بقية الرسالة (دون حذف جمل):
     • نسبة الحجم: «1.86» تُعرض كما في بقية الرسالة (1.9x) عبر fmt_vol_ratio.
     • RSI بين 30 و34: «تشبعاً بيعياً/ذروة بيع» تصبح «اقتراباً من ذروة البيع» (الذروة الفعلية دون 30)."""
@@ -210,6 +210,29 @@ def _harmonize_llm_text(text, vol_ratio=None, rsi=None):
                 t = re.sub(r"تشبع(?:اً|ا)?\s+بيعي(?:اً|ا)?", "اقتراباً من ذروة البيع", t)
                 return t
             out = re.sub(r"[^.؟!\n]+[.؟!]?", _sent, out)
+        # batch48: تصحيحات إضافية لأخطاء ظهرت في فقرة /analyze (ملاحظات 94/95/144/145/159)
+        # (1) «تشبع بيعي» مع RSI فوق 34 خطأ — الذروة الفعلية دون 30
+        if r is not None and round(r) >= 35:
+            def _sent2(m):
+                t = m.group(0)
+                if "RSI" not in t and "القوة النسبية" not in t:
+                    return t
+                return re.sub(r"(?:منطقة\s+)?تشبع(?:اً|ا)?\s+بيعي(?:ة)?", "زخم ضعيف دون ذروة البيع", t)
+            out = re.sub(r"[^.؟!\n]+[.؟!]?", _sent2, out)
+        # (2) «1.8x ضعف المتوسط» عبارة ركيكة → «1.8x المتوسط»
+        out = re.sub(r"(\d+(?:\.\d+)?)\s*x\s+ضعف(?:اً)?\s+(?:من\s+)?(?:ال)?متوسط", r"\1x المتوسط", out)
+        # (3) «لا تتجاوز الثقة 40% من الحد المطلوب» تعني أن الثقة نسبة من الحد — المقصود أنها دونه
+        out = re.sub(r"(\d+(?:\.\d+)?)\s*%\s+من\s+الحد\s+المطلوب", r"\1% (دون الحد المطلوب)", out)
+        # (4) CVD غير متاح: لا تُذكر ملاحظة CVD (كانت تُنسب قراءة لمؤشر غير موجود)
+        if cvd_available is False:
+            out = re.sub(r"\s*و(?:ملاحظة\s+)?CVD(?:\s+المرصود[ةه]?)?", "", out)
+            out = re.sub(r"(?:ملاحظة\s+)?CVD\s+و", "", out)
+        # (5) سيناريوهات مرقَّمة لا وجود لها في التقرير («السيناريو الثاني (تصحيح)») → حذف الجملة
+        _sents = re.findall(r"[^.؟!\n]+[.؟!]?", out)
+        _kept = [x for x in _sents if not re.search(r"السيناريو\s+(?:الأول|الثاني|الثالث|الرابع)", x)]
+        if _kept and len(_kept) != len(_sents):
+            out = "".join(_kept)
+        out = re.sub(r" {2,}", " ", out)
         return out
     except Exception:
         return text
@@ -283,9 +306,13 @@ def _llm_facts_ctx(sig) -> str:
             from core.thresholds import volume_word as _vw_b45
             bits.append(f"الحجم {float(vr):.2f}x من المتوسط ({_vw_b45(vr)} — استخدم هذا الوصف حرفياً)")
         # batch44 (بند 9): CVD/Whale لا يُحتسبان تأكيداً إلا إذا وافقا اتجاه الإشارة — تُنبَّه الفقرة كي لا ترفعهما
+        _cvd_av_b48 = bool(isinstance(oc, dict) and oc.get("cvd_signal") and oc.get("cvd_pct") is not None)
+        if bits and not _cvd_av_b48:
+            bits.append("CVD غير متاح الآن — لا تذكره ولا تنسب له أي قراءة")
         if bits and str(getattr(sig, "direction", "neutral") or "neutral").lower() not in ("long", "short"):
-            bits.append("ملاحظة: CVD وWhale مرصودان للعلم فقط ولا يُحتسبان تأكيداً لأن اتجاه الإشارة محايد "
-                        "(هذا هو السبب الوحيد، وليس ضعف الحجم)؛ لا تصف أي سيناريو بأنه «الأكثر احتمالاً»")
+            bits.append("ملاحظة: " + ("CVD وWhale" if _cvd_av_b48 else "Whale") + (" مرصودان" if _cvd_av_b48 else " مرصود") + " للعلم فقط ولا يُحتسبان تأكيداً لأن اتجاه الإشارة محايد "
+                        "(هذا هو السبب الوحيد، وليس ضعف الحجم)؛ لا تصف أي سيناريو بأنه «الأكثر احتمالاً» "
+                        "ولا تُرقِّم السيناريوهات («الأول/الثاني») ولا تقل «تشبع بيعي» ما لم يكن RSI دون 30")
         return "؛ ".join(bits)
     except Exception:
         return ""
@@ -336,7 +363,7 @@ def _guard_llm_claims(text, meta, regime_desc="", rsi=None):
             price=meta.get("price"), fear_greed=meta.get("fear_greed"))
         if n:
             logger.info(f"llm_claims_guard: حُذفت {n} جملة تناقض التقرير")
-        return _harmonize_llm_text(out, vol_ratio=meta.get("vol_ratio"), rsi=rsi)
+        return _harmonize_llm_text(out, vol_ratio=meta.get("vol_ratio"), rsi=rsi, cvd_available=meta.get("cvd_available"))
     except Exception:
         return text
 
@@ -1077,7 +1104,7 @@ def _build_professional_block(
     if adx > 45:
         reasons.append(f"• ADX = {adx:.0f} → اتجاه قوي جداً — خطر الدخول مرتفع")
     if macd_hist < 0:
-        reasons.append("• MACD سالب (sellers مسيطرون)")
+        reasons.append("• MACD سالب (البائعون مسيطرون)")
     elif macd_hist > 0:
         reasons.append("• MACD موجب (زخم شراء)")
     # rsi_display_rounding_fix: int() كان يبتر الكسر (70.6→"70") بينما رأس
@@ -1118,6 +1145,7 @@ def _build_professional_block(
 
     # شروط الدخول (للانتظار فقط)
     entry_conds = []
+    _demand_b48 = 0.0
     if conf < 0.65 or direction == "neutral":
         # M#117: شرط RSI بناءً على القيمة الحالية
         # إصلاح #470/#481: الشرط الأول يستخدم أقرب مستوى حقيقي
@@ -1241,6 +1269,7 @@ def _build_professional_block(
             if _sl_proxy > 0 and _demand_level <= _sl_proxy * 1.01:
                 _demand_level = ns  # يُلغي الشرط التالي
             if _demand_level <= ns * 0.985:
+                _demand_b48 = _demand_level
                 entry_conds.append(f"4. بديلاً: وصول Demand Zone {_fmt_price(_demand_level)} (دعم أعمق — فقط إن كُسر الدعم أعلاه وظهر ارتداد)")
         # signal_logic_fix: CVD شرط أساسي للدخول
         # entry_cond_satisfied_fix: إن كان CVD محايداً/إيجابياً فعلاً نعرضه ✅ بدل شرط معلّق
@@ -1881,6 +1910,24 @@ def _build_professional_block(
                 _cap_b40 = 0.93 if _is_x_asset else 0.90
                 pro_sl = max(_min_sl_b40, price * _cap_b40)
                 sl_pct = abs(_sl_base_price - pro_sl) / max(_sl_base_price, 1e-9) * 100
+    except Exception:
+        pass
+
+    # batch48 (ملاحظة 151): بديل Demand Zone لا يُعرض إن كان عند الوقف المعروض أو تحته (كان الحارس يقارن بالوقف الموصى لا المعروض)
+    try:
+        if _demand_b48 > 0 and pro_sl > 0 and _demand_b48 <= pro_sl * 1.01:
+            _dz_idx = [i for i, p in enumerate(parts) if isinstance(p, str) and "Demand Zone" in p and "بديلاً" in p]
+            if _dz_idx:
+                for i in reversed(_dz_idx):
+                    parts.pop(i)
+                _hdr = [i for i, p in enumerate(parts) if isinstance(p, str) and "متى تدخل" in p]
+                if _hdr:
+                    _n = 1
+                    for i in range(_hdr[0] + 1, len(parts)):
+                        if not (isinstance(parts[i], str) and re.match(r"^\d+\.\s", parts[i])):
+                            break
+                        parts[i] = re.sub(r"^\d+\.\s*", f"{_n}. ", parts[i], count=1)
+                        _n += 1
     except Exception:
         pass
 
@@ -2560,8 +2607,13 @@ def _build_professional_block(
         "decision_label": locals().get("_decision_label", ""),
         "price": price,
         "fear_greed": (getattr(regime, "metrics", None) or {}).get("fear_greed") if regime is not None else None,
+        "cvd_available": bool(_cvd_oc_f.get("cvd_signal")) if isinstance(_cvd_oc_f, dict) else None,
     }
-    return "\n".join(parts), _free_warning, _signal_meta
+    _final_txt_b48 = "\n".join(parts)
+    # batch48 (ملاحظات 70/98/123/148): تباعد أسطر ثابت — لا أكثر من سطر فارغ، وسطر فارغ قبل «السيناريوهات»
+    _final_txt_b48 = re.sub(r"\n{3,}", "\n\n", _final_txt_b48)
+    _final_txt_b48 = re.sub(r"([^\n])\n(\*?📋 \*?السيناريوهات)", r"\1\n\n\2", _final_txt_b48)
+    return _final_txt_b48, _free_warning, _signal_meta
 
 DEFAULT_SYMBOLS = ["BTC", "ETH", "BNB", "SOL"]
 
@@ -3247,6 +3299,12 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _d_defi = _jj.loads(await asyncio.get_running_loop().run_in_executor(None, _defi_get)).get("data", {})
                 _defi_dom = float(_d_defi.get("defi_dominance", 0) or 0)
                 _defi_mcap = float(_d_defi.get("defi_market_cap", 0) or 0)
+                # batch48 (ملاحظة 179): النسبة تُحسب من الرقمين المعروضين نفسيهما (كانت من حقل مستقل = 4.2% مقابل 119B÷2.73T=4.36%)
+                try:
+                    if _defi_mcap > 0 and _total_mcap and float(_total_mcap) > 0:
+                        _defi_dom = _defi_mcap / float(_total_mcap) * 100.0
+                except Exception:
+                    pass
                 if _defi_dom:
                     _macro_lines.append(
                         f"• حصة DeFi من إجمالي السوق: {_defi_dom:.1f}% "
@@ -4600,7 +4658,7 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # F3: Order Flow Score + توصية محسّنة
         _imb = getattr(profile, "imbalance", 0.5)
-        _ofs = int(_imb * 100)
+        _ofs = int(round(_imb * 100))  # batch48: تقريب (كان يقتطع فيظهر 52% بجانب 53%)
         _ofs_bars = int(_ofs / 10)
         _ofs_bar  = "█" * _ofs_bars + "░" * (10 - _ofs_bars)
         # ofs_label_consistency_fix: كان "حصة الشراء 43%" تُوصَف "ضغط بيع خفيف" في
@@ -4618,7 +4676,7 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif _ofs < 48 or _ofs > 52:
             _reco.append("ميل خفيف في الـ Order Book — لا يكفي وحده، انتظر اتجاهاً واضحاً")
         else:
-            _reco.append("تدفق متوازن — انتظر اتجاهاً واضحاً")
+            _reco.append("دفتر أوامر متوازن — انتظر اتجاهاً واضحاً")
         if _fund_pct < -0.01:
             _reco.append("Funding سالب يدعم سيناريو ارتداد Long")
         elif _fund_pct > 0.02:
@@ -5393,6 +5451,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # DD1/BB1b/EE2 (#1891/#1905/#1922): فحص جودة البيانات في /analyze
         _atr_an     = _calc_atr(candles)
         _pve50_an   = 0.0
+        _ema50_corrupted = False  # batch48: كان غير معرَّف عند <50 شمعة
         if len(candles) >= 50:
             try:
                 _cls_an = [float(c.get("close", 0)) for c in candles if c.get("close")]
@@ -5401,7 +5460,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _e50_an = _e50_an_raw if _e50_an_raw <= price * 3.0 else price
                 _pve50_an = (price - _e50_an) / max(_e50_an, 0.0001) * 100 if _e50_an > 0 else 0.0
                 # FF3 (#2082): كشف الفساد من EMA50_raw (قبل cap)
-                _ema50_corrupted = (_e50_an_raw > price * 3.0)
+                _ema50_corrupted = (_e50_an_raw > price * 1.30)  # batch48: نفس معيار /signal (T4_fix) — كان 3.0 فيغيب تحذير الانهيار من /analyze
             except Exception:
                 _ema50_corrupted = False
         _data_corrupted_an = (_atr_an > 25 or rsi < 5 or _pve50_an < -50 or _ema50_corrupted)
