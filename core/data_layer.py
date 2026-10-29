@@ -2011,6 +2011,11 @@ class DataLayer:
                     and not (_sym_raw.startswith("X") and len(_sym_raw) > 2
                              and _sym_raw not in REAL_CRYPTO_X_TICKERS)):
                 _urls_cvd.insert(0, f"https://www.okx.com/api/v5/market/trades?instId={_sym_raw}-USDT-SWAP&limit=500")
+            # batch47: الأصل ذو الاسم الخاص (XAUt) رفضته OKX (51001) في الصفقات → نجرّب الاسم العادي XAUT-USDT كبديل
+            if _sym_raw in _OKX_SPOT_ALIASES:
+                _alt_cvd = f"https://www.okx.com/api/v5/market/trades?instId={_sym_raw}-USDT&limit=500"
+                if _alt_cvd not in _urls_cvd:
+                    _urls_cvd.append(_alt_cvd)
             import asyncio as _aio_cvd
             _loop_cvd = _aio_cvd.get_event_loop()
             def _fetch_cvd(_u):
