@@ -169,11 +169,19 @@ def _asset_regime(engine, sym, candles, btc_regime, fear_val, btc_dom=50.0):
 
 
 
+def _trim_zeros_b49(price: float) -> str:
+    """4 منازل ثم حذف الأصفار الزائدة مع إبقاء منزلتين على الأقل (9.6000 → 9.60، 9.6123 يبقى)."""
+    t = f"{price:,.4f}"
+    ip, fp = t.split(".")
+    fp = fp.rstrip("0").ljust(2, "0")
+    return f"{ip}.{fp}"
+
+
 def _fmt_price(price: float) -> str:
     """تنسيق السعر حسب حجمه — يعرض الأرقام المهمة دائماً."""
     if price <= 0:       return "$0"
     elif price >= 10:    return f"${price:,.2f}"
-    elif price >= 1:     return f"${price:,.4f}"
+    elif price >= 1:     return "$" + _trim_zeros_b49(price)  # batch49 (قرار 18)
     elif price >= 0.01:  return f"${price:.6f}"
     elif price >= 0.001: return f"${price:.7f}"
     elif price >= 1e-6:  return f"${price:.8f}"
@@ -435,7 +443,8 @@ def _clean(text: str) -> str:
         if i % 2 == 0:   # خارج bold
             part = part.replace("_", " ").replace("`", "'")
         result.append(part)
-    return "*".join(result)
+    # batch49: لا أكثر من سطر فارغ واحد في رسائل الخطط (كان سطران قبل «تنبؤ»)
+    return re.sub(r"\n{3,}", "\n\n", "*".join(result))
 
 def _plan_atr(candles: list, reg=None) -> float:
     """batch38: مصدر ATR% واحد للخطط = مقياس نظام الأصل (نفس ما يعرضه /market و/signal)،
@@ -633,6 +642,7 @@ def _calc_price_forecast(candles: list, days: int = 30,
             "fear_greed":   fear_greed,
             "btc_dom":      btc_dominance,
             "vol_ratio":    round(vol_ratio, 2),
+            "vol_candle":   (lambda: __import__("core.indicators", fromlist=["volume_candle_date"]).volume_candle_date(candles))(),
             "wyckoff":      wyckoff_confirm,
             "bull_case":    round(bull_case, 8),
             "base_case":    round(base_case, 8),
@@ -697,16 +707,17 @@ def _format_forecast_ar(symbol: str, price: float, fc: dict, days: int = 30) -> 
         f"🔮 *تنبؤ {symbol} — {days} يوم القادمة*",
         "━━━━━━━━━━━━━━━━━━",
         # batch44: التسمية توضح أن الاتجاه من ترتيب EMA20/50/200 (متأخر) لا من إشارة الدخول
-        f"• الاتجاه (ترتيب EMA): {trend_ar} | ثقة الاتجاه: {conf_bar} {conf:.0%}",
+        f"• الاتجاه (ترتيب EMA): {trend_ar} | قوة ترتيب EMA: {conf_bar} {conf:.0%}",
         f"• RSI: {fc.get('rsi',50):.0f} | ATR: {_fmt_atr_pct(fc.get('atr_pct',0))}%",
         (f"• Fear&Greed: {fc.get('fear_greed',50)} | BTC Dom: {fc.get('btc_dom',50):.0f}%"
          if not _is_commodity_fc(symbol) else
          f"• Fear&Greed: {fc.get('fear_greed',50)} | BTC Dom: {fc.get('btc_dom',50):.0f}% (مرجع للسوق الرقمي فقط — لا يخص الذهب)"),
         (f"• 🔊 حجم مرتفع (Wyckoff ✅) ({fc.get('vol_ratio',0):.2f}x)" if fc.get('wyckoff')
-         else f"• 🔇 حجم {_vol_word(fc.get('vol_ratio', 1.0))} ({fc.get('vol_ratio',0):.2f}x)"),
+         else f"• {'🔊' if float(fc.get('vol_ratio', 1.0) or 0) >= 1.2 else ('🔇' if float(fc.get('vol_ratio', 1.0) or 0) < 0.8 else '🔉')} حجم {_vol_word(fc.get('vol_ratio', 1.0))} ({fc.get('vol_ratio',0):.2f}x)"),
         "",
         f"📊 *السيناريوهات الـ {days} يوم:*",
-        f"  🟢 متفائل (Elliott 5): {p_fmt(bull)} ({bull_pct:+.1f}%)",
+        (f"  🟢 متفائل (Elliott 5): {p_fmt(bull)} ({bull_pct:+.1f}%)"
+         + (" — ⚠️ احتمال ضعيف: ضد الاتجاه الهابط" if fc.get("trend") == "bearish" else "")),
         f"  🟡 محتمل (Base):       {p_fmt(base)} ({base_pct:+.1f}%)",
         f"  🔴 متحفظ (Bear):       {p_fmt(bear)} ({bear_pct:+.1f}%)",
         "",
@@ -1406,14 +1417,16 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _pm_range_txt = ""
         lines += [
             # regime_3way_fix: تصنيف ثلاثي
-            (f"السوق (مرجع BTC): {regime.description_ar}"
+            ("السوق: يختلف حسب الأصل (انظر نظام كل أصل أدناه)"  # batch49 (قرار 9): لا مرجع BTC للأصول المُرمَّزة/الذهب
+             if (symbols and all(_non_crypto_sym(str(_s).upper()) for _s in symbols))
+             else f"السوق (مرجع BTC): {regime.description_ar}"
              if any(str(_s).upper() != "BTC" for _s in (symbols or []))
              else f"السوق: {regime.description_ar}")
-            + (" — ⚠️ RSI={:.0f} ذروة شراء، لا مطاردة السعر".format(_rsi_btc)
+            + ("" if (symbols and all(_non_crypto_sym(str(_s).upper()) for _s in symbols)) else (" — ⚠️ RSI={:.0f} ذروة شراء، لا مطاردة السعر".format(_rsi_btc)
                if _rsi_btc >= 70
                else " — انتظر تأكيد خروج السعر من النطاق" + _pm_range_txt
                if "جانبي" in regime.description_ar or "تذبذب" in regime.description_ar
-               else ""),
+               else "")),
             # regime_conf_hidden (بند 9): «ثقة تشخيص الاتجاه» ثابتة ~82% عبر أنظمة متعاكسة
             # فتُضلِّل؛ مخفية حتى تُراجَع معادلتها.
             f"Fear & Greed: {fear_val} — {_fgz_pm(fear_val)[0]}",
@@ -1492,7 +1505,7 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # batch35: نظام الأصل نفسه إن اختلف عن نظام السوق المرجعي (BTC) — XAUT هابط بينما مرجع BTC جانبي
                 try:
                     _ra_pm = str((cand or {}).get("regime_ar", "") or "")
-                    if _ra_pm and sym_p.upper() != "BTC" and _ra_pm != str(regime.description_ar):
+                    if _ra_pm and sym_p.upper() != "BTC" and (_ra_pm != str(regime.description_ar) or _non_crypto_sym(sym_p)):
                         _adx_pm = float((cand or {}).get("adx", 0) or 0)
                         line += f"\n    🌍 نظام الأصل نفسه: {_ra_pm}" + (f" (ADX {_adx_pm:.0f})" if _adx_pm > 0 else "")
                 except Exception:
@@ -1788,7 +1801,9 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     except Exception:
                         pass
                     lines.append(f"  📍 الآن ({_sym_now}): RSI = {float(_now_fc.get('rsi', 0)):.0f} | "
-                                 f"حجم = {_fvr_pm(float(_now_fc.get('vol_ratio', 0)))}{_now_extra}")
+                                 f"حجم = {_fvr_pm(float(_now_fc.get('vol_ratio', 0)))}"
+                                 + (f" (شمعة {_now_fc.get('vol_candle')})" if _now_fc.get('vol_candle') else "")
+                                 + f"{_now_extra}")
                     # batch31: حكم صريح — شرطا RSI/الحجم في المصفوفة قد يتحققان بينما الثقة دون حد الدخول (BTC: 46% < 55%)
                     # فكان المستخدم يقرأ «🟢 دخول 50%» ثم «الآن RSI 47 حجم 1.04x» دون حكم. وروابط الوقف/الأهداف في /signal.
                     _tier_vd = _sm.get_tier(update.effective_user.id) if update.effective_user else "silver"
@@ -2199,6 +2214,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append("")  # سيُستبدَل لاحقاً بالقرار الفعلي بعد الحلقة
         lines.append("")
 
+        _pw_asset_reg_ar = {}  # batch49: نظام كل أصل (للأصول المُرمَّزة/الذهب بدل مرجع BTC)
         _buy_signals = []  # إصلاح #382: تجميع إشارات الشراء
         _pw_qualified_count = 0  # weekly_decision_qualified_check_fix
         _pw_changes = []  # breadth_note: تغيّر 24س لكل عملة
@@ -2234,6 +2250,10 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # إصلاح #34: whale_ratio/funding خاص بكل عملة بدل TVL عالمي ثابت
                 _onchain_e = await engine.data_layer.get_signal_enrichment(_plan_enrich_sym(sym), onchain, mkttype=_mk_pw)
                 _reg_a = _asset_regime(engine, sym, candles, regime, fear_val, await _plan_btc_dom(engine))
+                try:
+                    _pw_asset_reg_ar[str(sym).upper()] = str(getattr(_reg_a, "description_ar", "") or "")
+                except Exception:
+                    pass
                 signal   = engine.signal_layer.generate_snapshot(
                     symbol=sym, candles=candles, onchain_data=_onchain_e,
                     news_sentiment=_plan_sym_sentiment(sym, news_sentiment),
@@ -2732,6 +2752,23 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # عدد العملات المؤهلة فعلياً (_pw_qualified_count) لا فقط الـRegime
         # العام والخوف والطمع. لا نُظهر "يمكن الدخول بحجم طبيعي" أبداً إن
         # كان العدد صفراً، بصرف النظر عن قوة الاتجاه العام المُشخَّص.
+        # batch49 (قرار 9): الأصل المُرمَّز/الذهب لا يُوصَف بسوق BTC — يُعرض نظامه هو (أو «حسب الأصل» لعدة أصول)
+        _pw_ref_lbl = "السوق المرجعي BTC"
+        try:
+            if _pw_all_tok:
+                _mk_i = next((k for k, l_ in enumerate(lines) if isinstance(l_, str) and l_.startswith("السوق")), None)
+                _own = [v for v in _pw_asset_reg_ar.values() if v]
+                if len(symbols) == 1 and _own:
+                    _regime_ar = _own[0]
+                    _pw_ref_lbl = "سوق الأصل نفسه"
+                    if _mk_i is not None:
+                        lines[_mk_i] = f"السوق (الأصل نفسه): {_regime_ar}"
+                elif len(symbols) > 1:
+                    _pw_ref_lbl = "السوق"
+                    if _mk_i is not None:
+                        lines[_mk_i] = "السوق: يختلف حسب الأصل (انظر كل أصل أدناه)"
+        except Exception:
+            pass
         if _pw_qualified_count == 0:
             if fear_val <= 20 and "هابط" in _regime_ar:
                 _pw_decision = "🚨 *لا دخول* — خوف شديد + سوق هابط"
@@ -2740,9 +2777,9 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 _btc_only_pw = (len(symbols) == 1 and str(symbols[0]).upper() == "BTC")
                 _pw_decision = (("⚪ *انتظار* — الأصل لا يستوفي شروط الدخول بعد" if _btc_only_pw
-                                 else f"⚪ *انتظار* — الأصل لا يستوفي شروط الدخول بعد (السوق المرجعي BTC: {_regime_ar})")
+                                 else f"⚪ *انتظار* — الأصل لا يستوفي شروط الدخول بعد ({_pw_ref_lbl}: {_regime_ar})")
                                 if len(symbols) == 1 else
-                                f"⚪ *انتظار* — لا عملة تستوفي الشروط بعد (السوق المرجعي BTC: {_regime_ar})")
+                                f"⚪ *انتظار* — لا عملة تستوفي الشروط بعد ({_pw_ref_lbl}: {_regime_ar})")
         elif _pw_qualified_count >= 3:
             _pw_decision = f"✅ *يمكن الدخول بحجم طبيعي* — {_pw_qualified_count} عملات مؤهلة"
         else:

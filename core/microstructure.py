@@ -42,6 +42,7 @@ class LiquidityProfile:
     is_tradeable:            bool
     warnings:                List[str]    = field(default_factory=list)
     source:                  str          = "unknown"
+    book_slip:               Optional[Dict] = None   # batch49: انزلاق شراء فعلي من عمق الدفتر {حجم$: % أو None إن تجاوز العمق}
 
 
 @dataclass
@@ -649,6 +650,30 @@ class MicrostructureLayer:
             logger.warning(f"_compute_walls_from_levels ({symbol}): {e}")
             return OrderFlowSignal(symbol, [], [], 0, 0, 0)
 
+    @staticmethod
+    def _walk_book_slip(asks: list, sizes=(1000, 10000, 50000), depth_levels: int = 20) -> Optional[Dict]:
+        """batch49 (قرار 16): انزلاق شراء فعلي بمسح مستويات البيع: (متوسط سعر التنفيذ − أفضل ask) ÷ أفضل ask.
+        يُرجع None للحجم الذي يتجاوز عمق أول 20 مستوى (لا نُخمّن)."""
+        try:
+            lv = [(float(a[0]), float(a[1])) for a in asks[:depth_levels] if float(a[0]) > 0 and float(a[1]) > 0]
+            if not lv:
+                return None
+            best = lv[0][0]
+            out = {}
+            for sz in sizes:
+                rem, qty, val = float(sz), 0.0, 0.0
+                for p_, q_ in lv:
+                    used = min(rem, p_ * q_)
+                    val += used
+                    qty += used / p_
+                    rem -= used
+                    if rem <= 1e-9:
+                        break
+                out[sz] = None if rem > 1e-6 or qty <= 0 else round(max((val / qty - best) / best * 100, 0.0), 4)
+            return out
+        except Exception:
+            return None
+
     def _build_profile_from_walls(self, symbol: str, walls,
                                    bids: list, asks: list,
                                    order_size_usd: float) -> "LiquidityProfile":
@@ -694,6 +719,7 @@ class MicrostructureLayer:
                 is_tradeable=(score > 0.3 and min(total_bid, total_ask) >= 25_000),
                 warnings=warnings_,
                 source="exchange",
+                book_slip=self._walk_book_slip(asks),
             )
         except Exception as e:
             logger.warning(f"_build_profile_from_walls ({symbol}): {e}")

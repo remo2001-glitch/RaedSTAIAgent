@@ -180,6 +180,18 @@ def _harmonize_llm_text(text, vol_ratio=None, rsi=None, cvd_available=None):
         if not text:
             return text
         out = str(text)
+        # batch49 (ملاحظة 195): أرقام خام بأكثر من 4 منازل (17.563876) تُعرض بتنسيق السعر الموحّد
+        def _rd49(m):
+            try:
+                v = float(m.group(0))
+            except ValueError:
+                return m.group(0)
+            if v >= 10:
+                return f"{v:,.2f}"
+            if v >= 1:
+                return _trim_zeros_b49(v)
+            return m.group(0)
+        out = re.sub(r"(?<![\d.,])\d{1,6}\.\d{5,}(?![\d])", _rd49, out)
         try:
             vr = float(vol_ratio) if vol_ratio is not None else None
         except (TypeError, ValueError):
@@ -345,7 +357,7 @@ def _analyze_summary_lines(sig, meta, regime_obj) -> list:
         if strs:
             _m = {"mean_reversion": "ارتداد للمتوسط", "reduce_exposure": "تقليل التعرض",
                   "trend_following": "اتباع الاتجاه", "breakout": "اختراق",
-                  "arbitrage": "موازنة أسعار", "volatility_expansion": "توسّع التقلب",
+                  "arbitrage": "تداول داخل النطاق", "volatility_expansion": "توسّع التقلب",
                   "reduce_size": "تقليل الحجم", "on_chain_accumulation": "تجميع على السلسلة"}
             out.append("🧭 الاستراتيجية الموصى بها: " + " · ".join(_m.get(str(x), str(x).replace("_", " ")) for x in strs))
     except Exception:
@@ -674,13 +686,21 @@ def _fmt_rr(rr: float) -> str:
     return f"{rr:.1f}"
 
 
+def _trim_zeros_b49(price: float) -> str:
+    """4 منازل ثم حذف الأصفار الزائدة مع إبقاء منزلتين على الأقل (9.6000 → 9.60، 9.6123 يبقى)."""
+    t = f"{price:,.4f}"
+    ip, fp = t.split(".")
+    fp = fp.rstrip("0").ljust(2, "0")
+    return f"{ip}.{fp}"
+
+
 def _fmt_price(price: float, quote: str = "USDT") -> str:
     """تنسيق السعر حسب حجمه ووحدة التسعير (تطوير #188).
     quote="USDT" (افتراضي): السلوك الأصلي تماماً — "$X"."""
     if quote == "USDT":
         if price <= 0:      return "$0"
         elif price >= 10:   return f"${price:,.2f}"
-        elif price >= 1:    return f"${price:,.4f}"
+        elif price >= 1:    return "$" + _trim_zeros_b49(price)  # batch49 (قرار 18): بلا أصفار زائدة ($9.6000 → $9.60)
         elif price >= 0.01: return f"${price:.6f}"
         elif price >= 0.001:return f"${price:.7f}"   # batch32: ≥5 أرقام معنوية ($0.001010 كان بأربعة)
         elif price >= 1e-6: return f"${price:.8f}"
@@ -1904,11 +1924,13 @@ def _build_professional_block(
             # تتبع السعر الحي فيتحرك الوقف والأهداف مع كل استدعاء رغم ثبات Entry 1 (BTC: 76,094 ثم 76,006 خلال 10 دقائق).
             if (not _sl_from_fib_b41) and pro_sl < _min_sl_b40:
                 _cap_b41 = 0.93 if _is_x_asset else 0.90
-                pro_sl = max(_min_sl_b40, price * _cap_b41)
+                # batch49 (قرار 1): سقف الوقف يُحسب من الدخول المعروض لا من السعر الحي
+                # (XKORU: الدخول أدنى من السعر بـ6% فكان الوقف −1.4% من الدخول وR/R 9.7–11.8)
+                pro_sl = max(_min_sl_b40, entry_agg * _cap_b41)
                 sl_pct = abs(_sl_base_price - pro_sl) / max(_sl_base_price, 1e-9) * 100
             elif pro_sl > _min_sl_b40:
                 _cap_b40 = 0.93 if _is_x_asset else 0.90
-                pro_sl = max(_min_sl_b40, price * _cap_b40)
+                pro_sl = max(_min_sl_b40, entry_agg * _cap_b40)
                 sl_pct = abs(_sl_base_price - pro_sl) / max(_sl_base_price, 1e-9) * 100
     except Exception:
         pass
@@ -2129,8 +2151,16 @@ def _build_professional_block(
             _vp_txt += f" — شمعة اليوم الجارية بوتيرة ≈ {fmt_vol_ratio(_pace)} (النسبة أعلاه لآخر يوم مكتمل)"
     except Exception:
         pass
+    try:
+        from core.indicators import volume_candle_date as _vcd49
+        _vd49 = _vcd49(candles)
+        if _vd49:
+            _vp_txt += f" — شمعة {_vd49}"
+        logger.info(f"vol_ratio: {_vol_ratio:.3f} candle={_vd49} n={len(candles or [])}")
+    except Exception:
+        pass
     smc_lines.append(f"• Volume Profile (نسبة الحجم لمتوسط 20 شمعة يومية — OKX): {_vp_txt}")
-    _bb_frame_lbl = " (4H)" if (isinstance(tech, dict) and tech.get("bb_frame") == "4H") else ""
+    _bb_frame_lbl = (f" (4H — شموع {tech.get('bb_mkt')})" if tech.get("bb_mkt") else " (4H)") if (isinstance(tech, dict) and tech.get("bb_frame") == "4H") else ""
     smc_lines.append(f"• Bollinger Bands{_bb_frame_lbl}: {_get_bb_status_ar(_bb_pos_v)}")
     if _atr_val:
         # EE5 (#1990/#2027): format ذكي للـ ATR — للأسعار الصغيرة (< $1) نستخدم منازل عشرية
@@ -2148,7 +2178,7 @@ def _build_professional_block(
                 smc_lines.append(
                     f"• ADX: {float(_m15.get('adx', 0) or 0):.0f} "
                     f"(+DI: {float(_dp15):.0f} / -DI: {float(_dm15):.0f}) — "
-                    f"{_RD15._di_dir_label(_dp15, _dm15)}")
+                    f"{_RD15._di_dir_label(_dp15, _dm15, _m15.get('adx'))}")
                 _note15 = _RD15._di_conflict_note(regime, _m15).strip("\n")
                 if _note15:
                     smc_lines.append(_note15)
@@ -2177,7 +2207,9 @@ def _build_professional_block(
         # batch31: نفس تحفظ «قد يكون تحوطاً» المعروض في التأكيدات والـ Checklist (كان غائباً هنا فقط)
         _whale_note_pro = " — قد يكون تحوطاً" if "Long" in str(_whale_sig) else ""
         if _whale_ratio > 0:
-            deriv_lines.append(f"• Whale Ratio{_wr_txt}: {_whale_sig}{_whale_note_pro}")
+            # batch49 (قرار 11): المصدر نسبة حسابات Long/Short على OKX (ليست محافظ حيتان) — يُوضَّح للأصول المُرمَّزة/الذهب
+            _whale_src_b49 = " — مصدر: نسبة حسابات Long/Short في OKX (ليست محافظ حيتان)" if (_is_x_asset or _is_commodity(symbol)) else ""
+            deriv_lines.append(f"• Whale Ratio{_wr_txt}: {_whale_sig}{_whale_note_pro}{_whale_src_b49}")
         else:
             deriv_lines.append("• Whale Ratio: ⚪ غير متاح (لا بيانات لهذا الأصل)")
     # TVL من On-chain data
@@ -2495,7 +2527,17 @@ def _build_professional_block(
                 if _cvd_m < 20.0:
                     _miss.append(f"CVD شراء ≥ +20% (حالياً {_cvd_m:+.1f}%)")
             if rsi >= 30:
-                _miss.append(f"RSI < 30 (حالياً {rsi:.0f})")
+                # batch49 (قرار 14): إن كان RSI 4H دون 30 نذكره (الشرط يُقاس على اليومي؛ 4H للعلم)
+                _r4_m = None
+                try:
+                    _c4_m = tech.get("candles_4h") or []
+                    if len(_c4_m) >= 15:
+                        _r4_m = _calc_rsi_from_closes([float(c.get("close", 0)) for c in _c4_m if c.get("close")])
+                except Exception:
+                    _r4_m = None
+                _miss.append(f"RSI < 30 (حالياً {rsi:.0f} يومي"
+                             + (f"؛ 4H = {_r4_m:.0f} دون 30 لكنه لا يُحتسب كتأكيد" if (_r4_m and 0 < _r4_m < 30) else "")
+                             + ")")
             if not _cvd_oc_m.get("cvd_signal"):
                 _miss.append("CVD غير متاح الآن (لا يمكن التحقق منه)")
             if (_fund_pct >= -0.01 and not _gold_fund_ex
@@ -2551,9 +2593,8 @@ def _build_professional_block(
     # للعرض فقط نحسب MACD الحقيقي (12/26/9) من الشموع، ولا نمسّ تسجيل التقني (قرار رحال مطلوب لذلك).
     _macd_line_b45 = "□ MACD (غير متاح — بيانات غير كافية)"
     try:
-        from core.indicators import macd_histogram as _mh_b45
-        _cl_b45 = [float(c.get("close", 0)) for c in (candles or []) if isinstance(c, dict) and c.get("close")]
-        _h_b45 = _mh_b45(_cl_b45)
+        from core.indicators import macd_histogram_completed as _mh_b45
+        _h_b45 = _mh_b45(candles)  # batch49: من الشموع المكتملة، نفس مصدر تسجيل التقني
         if _h_b45 is not None:
             import math as _m46
             _dec46 = 4 if abs(_h_b45) >= 1 else (2 - int(_m46.floor(_m46.log10(abs(_h_b45)))) if _h_b45 else 2)
@@ -2618,6 +2659,22 @@ def _build_professional_block(
 DEFAULT_SYMBOLS = ["BTC", "ETH", "BNB", "SOL"]
 
 
+def _tidy_msg_b49(text: str) -> str:
+    """batch49: تنظيف نهائي موحّد قبل الإرسال — (1) لا أكثر من سطر فارغ واحد، (2) سطر فارغ قبل «السيناريوهات»،
+    (3) حذف سطر «⚠️ RSI 4H=NN ذروة …» السفلي إن ظهرت القراءة نفسها ضمن الأسباب."""
+    try:
+        t = str(text or "")
+        for m in re.finditer(r"• RSI 4H = (\d+) ذروة (شراء|بيع)", t):
+            t = re.sub(r"\n+⚠️ RSI 4H=" + m.group(1) + r" ذروة " + m.group(2) + r"[^\n]*", "", t)
+        t = re.sub(r"[ \t]+\n", "\n", t)
+        t = re.sub(r"\n{3,}", "\n\n", t)
+        t = re.sub(r"([^\n])\n(\*?📋 \*?السيناريوهات)", r"\1\n\n\2", t)
+        t = re.sub(r"([^\n])\n(\*?🔑 \*?تأكيدات الدخول)", r"\1\n\n\2", t)
+        return t
+    except Exception:
+        return text
+
+
 # msg_split_fix (#317): حد تيليجرام الفعلي للرسالة الواحدة 4096 حرف. كان
 # /analyze يقسم بقصّ خام عند حرف 4000 بالضبط (قد يقطع منتصف كلمة أو كيان
 # Markdown)، و/signal لم يكن يتحقق من الطول إطلاقاً (خطر BadRequest صامت
@@ -2661,6 +2718,7 @@ async def _send_long_message(msg, update, context, text: str, parse_mode=None, r
     # يُغيِّر أي سلوك قائم لأي مستدعٍ آخر) — يُرفَق حصراً بآخر قطعة من
     # الرسالة (حيث ينتهي النص فعلياً)، ليدعم زر "⚡ تنفيذ" الجديد في
     # /signal دون كسر أي استدعاء سابق لا يمرّره.
+    text = _tidy_msg_b49(text)
     chunks = _split_long_message(text)
 
     async def _safe_send(send_coro_factory, chunk):
@@ -3919,6 +3977,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if len(_c4h) >= 20 and isinstance(signal.technicals, dict):
                     signal.technicals["bb_pos"] = _calc_bb_pos(_c4h)
                     signal.technicals["bb_frame"] = "4H"
+                    signal.technicals["bb_mkt"] = "Futures" if str(_mkt_arg_sig or "").lower().startswith("fut") else "Spot"  # batch49 (قرار 12)
                     # batch34: /signal لم يكن يمرّر شموع 4H لكتلة الأسباب (RSI 4H يظهر في /analyze فقط)
                     signal.technicals["candles_4h"] = _sig_4h
             except Exception:
@@ -4010,7 +4069,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # إصلاح #477: تقليل التكرار — pro_block يحتوي معظم المعلومات
         # FA: BTC Correlation — تأثير BTC على الأصول الأخرى
         _btc_corr_txt = ""
-        if symbol not in ("BTC", "BITCOIN") and atr_pct < 20 and not _is_commodity(symbol):
+        if symbol not in ("BTC", "BITCOIN") and atr_pct < 20 and not _is_commodity(symbol) and not is_tokenized_x_ticker(symbol):  # batch49 (قرار 10): لا مقارنة BTC للمرمَّز
             try:
                 _btc_d = await engine.data_layer.get_price("BTC")
                 _btc_chg = float((_btc_d or {}).get("change_24h", 0) or 0)
@@ -4086,6 +4145,8 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _tf_note = "\n⚠️ Bullish Extension: صاعد قصير الأجل متشبع — خطر تصحيح مرتفع"
         elif "هابط" in _daily_dir and "صاعد" in _4h_dir:
             _tf_note = f"\n📊 الأطر: يومي {_daily_dir} | 4H {_4h_dir}"
+        else:
+            _tf_note = f"\n📊 الأطر: يومي {_daily_dir} | 4H {_4h_dir}"  # batch49 (قرار 15): يظهر دائماً كما في /analyze
 
         # header_dedup_fix: إزالة التكرار
         _sig_head_b40 = _clean_md(engine.signal_layer.format_ar(signal))
@@ -4718,15 +4779,24 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 def _share(_sz):
                     return _sz / _thin if _thin > 0 else 0
                 _all_min = _slippage_1k == _slippage_10k == _slippage_50k
-                _sl_lines = ["", "📐 *Slippage المتوقع* (تقدير مبني على الـSpread — أول 20 مستوى)"]
-                for _lbl, _sz, _sv in (("$1K", 1000, _slippage_1k), ("$10K", 10000, _slippage_10k), ("$50K", 50000, _slippage_50k)):
-                    _sh = _share(_sz)
-                    _note = f" — يستهلك {_sh:.0%} من أضيق جهة في الدفتر" if _sh >= 0.2 else ""
-                    _pre = "≈" if _all_min else "~"
-                    _sl_lines.append(f"• {_lbl}: {_pre}{_sv:.4f}%{_note}")
-                if _all_min and _share(50000) >= 0.2:
-                    _sl_lines.append("  ⚠️ الحد الأدنى للصيغة لا يعكس الانزلاق الفعلي للأحجام الكبيرة — قد يتجاوزه التنفيذ")
-                text += "\n".join(["", *_sl_lines])
+                _bk49 = getattr(profile, "book_slip", None)
+                if isinstance(_bk49, dict) and _bk49:
+                    # batch49 (قرار 16): انزلاق فعلي من مسح عمق الدفتر (شراء Market عبر أول 20 مستوى بيع)
+                    _sl_lines = ["", "📐 *Slippage المتوقع* (من عمق الدفتر الفعلي — شراء Market عبر أول 20 مستوى)"]
+                    for _lbl, _sz in (("$1K", 1000), ("$10K", 10000), ("$50K", 50000)):
+                        _v49 = _bk49.get(_sz)
+                        _sl_lines.append(f"• {_lbl}: {'يتجاوز عمق أول 20 مستوى — انزلاق أعلى' if _v49 is None else f'{_v49:.4f}%'}")
+                    text += "\n".join(["", *_sl_lines])
+                else:
+                    _sl_lines = ["", "📐 *Slippage المتوقع* (تقدير مبني على الـSpread — أول 20 مستوى)"]
+                    for _lbl, _sz, _sv in (("$1K", 1000, _slippage_1k), ("$10K", 10000, _slippage_10k), ("$50K", 50000, _slippage_50k)):
+                        _sh = _share(_sz)
+                        _note = f" — يستهلك {_sh:.0%} من أضيق جهة في الدفتر" if _sh >= 0.2 else ""
+                        _pre = "≈" if _all_min else "~"
+                        _sl_lines.append(f"• {_lbl}: {_pre}{_sv:.4f}%{_note}")
+                    if _all_min and _share(50000) >= 0.2:
+                        _sl_lines.append("  ⚠️ الحد الأدنى للصيغة لا يعكس الانزلاق الفعلي للأحجام الكبيرة — قد يتجاوزه التنفيذ")
+                    text += "\n".join(["", *_sl_lines])
 
             # Volume Profile تقريبي من candles
             try:
@@ -5653,6 +5723,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     _closes_4h = [float(c.get("close",0)) for c in _candles_4h]
                     _sig_a.technicals["bb_pos"] = _calc_bb_pos(_closes_4h)
                     _sig_a.technicals["bb_frame"] = "4H"   # نفس وسم /signal
+                    _sig_a.technicals["bb_mkt"] = "Futures" if str(_mkt_arg_an or "").lower().startswith("fut") else "Spot"
         except Exception as _se:
             logger.debug(f"signal_layer in analyze: {_se}")
             class _AnalyzeSignal:
@@ -5742,7 +5813,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _reg_a = _AnalyzeRegime()
         # FA_an: BTC Correlation في /analyze
         _btc_corr_an = ""
-        if symbol not in ("BTC", "BITCOIN") and _atr_a < 20 and not _is_commodity(symbol):
+        if symbol not in ("BTC", "BITCOIN") and _atr_a < 20 and not _is_commodity(symbol) and not is_tokenized_x_ticker(symbol):  # batch49 (قرار 10): لا مقارنة BTC للمرمَّز
             try:
                 _btc_d_an   = await engine.data_layer.get_price("BTC")
                 _btc_chg_an = float((_btc_d_an or {}).get("change_24h", 0) or 0)
@@ -5904,6 +5975,12 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     else:
                         _m4h = f"ℹ️ اتجاه 4H: {_t4h_an} (الإشارة الرئيسية محايدة)"
                     parts.append("\n" + _m4h)
+                    # batch49 (قرار 15): سطر «الأطر» (يومي | 4H) موحّد مع /signal
+                    try:
+                        _dd49 = ("🟢 صاعد" if "صاعد" in str(regime_desc) else "🔴 هابط" if "هابط" in str(regime_desc) else "🟡 محايد")
+                        parts.append(f"📊 الأطر: يومي {_dd49} | 4H {_t4h_an}")
+                    except Exception:
+                        pass
                     # rsi4h_parity: تحذير RSI 4H كما في /signal
                     if len(_c4h_an) >= 15:
                         _r4h = _calc_rsi_from_closes(_c4h_an)

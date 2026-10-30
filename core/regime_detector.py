@@ -546,13 +546,17 @@ class RegimeDetector:
         return wilder_rsi(closes, period)
 
     @staticmethod
-    def _di_dir_label(dp, dm) -> str:
+    def _di_dir_label(dp, dm, adx=None) -> str:
         """adx_neutral_label: عند تساوي/تقارب DI (فرق < 3) لا نُسمّي اتجاهاً
         (BTC: +DI 22 / -DI 22 كان يظهر "هابط")."""
         try:
             if abs(float(dp) - float(dm)) < 3:
                 return "⚪ محايد"
-            return "🟢 صاعد" if dp > dm else "🔴 هابط"
+            _lbl = "🟢 صاعد" if dp > dm else "🔴 هابط"
+            # batch49 (قرار 14): ADX دون 20 = لا اتجاه قائم؛ ميل DI يُذكر كإشارة طفيفة لا كاتجاه
+            if adx is not None and float(adx) < 20:
+                return f"⚪ لا اتجاه واضح (ADX<20 — ميل DI طفيف: {_lbl})"
+            return _lbl
         except Exception:
             return "⚪ محايد"
 
@@ -579,7 +583,7 @@ class RegimeDetector:
         _STRAT_AR = {
             "mean_reversion": "ارتداد للمتوسط", "reduce_exposure": "تقليل التعرض",
             "trend_following": "اتباع الاتجاه", "breakout": "اختراق",
-            "arbitrage": "موازنة أسعار", "volatility_expansion": "توسّع التقلب",
+            "arbitrage": "تداول داخل النطاق", "volatility_expansion": "توسّع التقلب",
             "reduce_size": "تقليل الحجم", "on_chain_accumulation": "تجميع على السلسلة",
         }
         strategies_txt = " · ".join(_STRAT_AR.get(s, s.replace("_", " ")) for s in result.strategies)
@@ -597,7 +601,7 @@ class RegimeDetector:
                 f"• ATR: {fmt_atr_pct(m.get('atr_pct',0))}% | ADX: {m.get('adx',0):.0f}\n"
             )
             + (
-                f"  ↳ اتجاه ADX: {self._di_dir_label(m.get('di_plus',0), m.get('di_minus',0))} "
+                f"  ↳ اتجاه ADX: {self._di_dir_label(m.get('di_plus',0), m.get('di_minus',0), m.get('adx'))} "
                 + (f"(قوة الاتجاه {m.get('adx',0):.0f} فقط — لا تحدد الاتجاه بمفردها)\n"
                    if float(m.get('adx',0) or 0) < 25 else
                    f"(قوة الاتجاه {m.get('adx',0):.0f} — اتجاه قائم؛ الجهة تحددها +DI/-DI)\n")

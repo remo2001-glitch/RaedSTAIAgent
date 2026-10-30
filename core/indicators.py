@@ -152,6 +152,30 @@ def volume_ratio_completed(candles: list, window: int = 20,
     return vols[-1] / avg
 
 
+def volume_candle_date(candles: list, now: Optional[float] = None) -> str:
+    """batch49 (قرار 6): تاريخ (UTC) آخر شمعة *مكتملة* التي بُنيت عليها نسبة الحجم، بصيغة YYYY-MM-DD ('' إن تعذّر).
+    يوضح للقارئ سبب اختلاف النسبة بين استدعاءين حول إغلاق الشمعة اليومية (16:00 UTC في OKX)."""
+    try:
+        cs = list(candles or [])
+        if last_candle_is_forming(cs, now) and len(cs) >= 3:
+            cs = cs[:-1]
+        if not cs:
+            return ""
+        c = cs[-1]
+        ts = c.get("timestamp", c.get("ts"))
+        if isinstance(ts, str):
+            import re as _re
+            m = _re.match(r"(\d{4}-\d{2}-\d{2})", ts.strip())
+            if m:
+                return m.group(1)
+        sec = _candle_ts_seconds(c)
+        if sec:
+            return time.strftime("%Y-%m-%d", time.gmtime(sec))
+    except Exception:
+        pass
+    return ""
+
+
 def volume_pace_forming(candles: list, window: int = 20,
                         now: Optional[float] = None) -> Optional[float]:
     """batch32: وتيرة حجم الشمعة الجارية (حجمها حتى الآن ÷ نسبة الوقت المنقضي) ÷ متوسط المكتملة.
@@ -254,6 +278,25 @@ def fmt_atr_pct(v) -> str:
         return f"{round(float(v) + 1e-9, 1):.1f}"
     except Exception:
         return "0.0"
+
+
+def macd_histogram_completed(candles: list, now: Optional[float] = None):
+    """batch49 (قرار 8): هيستوغرام MACD من الشموع *المكتملة* فقط (يُستثنى الشمعة الجارية) —
+    يمنع تذبذب القراءة بين استدعاءين لنفس الشمعة. None إن لم تكفِ البيانات."""
+    cl = []
+    for c in candles or []:
+        try:
+            v = float(c.get("close", 0) or 0)
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if v:
+            cl.append(v)
+    try:
+        if last_candle_is_forming(candles, now) and len(cl) > 30:
+            cl = cl[:-1]
+    except Exception:
+        pass
+    return macd_histogram(cl)
 
 
 def macd_histogram(closes: list, fast: int = 12, slow: int = 26, signal: int = 9):

@@ -379,7 +379,13 @@ class SignalLayer:
         ema20 = _ema(closes, 20)
         ema50 = _ema(closes, 50)
         ema200 = _ema(closes, 200) if len(closes) >= 200 else ema50
-        macd_hist = _macd_histogram(closes)
+        # batch49 (قرار 8): MACD من آخر شمعة مكتملة (الشمعة الجارية تغيّر القراءة بين نداءين)
+        try:
+            from core.indicators import macd_histogram_completed as _mhc49
+            _mh49 = _mhc49(candles)
+            macd_hist = 0 if _mh49 is None else _mh49
+        except Exception:
+            macd_hist = _macd_histogram(closes)
         bb_pos    = _bb_position(closes, 20)
         # volume_completed_fix: آخر شمعة مكتملة ÷ متوسط 20 شمعة مكتملة
         from core.indicators import volume_ratio_completed
@@ -695,7 +701,7 @@ STRATEGY_AR = {
     Strategy.MEAN_REVERSION:       "ارتداد للمتوسط",
     Strategy.BREAKOUT:             "كسر المستويات",
     Strategy.VOLATILITY_EXPANSION: "توسع التقلب",
-    Strategy.ARBITRAGE:            "المراجحة",
+    Strategy.ARBITRAGE:            "تداول داخل النطاق",
     Strategy.ONCHAIN_ACCUMULATION: "تراكم On-Chain",
     Strategy.REDUCE_EXPOSURE:      "تقليل التعرض",
     Strategy.AVOID:                "تجنب الدخول",

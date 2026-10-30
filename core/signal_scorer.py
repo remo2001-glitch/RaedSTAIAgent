@@ -417,7 +417,7 @@ def _build_result(score: int, verdict: str, reasons: list, s: SignalInput, extra
     bar = "█" * bar_len + "░" * (10 - bar_len)
 
     header = (
-        f"📊 *جودة إعداد الصفقة (Setup Quality): {bar} {score}/100 — {verdict_ar}*{extra}"
+        f"📊 *جودة إعداد الصفقة (Setup Quality — بنية الصفقة فقط): {bar} {score}/100 — {verdict_ar}*{extra}"
     )
 
     footer_lines = [

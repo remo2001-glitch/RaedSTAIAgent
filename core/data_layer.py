@@ -130,6 +130,9 @@ def _parse_okx_candles(rows) -> list:
 
 _CVD_CACHE: dict = {}   # cvd_cache_fix
 _CVD_HIST: dict = {}    # batch13: آخر قراءات CVD لكل رمز (للمتوسط)
+_CVD_HIST_N = 5          # batch49: حتى 5 قراءات (كانت 3) خلال _CVD_HIST_WIN
+_CVD_HIST_WIN = 3600     # batch49: نافذة 60 دقيقة (كانت 30)
+_CVD_MIN_TRADES = 30     # batch49: حد أدنى لعدد الصفقات لاعتماد القراءة (ذهب/أصول قليلة التداول)
 
 
 def _cvd_redis():
@@ -1982,7 +1985,7 @@ class DataLayer:
             _hh = _cvd_persist_get("hist", _cvd_key)
             if isinstance(_hh, list):
                 try:
-                    _CVD_HIST[_cvd_key] = [(float(a), float(b)) for a, b in _hh][-3:]
+                    _CVD_HIST[_cvd_key] = [(float(a), float(b)) for a, b in _hh][-_CVD_HIST_N:]
                 except Exception:
                     pass
         if _cvd_hit and (_t_cvd.time() - _cvd_hit[0]) < 300:  # 5 دقائق: يغطي تتابع الأوامر
@@ -2059,17 +2062,19 @@ class DataLayer:
                 if not (_total > 0 and 0.02 < _buy_ratio < 0.98):
                     # batch46: تشخيص غياب CVD (مثل XAUT) — يظهر في سجلات Railway بدل الصمت
                     logger.info(f"CVD rejected ({symbol} via {_sym_cvd}): trades={len(_trades)} buy_ratio={_buy_ratio:.3f} total={_total:.4f}")
-                if _total > 0 and 0.02 < _buy_ratio < 0.98:
+                if len(_trades) < _CVD_MIN_TRADES:
+                    logger.info(f"CVD too few trades ({symbol} via {_sym_cvd}): {len(_trades)} < {_CVD_MIN_TRADES}")
+                if len(_trades) >= _CVD_MIN_TRADES and _total > 0 and 0.02 < _buy_ratio < 0.98:
                     _raw_pct = round(_cvd / max(_total, 1e-9) * 100, 2)
                     # batch13: CVD آخر 100 صفقة يتقلب (-95% → +88%)؛ نعتمد متوسط
-                    # آخر حتى 3 قراءات خلال 30 دقيقة بدل قراءة واحدة.
+                    # batch49 (قرار 2): نافذة أطول (حتى 5 قراءات خلال 60 دقيقة) — ETH قفز +1.4% → −74.6% بقراءتين فقط
                     _now_c = _t_cvd.time()
                     _hist = [(t, p) for (t, p) in _CVD_HIST.get(_cvd_key, [])
-                             if _now_c - t < 1800]
+                             if _now_c - t < _CVD_HIST_WIN]
                     _hist.append((_now_c, _raw_pct))
-                    _hist = _hist[-3:]
+                    _hist = _hist[-_CVD_HIST_N:]
                     _CVD_HIST[_cvd_key] = _hist
-                    _cvd_persist_set("hist", _cvd_key, _hist, 1800)
+                    _cvd_persist_set("hist", _cvd_key, _hist, _CVD_HIST_WIN)
                     if len(_CVD_HIST) > 300:
                         _CVD_HIST.pop(next(iter(_CVD_HIST)), None)
                     _avg_pct = round(sum(p for _, p in _hist) / len(_hist), 2)
