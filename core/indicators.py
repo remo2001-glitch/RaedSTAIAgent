@@ -176,6 +176,24 @@ def volume_candle_date(candles: list, now: Optional[float] = None) -> str:
     return ""
 
 
+_AR_MONTHS_B50 = ["يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو",
+                  "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر"]
+
+
+def volume_candle_label_ar(date_str: str) -> str:
+    """batch50: وصف مقروء لشمعة الحجم: «29→30 أكتوبر» (شمعة OKX اليومية تفتح 16:00 UTC وتغلق 16:00 اليوم التالي)،
+    فلا يلتبس التاريخ المعروض بيوم الإغلاق. '' إن كان التاريخ غير صالح."""
+    try:
+        import datetime as _dt
+        d0 = _dt.datetime.strptime(str(date_str)[:10], "%Y-%m-%d").date()
+        d1 = d0 + _dt.timedelta(days=1)
+        if d0.month == d1.month:
+            return f"{d0.day}→{d1.day} {_AR_MONTHS_B50[d0.month - 1]}"
+        return f"{d0.day} {_AR_MONTHS_B50[d0.month - 1]}→{d1.day} {_AR_MONTHS_B50[d1.month - 1]}"
+    except Exception:
+        return ""
+
+
 def volume_pace_forming(candles: list, window: int = 20,
                         now: Optional[float] = None) -> Optional[float]:
     """batch32: وتيرة حجم الشمعة الجارية (حجمها حتى الآن ÷ نسبة الوقت المنقضي) ÷ متوسط المكتملة.

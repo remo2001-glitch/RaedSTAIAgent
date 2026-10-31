@@ -244,6 +244,10 @@ def _harmonize_llm_text(text, vol_ratio=None, rsi=None, cvd_available=None):
         _kept = [x for x in _sents if not re.search(r"السيناريو\s+(?:الأول|الثاني|الثالث|الرابع)", x)]
         if _kept and len(_kept) != len(_sents):
             out = "".join(_kept)
+        # batch50: صياغات ركيكة متكررة في فقرة النموذج
+        out = re.sub(r"ملاحظات\s+علمية", "للعلم فقط", out)
+        out = re.sub(r"(\d+(?:\.\d+)?)\s*x\s+أضعاف(?:\s+(?:ال)?متوسط)?", r"\1x المتوسط", out)
+        out = re.sub(r"\s+،", "،", out)
         out = re.sub(r" {2,}", " ", out)
         return out
     except Exception:
@@ -272,6 +276,94 @@ def _chart_accuracy_line(analysis: str, live_px: float) -> str:
                 f"{_fmt_price(float(live_px))} — صورة قديمة أو رمز/قراءة خاطئة؛ لا تعتمد على مستويات هذا التحليل")
     except Exception:
         return ""
+
+
+_CHART_TF_MAP_B50 = {
+    "1M": "شهري (1M)", "1MO": "شهري (1M)", "MN": "شهري (1M)", "MONTH": "شهري (1M)",
+    "1W": "أسبوعي (1W)", "W1": "أسبوعي (1W)", "W": "أسبوعي (1W)", "WEEK": "أسبوعي (1W)",
+    "1D": "يومي (1D)", "D1": "يومي (1D)", "D": "يومي (1D)", "DAY": "يومي (1D)",
+    "4H": "4 ساعات (4H)", "H4": "4 ساعات (4H)", "2H": "ساعتان (2H)", "H2": "ساعتان (2H)",
+    "1H": "ساعة (1H)", "H1": "ساعة (1H)", "30M": "30 دقيقة", "15M": "15 دقيقة (15m)",
+    "5M": "5 دقائق (5m)", "3M": "3 دقائق", "1MIN": "دقيقة (1m)",
+}
+
+
+def _chart_parse_timeframe_b50(analysis: str):
+    """batch50: الإطار الزمني الفعلي من الصورة (سطر TIMEFRAME:) — كان يُعرض «يومي (1D)» ثابتاً
+    حتى لشارت أسبوعي. يُرجع (وصف، نص التحليل بدون السطر). غير محدد → «غير محدد»."""
+    import re as _r
+    txt = analysis or ""
+    m = _r.search(r"TIMEFRAME:\s*\[?\s*([^\]\n]*)", txt)
+    label = "غير محدد (تحقق من الإطار في صورتك)"
+    if m:
+        raw = m.group(1).strip().upper().replace(" ", "")
+        if raw in ("1M", "M") and "MIN" in txt.upper():
+            raw = "1MIN"
+        label = _CHART_TF_MAP_B50.get(raw, label)
+        txt = _r.sub(r"TIMEFRAME:[^\n]*\n?", "", txt)
+    return label, txt
+
+
+def _chart_rr_line_b50(analysis: str, quote: str = "USDT"):
+    """batch50: سطر R/R محسوب برمجياً من أسعار البنود 6/7/8 (دخول/وقف/هدف) عند إمكان قراءتها وكون
+    ترتيبها منطقياً (وقف < دخول < هدف أو العكس). لا يُعرض شيء إن تعذّر التحقق (لا تخمين)."""
+    import re as _r
+    try:
+        vals = {}
+        for ln in (analysis or "").split("\n"):
+            mm = _r.match(r"\s*(6|7|8)\s*[-–.)]\s*(.*)", ln)
+            if not mm or ":" not in mm.group(2):
+                continue
+            body = mm.group(2).split(":", 1)[1]
+            body = _r.sub(r"[+-]?\d+(?:\.\d+)?\s*%", " ", body)
+            body = _r.sub(r"\b\d+\s*:\s*\d+(?:\.\d+)?\b", " ", body)
+            nums = [float(x.replace(",", "")) for x in _r.findall(r"(?<![\d.])\d[\d,]*(?:\.\d+)?", body)]
+            vals[mm.group(1)] = [n for n in nums if n > 0]
+        e = (vals.get("6") or [0])[0]
+        sl = (vals.get("7") or [0])[0]
+        tps = vals.get("8") or []
+        if not (e and sl and tps):
+            return ""
+        tp1 = tps[0]
+        long_ok = sl < e < tp1
+        short_ok = tp1 < e < sl
+        if not (long_ok or short_ok):
+            return ""
+        risk = abs(e - sl)
+        if risk <= 0 or risk / e > 0.5:
+            return ""
+        rr1 = abs(tp1 - e) / risk
+        txt = f"R/R المحسوب من الأسعار: الهدف 1 = {rr1:.2f}:1"
+        if len(tps) > 1:
+            tp2 = tps[1]
+            if (long_ok and tp2 > tp1) or (short_ok and tp2 < tp1):
+                txt += f" | الهدف 2 = {abs(tp2 - e) / risk:.2f}:1"
+        return f"📐 {txt} (دخول {e:g} | وقف {sl:g})"
+    except Exception:
+        return ""
+
+
+def _chart_fix_size_line_b50(analysis: str) -> str:
+    """batch50: توصية «انتظار» لا يُعرض معها حجم صفقة بنسبة (كان «50%» مع انتظار)."""
+    import re as _r
+    try:
+        txt = analysis or ""
+        rec = ""
+        for ln in txt.split("\n"):
+            mm = _r.match(r"\s*5\s*[-–.)]\s*(.*)", ln)
+            if mm:
+                rec = mm.group(1)
+                break
+        if "انتظار" not in rec or any(w in rec.split("انتظار")[0] for w in ("شراء مشروط", "بيع مشروط")):
+            return txt
+        out = []
+        for ln in txt.split("\n"):
+            if _r.match(r"\s*13\s*[-–.)]", ln) and "%" in ln:
+                ln = "13- حجم الصفقة المقترح: لا حجم قبل تأكيد الدخول"
+            out.append(ln)
+        return "\n".join(out)
+    except Exception:
+        return analysis
 
 
 def _llm_decision_ctx(sig) -> str:
@@ -2155,7 +2247,8 @@ def _build_professional_block(
         from core.indicators import volume_candle_date as _vcd49
         _vd49 = _vcd49(candles)
         if _vd49:
-            _vp_txt += f" — شمعة {_vd49}"
+            from core.indicators import volume_candle_label_ar as _vcl50
+            _vp_txt += f" — شمعة {_vcl50(_vd49) or _vd49}"
         logger.info(f"vol_ratio: {_vol_ratio:.3f} candle={_vd49} n={len(candles or [])}")
     except Exception:
         pass
@@ -2614,7 +2707,7 @@ def _build_professional_block(
         _whale_line,
         (f"ℹ️ Funding Rate {_fund_pct:+.4f}% — للعلم فقط للذهب (لا يدخل في الثقة ولا التأكيدات)"
          if (_gold_fund_ex and (_fund.get("source") not in (None, "unknown", "") or _fund_pct != 0))
-         else f"{'☑' if _fund_pct < -0.01 else '□'} Funding Rate داعم للشراء (سالب)"
+         else f"{'☑' if _fund_pct < -0.01 else '□'} Funding ≤ −0.01% (حالياً {_fund_pct:+.4f}%) — سالب = ضغط Shorts داعم للشراء"
          if (_fund.get("source") not in (None, "unknown", "") or _fund_pct != 0)
          else ("⚪ Funding Rate غير متاح لهذا الأصل" if (_is_x_asset or _is_perp_asset) else "⚪ Funding Rate غير متاح الآن")),
     ])
@@ -3650,6 +3743,9 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _sym_for_resolve = locals().get("_resolve_sym", raw_arg)
     resolution = await resolve_symbol(_sym_for_resolve, tier2, engine.data_layer)
     symbol     = resolution.base
+    if resolution.is_pair_request:
+        # batch50: التقرير الرئيسي لزوج BTC/ETH يُبنى على الأصل الأساسي بالدولار؛ العنوان باسم الأصل لا «ETHBTC»
+        _display_symbol = resolution.base
 
     # TK_Spot_fix: للأصول X-prefix في Spot → استخدام XSPCX لجلب البيانات
     # XSKHY_fix: إذا X-prefix وليس في القائمة المعروفة → symbol = raw_arg كاملاً
@@ -5378,6 +5474,8 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _sym_for_resolve_an = locals().get("_resolve_sym", raw_arg)
     resolution = await resolve_symbol(_sym_for_resolve_an, tier_an, engine.data_layer)
     symbol     = resolution.base
+    if resolution.is_pair_request:
+        _display_symbol_an = resolution.base  # batch50: انظر /signal
 
     # TK_Spot_fix: للأصول X-prefix في Spot → استخدام XSPCX لجلب البيانات
     if not _use_futures_an and is_tokenized_x_ticker(raw_arg):
@@ -6190,8 +6288,16 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # محاولة 1: "xSPY/USDT" أو "BTC-USDT" أو "BICO/USDT"
         _cap_sym = _re_chart.search(
             r'\b([A-Za-z]{1,10})\s*[/\-]\s*USDT', caption, _re_chart.IGNORECASE)
+        _chart_quote = "USDT"
         if _cap_sym:
             symbol = _cap_sym.group(1).upper()
+        else:
+            # batch50: أزواج BTC/ETH في الكابشن (SOL/BTC، ETH-BTC، SOLBTC) كانت لا تُتعرَّف
+            _cap_pair = _re_chart.search(
+                r'\b([A-Za-z]{2,10})\s*[/\-]\s*(BTC|ETH)\b', caption, _re_chart.IGNORECASE)
+            if _cap_pair and _cap_pair.group(1).upper() != _cap_pair.group(2).upper():
+                symbol = _cap_pair.group(1).upper()
+                _chart_quote = _cap_pair.group(2).upper()
         # محاولة 2: كلمة منفردة
         if not symbol:
             for word in caption.split():
@@ -6207,6 +6313,15 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if _k.lower() in caption.lower():
                     symbol = _k
                     break
+
+        if symbol and _chart_quote == "USDT":
+            try:
+                from core.pair_resolver import parse_quote_pair as _pqp_ch
+                _pp_ch = _pqp_ch(symbol) if len(symbol) > 5 else None
+                if _pp_ch:
+                    symbol, _chart_quote = _pp_ch
+            except Exception:
+                pass
 
         # تطوير #222 (محسَّن): اكتشاف نوع السوق من:
         # (1) caption النصي أولاً
@@ -6245,16 +6360,24 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _current_px = 0.0
         try:
             if symbol and engine:
-                _px_data = await engine.data_layer.get_price(symbol.upper())
+                if _chart_quote != "USDT":
+                    _px_data = await engine.data_layer.get_price(symbol.upper(), _chart_quote)
+                else:
+                    _px_data = await engine.data_layer.get_price(symbol.upper())
                 if _px_data and _px_data.get("price", 0) > 0:
                     _current_px = float(_px_data["price"])
         except Exception:
             pass
+        # batch50: سعر السوق الحي فقط (لا سعر الصورة) — أساس سطر الدقة كي لا يقارن الصورة بنفسها
+        _market_px_chart = float(_current_px or 0)
 
         analysis = await engine.news_engine.analyze_chart_image(
             image_data=bytes(image_bytes),
             symbol=symbol,
-            current_price=_current_px)
+            current_price=_current_px,
+            quote=_chart_quote)
+        _chart_tf_label, analysis = _chart_parse_timeframe_b50(analysis)
+        analysis = _chart_fix_size_line_b50(analysis)
 
         # chart_px_extract v4: PRICE_NOW marker — الحل الجذري النهائي
         # Qwen3 يكتب "PRICE_NOW:773.28" في أول سطر → نستخرجه بـ str.find
@@ -6365,9 +6488,10 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # (يناقض لقطات شاشة فعلية تُظهر "Spot" حقيقياً على OKX لهذه
         # الأصول). أُزيل الفرض القسري؛ نعتمد الآن على الكشف النصي من
         # تحليل الشارت نفسه (يعكس ما تعرضه المنصة فعلياً في اللقطة).
-        sym_label = f" — {symbol}" if symbol else ""
+        _pair_disp_ch = f"{symbol}/{_chart_quote}" if (symbol and _chart_quote != "USDT") else symbol
+        sym_label = f" — {_pair_disp_ch}" if symbol else ""
         # إضافة header بمعلومات العملة (M#54)
-        _sym_label = f" — {symbol}" if symbol else ""
+        _sym_label = f" — {_pair_disp_ch}" if symbol else ""
         # CHART_FORMAT_fix: تنسيق احترافي محسَّن
         _mkt_icon = "📈 Futures/Perp" if _chart_is_futures else "⚡ Spot"
         # chart_header_fix: إضافة معلومات الأصل الكاملة
@@ -6388,7 +6512,7 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not _chart_price_sym and _sym_label:
             # _sym_label قد يكون " — XSPY" أو " — BTC"
             import re as _re_cps
-            _m_lbl = _re_cps.search(r'—\s*([A-Za-z]{2,10})', _sym_label)
+            _m_lbl = _re_cps.search(r'—\s*([A-Za-z]{2,10})', _sym_label)  # batch50: الأساس فقط للأزواج
             if _m_lbl:
                 _chart_price_sym = _m_lbl.group(1).upper()
         # chart_nyse_fix: يُحسَب لاحقاً بعد analyze_chart_image
@@ -6399,15 +6523,18 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 eng3 = context.bot_data.get("raed_engine")
                 if eng3:
-                    pd3 = await eng3.data_layer.get_price(_chart_price_sym)
+                    if _chart_quote != "USDT" and _chart_price_sym == symbol:
+                        pd3 = await eng3.data_layer.get_price(_chart_price_sym, _chart_quote)
+                    else:
+                        pd3 = await eng3.data_layer.get_price(_chart_price_sym)
                     if pd3 and pd3.get("price", 0) > 0:
                         p3 = pd3["price"]
                         _live_px_chart = float(p3)
                         c3 = pd3.get("change_24h", 0)
                         _c3_icon = "📈" if c3 >= 0 else "📉"
                         header_lines += [
-                            f"💰 السعر: {_fmt_price(p3)} ({c3:+.2f}%) {_c3_icon}",
-                            f"⏱️ الإطار الزمني: يومي (1D)",
+                            f"💰 السعر: {_fmt_price(p3, _chart_quote)} ({c3:+.2f}%) {_c3_icon}",
+                            f"⏱️ الإطار الزمني: {_chart_tf_label}",
                         ]
                         if _synthetic_warn_chart:
                             header_lines.append(_synthetic_warn_chart)
@@ -6418,8 +6545,8 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # fallback: _current_px من T30_fix (يُجلَب قبل header_lines)
         if not _chart_px_found and _current_px > 0:
             header_lines += [
-                f"💰 السعر: {_fmt_price(_current_px)}",
-                f"⏱️ الإطار الزمني: يومي (1D)",
+                f"💰 السعر: {_fmt_price(_current_px, _chart_quote)}" + ("" if _market_px_chart > 0 else " (مقروء من الصورة)"),
+                f"⏱️ الإطار الزمني: {_chart_tf_label}",
             ]
             if _synthetic_warn_chart:
                 header_lines.append(_synthetic_warn_chart)
@@ -6431,17 +6558,18 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _synthetic_warn_chart,
                 "━━━━━━━━━━━━━━━━━━",
             ]
-        if not _live_px_chart and _current_px > 0:
-            _live_px_chart = float(_current_px)
+        if not _live_px_chart and _market_px_chart > 0:
+            _live_px_chart = float(_market_px_chart)  # batch50: لا نقارن سعر الصورة بنفسه
         _chart_acc_line = _chart_accuracy_line(analysis, _live_px_chart)
         if _chart_acc_line:
             header_lines.append(_chart_acc_line)
         # إصلاح #236: ربط /chart ↔ /signal للتكامل التحليلي
-        _signal_hint = f"\n💡 للتحليل الشامل متعدد المصادر: /signal {symbol}" if symbol else ""
+        _signal_hint = (f"\n💡 للتحليل الشامل متعدد المصادر: /signal {symbol}"
+                        + (_chart_quote if _chart_quote != "USDT" else "")) if symbol else ""
         # CHART_FORMAT_fix: بناء الرسالة النهائية بتنسيق منظم
         # chart_pricenow_hide: إخفاء PRICE_NOW marker من النص المعروض للمستخدم
         import re as _re_pnh
-        _analysis_clean = _re_pnh.sub(r"PRICE_NOW:[\d.]+\n?", "", analysis).strip()
+        _analysis_clean = _re_pnh.sub(r"PRICE_NOW:[\d.,]+\n?", "", analysis).strip()
 
         # chart_rr_fix_removed (#323): هذه الطبقة كانت "تتحقق" من R/R عبر
         # استخراج الأرقام بـregex من نص Groq الحر — لكن الأنماط لم تُميِّز
@@ -6455,6 +6583,10 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # أكثر من مسار، أُزيلت هذه الطبقة الإضافية بالكامل بدل محاولة رقعها
         # مجدداً — لا قيمة مضافة من "تحقق" قد يُناقض النموذج برقم خاطئ.
         _chart_rr_notes = []
+        # batch50: R/R محسوب برمجياً من أسعار الدخول/الوقف/الهدف المقروءة (إضافي ومشروط بالتحقق المنطقي)
+        _rr_b50 = _chart_rr_line_b50(analysis, _chart_quote)
+        if _rr_b50:
+            _chart_rr_notes.append(_rr_b50)
 
         # chart_rsi_fix: تصحيح تسمية RSI6
         _analysis_clean = _re_pnh.sub(

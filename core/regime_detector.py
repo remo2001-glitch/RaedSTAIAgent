@@ -561,6 +561,14 @@ class RegimeDetector:
             return "⚪ محايد"
 
     @staticmethod
+    def _adx_strength_suffix_b50(m) -> str:
+        """batch50: لاحقة «قوة الاتجاه» دون أقواس عندما تحوي التسمية أقواساً (ADX<20)."""
+        adx = float(m.get('adx', 0) or 0)
+        if adx < 20 and abs(float(m.get('di_plus', 0) or 0) - float(m.get('di_minus', 0) or 0)) >= 3:
+            return f"— قوة الاتجاه {adx:.0f} فقط، لا تحدد الاتجاه بمفردها\n"
+        return f"(قوة الاتجاه {adx:.0f} فقط — لا تحدد الاتجاه بمفردها)\n"
+
+    @staticmethod
     def _di_conflict_note(result, m) -> str:
         """regime_di_conflict: تصنيف السوق (صاعد/هابط) يعاكس اتجاه DI → تنبيه شفاف
         بدل عرض تناقض صامت (مثال ETH: اتجاه صاعد قوي بينما -DI > +DI)."""
@@ -602,7 +610,8 @@ class RegimeDetector:
             )
             + (
                 f"  ↳ اتجاه ADX: {self._di_dir_label(m.get('di_plus',0), m.get('di_minus',0), m.get('adx'))} "
-                + (f"(قوة الاتجاه {m.get('adx',0):.0f} فقط — لا تحدد الاتجاه بمفردها)\n"
+                # batch50: لا أقواس مزدوجة — التسمية قد تحوي قوسين أصلاً (ADX<20) فيُدمج التوضيح بشرطة
+                + (self._adx_strength_suffix_b50(m)
                    if float(m.get('adx',0) or 0) < 25 else
                    f"(قوة الاتجاه {m.get('adx',0):.0f} — اتجاه قائم؛ الجهة تحددها +DI/-DI)\n")
                 if m.get("di_plus") is not None and m.get("di_minus") is not None else ""

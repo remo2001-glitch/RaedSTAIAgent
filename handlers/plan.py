@@ -678,6 +678,15 @@ def _far_note(target, bull) -> str:
     return ""
 
 
+def _fvr_fc50(v) -> str:
+    """batch50: صيغة الحجم الموحّدة (3.2x لا 3.25x) كباقي الأوامر."""
+    try:
+        from core.indicators import fmt_vol_ratio
+        return fmt_vol_ratio(float(v or 0))
+    except Exception:
+        return f"{float(v or 0):.2f}x"
+
+
 def _format_forecast_ar(symbol: str, price: float, fc: dict, days: int = 30) -> str:
     """
     تنسيق تنبؤ السعر المتقدم للعرض.
@@ -712,8 +721,8 @@ def _format_forecast_ar(symbol: str, price: float, fc: dict, days: int = 30) -> 
         (f"• Fear&Greed: {fc.get('fear_greed',50)} | BTC Dom: {fc.get('btc_dom',50):.0f}%"
          if not _is_commodity_fc(symbol) else
          f"• Fear&Greed: {fc.get('fear_greed',50)} | BTC Dom: {fc.get('btc_dom',50):.0f}% (مرجع للسوق الرقمي فقط — لا يخص الذهب)"),
-        (f"• 🔊 حجم مرتفع (Wyckoff ✅) ({fc.get('vol_ratio',0):.2f}x)" if fc.get('wyckoff')
-         else f"• {'🔊' if float(fc.get('vol_ratio', 1.0) or 0) >= 1.2 else ('🔇' if float(fc.get('vol_ratio', 1.0) or 0) < 0.8 else '🔉')} حجم {_vol_word(fc.get('vol_ratio', 1.0))} ({fc.get('vol_ratio',0):.2f}x)"),
+        (f"• 🔊 حجم مرتفع (Wyckoff ✅) ({_fvr_fc50(fc.get('vol_ratio',0))})" if fc.get('wyckoff')
+         else f"• {'🔊' if float(fc.get('vol_ratio', 1.0) or 0) >= 1.2 else ('🔇' if float(fc.get('vol_ratio', 1.0) or 0) < 0.8 else '🔉')} حجم {_vol_word(fc.get('vol_ratio', 1.0))} ({_fvr_fc50(fc.get('vol_ratio',0))})"),
         "",
         f"📊 *السيناريوهات الـ {days} يوم:*",
         (f"  🟢 متفائل (Elliott 5): {p_fmt(bull)} ({bull_pct:+.1f}%)"
@@ -1802,7 +1811,7 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         pass
                     lines.append(f"  📍 الآن ({_sym_now}): RSI = {float(_now_fc.get('rsi', 0)):.0f} | "
                                  f"حجم = {_fvr_pm(float(_now_fc.get('vol_ratio', 0)))}"
-                                 + (f" (شمعة {_now_fc.get('vol_candle')})" if _now_fc.get('vol_candle') else "")
+                                 + (f" (شمعة {__import__('core.indicators', fromlist=['volume_candle_label_ar']).volume_candle_label_ar(_now_fc.get('vol_candle')) or _now_fc.get('vol_candle')})" if _now_fc.get('vol_candle') else "")
                                  + f"{_now_extra}")
                     # batch31: حكم صريح — شرطا RSI/الحجم في المصفوفة قد يتحققان بينما الثقة دون حد الدخول (BTC: 46% < 55%)
                     # فكان المستخدم يقرأ «🟢 دخول 50%» ثم «الآن RSI 47 حجم 1.04x» دون حكم. وروابط الوقف/الأهداف في /signal.
@@ -2298,6 +2307,19 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # مُرمَّز (لا بيانات On-Chain له) — الاسم المعروض يصف التجميع السعري فقط.
                 if strat.value == "on_chain_accumulation" and is_tokenized_x_ticker(str(sym).upper()):
                     strat_name = "تجميع سعري"
+                # batch50: تكافؤ مع /signal — تُعرض استراتيجيات النظام الموصى بها لحالة السوق (مثل «تقليل التعرض»)
+                # إلى جانب استراتيجية الموجّه، دون تكرار ودون تغيير أي قرار.
+                try:
+                    _rs_ar = {"mean_reversion": "ارتداد للمتوسط", "reduce_exposure": "تقليل التعرض",
+                              "trend_following": "اتباع الاتجاه", "breakout": "اختراق",
+                              "arbitrage": "تداول داخل النطاق", "volatility_expansion": "توسّع التقلب",
+                              "reduce_size": "تقليل الحجم", "on_chain_accumulation": "تجميع على السلسلة"}
+                    for _rs in (getattr(_reg_a, "strategies", None) or []):
+                        _rs_n = _rs_ar.get(_rs, str(_rs).replace("_", " "))
+                        if _rs_n and _rs_n not in strat_name and _rs != strat.value:
+                            strat_name += f" · {_rs_n}"
+                except Exception:
+                    pass
 
                 # حساب التغيير 24h
                 change_24h = float((price_d or {}).get("change_24h") or 0)

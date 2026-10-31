@@ -191,17 +191,37 @@ async def _fetch_pair_price_and_levels(resolution: PairResolution, data_layer):
     support = resistance = None
     candles = await data_layer.get_ohlcv(base, "1d", 60, quote)
     if isinstance(candles, list) and len(candles) >= 20:
-        lows = [
-            float(c.get("low", c.get("close", 0))) for c in candles[-20:]
-            if float(c.get("low", c.get("close", 0))) > 0
-        ]
-        highs = [
-            float(c.get("high", c.get("close", 0))) for c in candles[-20:]
-            if float(c.get("high", c.get("close", 0))) > 0
-        ]
-        if lows and highs:
-            support    = min(lows) * 0.99
-            resistance = max(highs) * 1.01
+        # batch50: نفس منطق /quicksignal للمستويات (كانت min/max 20 يوماً ×0.99/1.01 فتختلف عنه):
+        # (1) أقرب 5 شموع إن كانت ضمن ±15% من السعر، (2) وإلا 20 شمعة، (3) ثم أقرب مستوى فيبوناتشي
+        # (المصدر نفسه الذي يعتمده /quicksignal وcompute_shared_levels لتوصيات غير البيع).
+        try:
+            def _lows(n):
+                return [float(c.get("low", c.get("close", 0))) for c in candles[-n:]
+                        if float(c.get("low", c.get("close", 0))) > 0]
+
+            def _highs(n):
+                return [float(c.get("high", c.get("close", 0))) for c in candles[-n:]
+                        if float(c.get("high", c.get("close", 0))) > 0]
+            l5, h5 = _lows(5), _highs(5)
+            if l5 and h5:
+                s5, r5 = min(l5) * 0.999, max(h5) * 1.001
+                if (price - s5) / price <= 0.15 and (r5 - price) / price <= 0.15:
+                    support, resistance = s5, r5
+            if support is None or resistance is None:
+                l20, h20 = _lows(20), _highs(20)
+                if l20 and h20:
+                    support, resistance = min(l20) * 0.99, max(h20) * 1.01
+            try:
+                from handlers.analysis import _calc_fibonacci
+                _fib = _calc_fibonacci(candles)
+                _fs = float((_fib or {}).get("nearest_support") or 0)
+                _fr = float((_fib or {}).get("nearest_resistance") or 0)
+                if _fs > 0 and _fr > 0:
+                    support, resistance = _fs, _fr
+            except Exception:
+                pass
+        except Exception:
+            support = resistance = None
 
     return price, support, resistance
 
@@ -239,7 +259,7 @@ async def build_pair_addon_lines(resolution: PairResolution, data_layer) -> Opti
 
         lines = [
             "",
-            f"📎 *الزوج المطلوب: {base}/{quote}* (تحليل مبسّط)",
+            f"📎 *الزوج المطلوب: {base}/{quote}* (تحليل مبسّط — التقرير أعلاه بالدولار)",
             f"• السعر: {_fmt_pair_price(price, quote)}",
         ]
         if support is not None and resistance is not None:
