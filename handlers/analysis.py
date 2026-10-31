@@ -254,6 +254,17 @@ def _harmonize_llm_text(text, vol_ratio=None, rsi=None, cvd_available=None):
         return text
 
 
+def _chart_accuracy_line_px(plotted: float, live_px: float) -> str:
+    """batch51: سطر الدقة من سعر مقروء من الصورة نفسها بمرحلة نسخ مستقلة (لا من سعر السوق الممرَّر للنموذج) —
+    فلا يمكن أن يقارن سعراً بنفسه. فارق ≤3% منسجم؛ 3–10% تنبيه؛ >10% تحذير."""
+    try:
+        if not plotted or not live_px or float(plotted) <= 0 or float(live_px) <= 0:
+            return ""
+        return _chart_accuracy_line(f"PRICE_NOW:{float(plotted):.10f}", float(live_px))
+    except Exception:
+        return ""
+
+
 def _chart_accuracy_line(analysis: str, live_px: float) -> str:
     """batch37 (قرار رحال 16): سطر دقة /chart — يقارن آخر سعر مقروء من الصورة (PRICE_NOW) بالسعر الحي.
     فرق ≤3%: قراءة منسجمة؛ 3–10%: تنبيه؛ >10%: تحذير شديد (صورة قديمة/رمز خاطئ/قراءة خاطئة).
@@ -304,21 +315,34 @@ def _chart_parse_timeframe_b50(analysis: str):
     return label, txt
 
 
-def _chart_rr_line_b50(analysis: str, quote: str = "USDT"):
-    """batch50: سطر R/R محسوب برمجياً من أسعار البنود 6/7/8 (دخول/وقف/هدف) عند إمكان قراءتها وكون
-    ترتيبها منطقياً (وقف < دخول < هدف أو العكس). لا يُعرض شيء إن تعذّر التحقق (لا تخمين)."""
+def _chart_item_lines_b51(analysis: str, nums=("6", "7", "8")) -> dict:
+    """batch51: نص كل بند مرقَّم (يشمل الأسطر الفرعية التالية له حتى البند التالي) — كان المحلّل يقرأ سطر البند وحده
+    فيفشل حين تُكتب الأهداف في أسطر فرعية (SOL/BTC و ETH/BTC)."""
+    import re as _r
+    items, cur = {}, None
+    for ln in (analysis or "").split("\n"):
+        mm = _r.match(r"\s*(\d{1,2})\s*[-–.)]\s*(.*)", ln)
+        if mm:
+            cur = mm.group(1)
+            items[cur] = mm.group(2)
+        elif cur is not None:
+            items[cur] = items.get(cur, "") + "\n" + ln
+    return {k: v for k, v in items.items() if k in nums}
+
+
+def _chart_rr_line_b50(analysis: str, quote: str = "USDT", live_px: float = 0.0):
+    """batch50/51: سطر R/R محسوب برمجياً من أسعار البنود 6/7/8 عند إمكان قراءتها وكون ترتيبها منطقياً
+    (وقف < دخول < هدف أو العكس) + تحذيرات عرض: R/R دون 1، دخول بعيد عن السعر، هدف أول بعيد جداً. لا تخمين."""
     import re as _r
     try:
         vals = {}
-        for ln in (analysis or "").split("\n"):
-            mm = _r.match(r"\s*(6|7|8)\s*[-–.)]\s*(.*)", ln)
-            if not mm or ":" not in mm.group(2):
-                continue
-            body = mm.group(2).split(":", 1)[1]
+        for k, body in _chart_item_lines_b51(analysis).items():
+            body = body.split(":", 1)[1] if ":" in body else body
             body = _r.sub(r"[+-]?\d+(?:\.\d+)?\s*%", " ", body)
             body = _r.sub(r"\b\d+\s*:\s*\d+(?:\.\d+)?\b", " ", body)
+            body = _r.sub(r"(?:هدف|الهدف)\s*(?:ال)?(?:أول|ثاني|1|2)", " ", body)
             nums = [float(x.replace(",", "")) for x in _r.findall(r"(?<![\d.])\d[\d,]*(?:\.\d+)?", body)]
-            vals[mm.group(1)] = [n for n in nums if n > 0]
+            vals[k] = [n for n in nums if n > 0]
         e = (vals.get("6") or [0])[0]
         sl = (vals.get("7") or [0])[0]
         tps = vals.get("8") or []
@@ -338,9 +362,41 @@ def _chart_rr_line_b50(analysis: str, quote: str = "USDT"):
             tp2 = tps[1]
             if (long_ok and tp2 > tp1) or (short_ok and tp2 < tp1):
                 txt += f" | الهدف 2 = {abs(tp2 - e) / risk:.2f}:1"
-        return f"📐 {txt} (دخول {e:g} | وقف {sl:g})"
+        out = f"📐 {txt} (دخول {e:g} | وقف {sl:g})"
+        warns = []
+        if rr1 < 1.0:
+            warns.append("⚠️ عائد الهدف الأول أقل من المخاطرة (R/R دون 1:1)")
+        if live_px and live_px > 0:
+            d_e = abs(e / live_px - 1) * 100
+            d_t = abs(tp1 / live_px - 1) * 100
+            if d_e >= 10:
+                warns.append(f"⚠️ نقطة الدخول تبعد {d_e:.0f}% عن السعر الحالي — خطة بعيدة المدى")
+            if d_t >= 50:
+                warns.append(f"⚠️ الهدف الأول يبعد {d_t:.0f}% عن السعر الحالي — قد يكون قمة النطاق كله لا هدفاً قريباً")
+        if warns:
+            out += "\n" + "\n".join(warns)
+        return out
     except Exception:
         return ""
+
+
+def _chart_tf_word_b51(tf_label: str) -> str:
+    for key, w in (("أسبوعي", "أسبوعية"), ("شهري", "شهرية"), ("4 ساعات", "4 ساعات"),
+                   ("ساعتان", "ساعتين"), ("ساعة", "ساعية")):
+        if key in (tf_label or ""):
+            return w
+    return ""
+
+
+def _chart_fix_tf_wording_b51(text: str, tf_label: str) -> str:
+    """batch51: «شموع يومية» داخل نص لشارت أسبوعي/ساعي → تسمية الإطار الفعلي (الرأس والنص متسقان)."""
+    import re as _r
+    w = _chart_tf_word_b51(tf_label)
+    if not w or "يومي" in (tf_label or ""):
+        return text
+    out = _r.sub(r"(شموع|شمعة|الشموع|الشمعة)\s+(?:ال)?يومية", lambda m: f"{m.group(1)} {w}", text or "")
+    wm = w[:-1] if w.endswith("ة") else w
+    return _r.sub(r"(إغلاق|اغلاق)\s+(?:ال)?يومي", lambda m: f"{m.group(1)} {wm}", out)
 
 
 def _chart_fix_size_line_b50(analysis: str) -> str:
@@ -1989,16 +2045,27 @@ def _build_professional_block(
     # Conservative = بعد تأكيد الارتداد (أقرب للسعر الحالي)
     # إصلاح #133: نطاق أوسع (price*1.01 بدل price) يمنع قفزة entry_agg
     # بنسبة ~8% عند تذبذب السعر حول ns بفارق <1% (تقلب طبيعي بين استدعاءين)
-    if ns > 0 and price * 0.94 < ns < price * 1.01:
-        entry_agg = min(ns, price)  # عند دعم فيبو (أو أقرب إليه)
+    # batch51 (قرار رحال 2026-10-31): مرجع الدخول = إغلاق آخر شمعة مكتملة لا السعر الحي، فلا تتحرك Entry 1/2
+    # وTail Risk بين استدعاءين متتاليين (الحدّ بالسعر الحي يبقى سقفاً: لا دخول أعلى من السعر الحالي).
+    try:
+        from core.indicators import last_candle_is_forming as _lcf51
+        _cs51 = list(candles or [])
+        if _cs51 and len(_cs51) >= 3 and _lcf51(_cs51):
+            _cs51 = _cs51[:-1]
+        _a51 = float(_cs51[-1].get("close", 0)) if _cs51 else 0.0
+        _px_anchor = _a51 if (_a51 > 0 and 0.7 * price < _a51 < 1.4 * price) else price
+    except Exception:
+        _px_anchor = price
+    if ns > 0 and _px_anchor * 0.94 < ns < _px_anchor * 1.01:
+        entry_agg = min(ns, _px_anchor, price)  # عند دعم فيبو (أو أقرب إليه)
     else:
-        entry_agg = price * (1 - atr_dec * 0.8)  # أدنى من السعر الحالي
+        entry_agg = min(_px_anchor * (1 - atr_dec * 0.8), price)  # أدنى من الإغلاق المرجعي
         # entry_below_support_fix: لا يُعرَض دخول عدواني أسفل دعم قائم تحت السعر
         # (يحدث حين 0.8×ATR أكبر من المسافة إلى الدعم) — الحد الأدنى = الدعم نفسه.
-        if 0 < ns < price and entry_agg < ns:
-            entry_agg = ns
-    # Conservative: بين entry_agg والسعر الحالي
-    _cons_offset = (price - entry_agg) * 0.4  # 40% من المسافة
+        if 0 < ns < _px_anchor and entry_agg < ns:
+            entry_agg = min(ns, price)
+    # Conservative: بين entry_agg والإغلاق المرجعي
+    _cons_offset = max(_px_anchor - entry_agg, 0.0) * 0.4  # 40% من المسافة
     entry_cons = entry_agg + _cons_offset
     entry_cons = min(entry_cons, price * 0.998)  # لا يتجاوز السعر الحالي
     # ضمان: Aggressive < Conservative
@@ -2134,13 +2201,18 @@ def _build_professional_block(
         _tail_pct = max(0.05, min(0.15, 4.0 * float(atr_pct) / 100.0))
     except Exception:
         _tail_pct = 0.10
+    # batch51: عمق Tail Risk من الإغلاق المرجعي (آخر شمعة مكتملة) فيثبت بين الاستدعاءات
+    try:
+        _tr_base = _px_anchor
+    except NameError:
+        _tr_base = price
     if pro_sl > 0 and pro_sl < price:
         wc_bd1 = pro_sl  # batch21: أول مستوى = وقف الخسارة المعروض نفسه (كان min(سعر×0.95, SL) فيظهر رقم غير SL)
-        wc_bd2 = min(price * (1 - _tail_pct), pro_sl * 0.95)
+        wc_bd2 = min(_tr_base * (1 - _tail_pct), pro_sl * 0.95)
     else:
-        wc_bd1 = price * 0.95
-        wc_bd2 = price * (1 - _tail_pct)
-    wc_loss = abs(price - wc_bd2) / max(price, 1e-9) * 100
+        wc_bd1 = _tr_base * 0.95
+        wc_bd2 = _tr_base * (1 - _tail_pct)
+    wc_loss = abs(_tr_base - wc_bd2) / max(_tr_base, 1e-9) * 100
 
     sl_type_ar    = _get_sl_type(_scenario, rsi)
     # FIN3/FIN3b: Trailing Stop عند ارتداد من قاع أو دخول قوي
@@ -2207,7 +2279,7 @@ def _build_professional_block(
             (10 if conf > 0.65 else 0)
         ))
         # batch44: «خطر التصحيح» يقيس خطر انعكاس صعود (RSI/حجم) لا استمرار الهبوط — التسمية والمستوى توضحان ذلك
-        _rr_lvl = "منخفض" if _reversal_risk < 30 else "متوسط" if _reversal_risk < 60 else "مرتفع"
+        _rr_lvl = "منخفض" if _reversal_risk < (40 if rsi < 50 else 30) else "متوسط" if _reversal_risk < 60 else "مرتفع"  # batch51: دون RSI 50 لا «متوسط» بجانب «لا إفراط شراء»
         _conf_3d_line = (f"• اتجاه السوق: {_conf_trend}% | جودة الدخول: {_conf_entry}% | "
                          f"خطر تصحيح الصعود (RSI/حجم): {_reversal_risk}% ({_rr_lvl}{' — لا إفراط شراء' if rsi < 50 else ''})")
     except Exception:
@@ -2230,7 +2302,7 @@ def _build_professional_block(
         "• RSI Divergence: 🔴 Bearish Divergence ⚠️ (تحذير هبوطي)" if _rsi_div == "bearish" else
         "• RSI Divergence: ⚪ لا divergence"
     )
-    _vp_txt = _get_vol_profile_ar(_vol_prof, _vol_ratio)
+    _vp_txt = _get_vol_profile_ar(_vol_prof, _vol_ratio, is_bear=bool(is_bear) if "is_bear" in dir() else None)
     # batch32: «غياب طلب» يناقض CVD شرائياً قوياً — نوضح بدل الجزم؛ ونعرض وتيرة الشمعة الجارية إن كانت مختلفة جداً
     try:
         _cvd_vp = float(((tech.get("onchain_data", {}) or {}).get("cvd_pct", 0) or 0)) if isinstance(tech, dict) else 0.0
@@ -2473,8 +2545,8 @@ def _build_professional_block(
     try:
         # batch35: مقياس Tail Risk ثابت (≈10% من السعر) — نربطه بـATR ليُقرأ على مقياس تقلب الأصل نفسه
         if atr_pct and wc_bd1 and wc_bd2 and price:
-            _wc_atr_x = abs(price - wc_bd2) / max(price * float(atr_pct) / 100.0, 1e-9)
-            _wc_ent_txt += f"، ≈ {_wc_atr_x:.1f}× ATR من السعر"
+            _wc_atr_x = abs(_px_anchor - wc_bd2) / max(_px_anchor * float(atr_pct) / 100.0, 1e-9)
+            _wc_ent_txt += f"، ≈ {_wc_atr_x:.1f}× ATR من آخر إغلاق"
             # batch37: المقياس مرتبط بـ4×ATR لكن بسقف 15% وحدّ أدنى 5% — يُذكر عند تطبيق السقف كي لا يُظنّ الرقم خطأً
             # batch42: عندما يكون القاع = الوقف−5% (الأعمق) لا يكون مقياس 4×ATR هو الحاكم فلا نذكره (كان يربك: 6.3× مع «4×ATR مرفوع»)
             _wc_sl_bound = bool(pro_sl) and abs(wc_bd2 - pro_sl * 0.95) <= max(abs(wc_bd2), 1e-9) * 1e-6
@@ -2509,11 +2581,11 @@ def _build_professional_block(
         # = احتمال حركة أعمق نادرة (gap/liquidity event) بعد كسر SL نفسه.
         # الإصلاح: تسمية صريحة "Tail Risk" + توضيح أنه بعد SL لا بدلاً منه.
         (lambda _mtf: (
-            f"• ⚠️ Tail Risk (سيناريو متطرف بعد SL — 4H مؤكِّد الاتجاه، احتمال ضعيف): كسر {_fmt_price(wc_bd1)} → {_fmt_price(wc_bd2)} (خسارة ~{wc_loss:.1f}% من السعر الحالي{_wc_ent_txt} — أعمق من SL)"
+            f"• ⚠️ Tail Risk (سيناريو متطرف بعد SL — 4H مؤكِّد الاتجاه، احتمال ضعيف): كسر {_fmt_price(wc_bd1)} → {_fmt_price(wc_bd2)} (خسارة ~{wc_loss:.1f}% من آخر إغلاق مكتمل{_wc_ent_txt} — أعمق من SL)"
             if "✅" in _mtf else
-            f"• ⚠️ Tail Risk (سيناريو متطرف بعد SL — 4H يعارض، احتمال أعلى من المعتاد): كسر {_fmt_price(wc_bd1)} → {_fmt_price(wc_bd2)} (خسارة ~{wc_loss:.1f}% من السعر الحالي{_wc_ent_txt} — أعمق من SL)"
+            f"• ⚠️ Tail Risk (سيناريو متطرف بعد SL — 4H يعارض، احتمال أعلى من المعتاد): كسر {_fmt_price(wc_bd1)} → {_fmt_price(wc_bd2)} (خسارة ~{wc_loss:.1f}% من آخر إغلاق مكتمل{_wc_ent_txt} — أعمق من SL)"
             if "تعارض" in _mtf else
-            f"• ⚠️ Tail Risk (سيناريو متطرف بعد SL — يحتاج تأكيد إطار أعلى): كسر {_fmt_price(wc_bd1)} → {_fmt_price(wc_bd2)} (خسارة ~{wc_loss:.1f}% من السعر الحالي{_wc_ent_txt} — أعمق من SL)"
+            f"• ⚠️ Tail Risk (سيناريو متطرف بعد SL — يحتاج تأكيد إطار أعلى): كسر {_fmt_price(wc_bd1)} → {_fmt_price(wc_bd2)} (خسارة ~{wc_loss:.1f}% من آخر إغلاق مكتمل{_wc_ent_txt} — أعمق من SL)"
         ))(mtf_status),
     ])
 
@@ -2783,6 +2855,18 @@ def _split_long_message(text: str, limit: int = 3900) -> list:
     while len(remaining) > limit:
         # حاول القطع عند أقرب فاصل فقرة (سطرين فارغين) قبل الحد
         cut = remaining.rfind("\n\n", 0, limit)
+        # batch51 (قرار رحال): يُفضَّل القطع قبل عنوان قسم (سطر يبدأ بـ«*» أو «━») ضمن النصف الأخير من الحد،
+        # فتبدأ الرسالة الثانية بعنوان قسم كامل (مثل «السيناريوهات») ولا ينفصل قسم عن عنوانه.
+        _sec = -1
+        _p = remaining.rfind("\n\n", 0, limit)
+        while _p >= limit * 0.5:
+            _nxt = remaining[_p + 2:_p + 3]
+            if _nxt in ("*", "━"):
+                _sec = _p
+                break
+            _p = remaining.rfind("\n\n", 0, _p)
+        if _sec >= 0:
+            cut = _sec
         if cut < limit * 0.5:  # لا فاصل فقرة مناسب → جرّب سطر واحد
             cut = remaining.rfind("\n", 0, limit)
         if cut < limit * 0.5:  # ما زال غير مناسب → قصّ صريح كملاذ أخير
@@ -2971,12 +3055,14 @@ def _get_market_phase_ar(phase: str) -> str:
     }.get(phase, "⚪ غير محدد")
 
 
-def _get_vol_profile_ar(vol_profile: str, vol_ratio: float) -> str:
-    """تفسير Volume Profile."""
+def _get_vol_profile_ar(vol_profile: str, vol_ratio: float, is_bear=None) -> str:
+    """تفسير Volume Profile. batch51: is_bear (اختياري) يضيف سياق الاتجاه لحالات Climax."""
     if vol_profile == "climax_selling":
-        return f"⚠️ Climax Selling ({fmt_vol_ratio(vol_ratio)}) — ضغط بيعي استثنائي قد يشير لقاع"
+        _ctx = (" (في اتجاه صاعد قد يكون جني أرباح/تصحيحاً لا قاعاً)" if is_bear is False else "")
+        return f"⚠️ Climax Selling ({fmt_vol_ratio(vol_ratio)}) — ضغط بيعي استثنائي قد يشير لقاع{_ctx}"
     elif vol_profile == "climax_buying":
-        return f"⚡ Climax Buying ({fmt_vol_ratio(vol_ratio)}) — ضغط شرائي قوي"
+        _ctx = (" — ضد الاتجاه الهابط: قد يكون ارتداداً مؤقتاً/تغطية مراكز لا انعكاساً مؤكداً" if is_bear else "")
+        return f"⚡ Climax Buying ({fmt_vol_ratio(vol_ratio)}) — ضغط شرائي قوي{_ctx}"
     elif vol_profile == "above_average":
         return f"📈 حجم فوق المتوسط ({fmt_vol_ratio(vol_ratio)})"
     elif vol_profile == "no_demand" or vol_ratio < 0.8:
@@ -6371,13 +6457,39 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # batch50: سعر السوق الحي فقط (لا سعر الصورة) — أساس سطر الدقة كي لا يقارن الصورة بنفسها
         _market_px_chart = float(_current_px or 0)
 
+        # batch51: مرحلة نسخ حرفي للقيم (قصّ وتكبير) ثم حقائق محسوبة برمجياً تُمرَّر للتحليل
+        _legend_b51 = {}
+        _facts_b51 = ""
+        try:
+            _legend_b51 = await engine.news_engine.read_chart_legend(bytes(image_bytes)) or {}
+            if _legend_b51:
+                from core.chart_vision import build_facts as _bf51
+                _facts_b51 = _bf51(_legend_b51, ref_price=_market_px_chart or 0.0,
+                                   quote_unit=_chart_quote)
+        except Exception as _e51:
+            logger.warning(f"chart legend orchestration: {_e51}")
+            _legend_b51, _facts_b51 = {}, ""
+
         analysis = await engine.news_engine.analyze_chart_image(
             image_data=bytes(image_bytes),
             symbol=symbol,
             current_price=_current_px,
-            quote=_chart_quote)
+            quote=_chart_quote,
+            facts_text=_facts_b51)
         _chart_tf_label, analysis = _chart_parse_timeframe_b50(analysis)
+        if "غير محدد" in _chart_tf_label and _legend_b51.get("TIMEFRAME"):
+            _chart_tf_label = _CHART_TF_MAP_B50.get(str(_legend_b51["TIMEFRAME"]).replace(" ", ""), _chart_tf_label)
         analysis = _chart_fix_size_line_b50(analysis)
+        if _legend_b51:
+            try:
+                from core.chart_vision import fix_near_miss_levels as _fnm51, round_indicator_lines as _ril51
+                analysis, _n_fix51 = _fnm51(analysis, _legend_b51)
+                analysis = _ril51(analysis)
+                if _n_fix51:
+                    logger.info(f"chart: صُحِّح {_n_fix51} رقم/أرقام قريبة من قيم الشارت المنسوخة")
+            except Exception as _e51b:
+                logger.warning(f"chart fix levels: {_e51b}")
+        analysis = _chart_fix_tf_wording_b51(analysis, _chart_tf_label)
 
         # chart_px_extract v4: PRICE_NOW marker — الحل الجذري النهائي
         # Qwen3 يكتب "PRICE_NOW:773.28" في أول سطر → نستخرجه بـ str.find
@@ -6533,7 +6645,7 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         c3 = pd3.get("change_24h", 0)
                         _c3_icon = "📈" if c3 >= 0 else "📉"
                         header_lines += [
-                            f"💰 السعر: {_fmt_price(p3, _chart_quote)} ({c3:+.2f}%) {_c3_icon}",
+                            f"💰 السعر: {_fmt_price(p3, _chart_quote)} ({c3:+.2f}% / 24س) {_c3_icon}",
                             f"⏱️ الإطار الزمني: {_chart_tf_label}",
                         ]
                         if _synthetic_warn_chart:
@@ -6560,7 +6672,7 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
         if not _live_px_chart and _market_px_chart > 0:
             _live_px_chart = float(_market_px_chart)  # batch50: لا نقارن سعر الصورة بنفسه
-        _chart_acc_line = _chart_accuracy_line(analysis, _live_px_chart)
+        _chart_acc_line = _chart_accuracy_line_px(float((_legend_b51 or {}).get("PRICE", 0) or 0), _live_px_chart)
         if _chart_acc_line:
             header_lines.append(_chart_acc_line)
         # إصلاح #236: ربط /chart ↔ /signal للتكامل التحليلي
@@ -6584,7 +6696,7 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # مجدداً — لا قيمة مضافة من "تحقق" قد يُناقض النموذج برقم خاطئ.
         _chart_rr_notes = []
         # batch50: R/R محسوب برمجياً من أسعار الدخول/الوقف/الهدف المقروءة (إضافي ومشروط بالتحقق المنطقي)
-        _rr_b50 = _chart_rr_line_b50(analysis, _chart_quote)
+        _rr_b50 = _chart_rr_line_b50(analysis, _chart_quote, _market_px_chart or float(_live_px_chart or 0))
         if _rr_b50:
             _chart_rr_notes.append(_rr_b50)
 
@@ -6676,6 +6788,52 @@ def compute_shared_levels(engine, symbol: str, price: float, candles: list, rsi:
     except Exception as _e:
         logger.warning(f"compute_shared_levels {symbol}: {_e}")
         return None
+
+
+async def cmd_whaletest(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """batch51 (قرار رحال 2026-10-28 بند 9 + 2026-10-31): اختبار Whale التاريخي — للأدمن فقط، قراءة فقط.
+    يجلب سجل Long/Short اليومي من OKX وشموع كل عملة ويعرض عوائد 3 و7 أيام بحسب حالة النسبة. لا يغيّر أي قرار."""
+    msg = _get_message(update, context)
+    try:
+        from core.config import ADMIN_ID as _ADM
+        uid = update.effective_user.id if update.effective_user else 0
+        if uid != _ADM and _sm.get_tier(uid) != "admin":
+            await msg.reply_text("⛔ هذا الأمر للأدمن فقط")
+            return
+        engine = _eng(context)
+        if not engine:
+            await msg.reply_text("⚠️ النظام لم يُهيَّأ بعد")
+            return
+        syms = [a.upper() for a in (context.args or [])][:8] or ["BTC", "ETH", "SOL", "XRP", "DOGE", "BNB"]
+        wait = await msg.reply_text(f"🐋 جاري جلب السجل التاريخي لـ{len(syms)} عملات (قد يستغرق دقيقة)...")
+        import aiohttp as _aio
+        from core import whale_backtest as _wb
+        per_coin, all_recs = {}, []
+        sess = getattr(engine.data_layer, "session", None)
+        for sym in syms:
+            try:
+                url = ("https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio"
+                       f"?ccy={sym}&period=1D")
+                async with sess.get(url, timeout=_aio.ClientTimeout(total=12)) as r:
+                    data = await r.json() if r.status == 200 else {}
+                pts = [(float(x[0]), float(x[1])) for x in (data.get("data") or []) if len(x) >= 2]
+                candles = await engine.data_layer.get_ohlcv(sym, "1d", 365)
+                if not pts or not isinstance(candles, list) or len(candles) < 30:
+                    continue
+                recs = _wb.forward_returns(pts, candles)
+                if recs:
+                    per_coin[sym] = _wb.bucketize(recs)
+                    all_recs.append(recs)
+            except Exception as _e:
+                logger.warning(f"whaletest {sym}: {_e}")
+        if not all_recs:
+            await wait.edit_text("⚠️ تعذّر جلب بيانات كافية (OKX لم يرجع سجلاً يومياً).")
+            return
+        text = _wb.format_report_ar(per_coin, _wb.merge_buckets(all_recs)).replace("*", "")
+        await wait.edit_text(text)
+    except Exception as e:
+        logger.error(f"cmd_whaletest: {e}")
+        await msg.reply_text(f"⚠️ تعذّر تنفيذ الاختبار: {str(e)[:120]}")
 
 
 async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -7131,7 +7289,7 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📈 RSI: {rsi:.0f}"
             + (" (ذروة بيع)" if rsi <= 30 else " (قرب ذروة البيع)" if rsi <= 35
                else " (ذروة شراء)" if rsi >= 70 else "")
-            + f" | Fear & Greed: {fear_val} ({_fgz_q(fear_val)[0]})",
+            + f" | Fear & Greed: {fear_val} ({_fgz_q(fear_val)[0]}{' — مؤشر عام لسوق الكريبتو بالدولار' if pair_primary else ''})",
             "",
             f"🎯 *التوصية: {direction}*",
             "📌 الأساس: " + " | ".join(x for x in (
@@ -7163,7 +7321,7 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                else ""),
             f"• هدف 1{' (مرجعي)' if (_qs_wait_ref or _qs_rr_low) else ''}:       {_fmt_price(tp1, quote)} ({(tp1/max(entry,1e-9)-1)*100:+.1f}%)",
             f"• هدف 2{' (مرجعي)' if (_qs_wait_ref or _qs_rr_low) else ''}:       {_fmt_price(tp2, quote)} ({(tp2/max(entry,1e-9)-1)*100:+.1f}%)",
-            f"• وقف الخسارة{' (مرجعي)' if (_qs_wait_ref or _qs_rr_low) else ''}: {_fmt_price(sl, quote)} ({(sl/max(entry,1e-9)-1)*100:+.1f}%)",
+            f"• وقف الخسارة{' (مرجعي)' if (_qs_wait_ref or _qs_rr_low) else ''}: {_fmt_price(sl, quote)} ({(sl/max(entry,1e-9)-1)*100:+.1f}% من الدخول)",
         ]
         # quick_nyse_fix: /signal و/analyze يُظهران تنبيه إغلاق NYSE/NASDAQ للأصول
         # المُرمَّزة بينما /quicksignal لم يكن يُظهره — نفس الدالة ونفس منطقة
@@ -7399,6 +7557,7 @@ def register(app):
     app.add_handler(CommandHandler("quicksignal",  cmd_quicksignal))
     app.add_handler(CommandHandler("upgrade",      cmd_upgrade))
     app.add_handler(CommandHandler("chart",        cmd_chart_cmd))
+    app.add_handler(CommandHandler("whaletest",    cmd_whaletest))  # batch51: اختبار Whale التاريخي (أدمن، قراءة فقط)
     app.add_handler(CommandHandler("marketrisk",   cmd_risk))   # تقييم مخاطر السوق (/risk صار لمخاطر المحفظة في trading.py)
     app.add_handler(MessageHandler(
         filters.PHOTO | filters.Document.IMAGE,

@@ -22,3 +22,6 @@ cryptography==42.0.5
 
 # Logging — مستخدمة في جميع core/ files
 loguru==0.7.2
+
+# Pillow — قصّ وتكبير شريط مؤشرات الشارت في /chart (اختياري: غيابه يعيد القراءة الحرة)
+Pillow==10.4.0

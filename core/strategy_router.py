@@ -619,7 +619,7 @@ class SignalLayer:
         elif vol_r > 5.0:
             warnings.append(f"🔥 حجم استثنائي {_fvr(vol_r)} — إشارة قوية")
         elif vol_r > 3.0:
-            warnings.append(f"📈 حجم مرتفع {_fvr(vol_r)} — تأكيد الحركة")
+            warnings.append(f"📈 حجم مرتفع {_fvr(vol_r)} — يؤكد قوة الحركة الجارية (لا يحدد اتجاهها)")
 
         # تسمية نوع الصفقة
         trade_label = ""

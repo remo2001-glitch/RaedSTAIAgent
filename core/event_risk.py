@@ -111,7 +111,7 @@ def _get_recurring_events() -> List[MarketEvent]:
         next_nfp = _first_weekday_of_month(4, hour_utc=13, minute=30)
     events.append(MarketEvent(
         name="Non-Farm Payrolls", name_ar="الوظائف غير الزراعية NFP",
-        severity=EventSeverity.MEDIUM,
+        severity=EventSeverity.HIGH,  # batch51 (قرار رحال 2026-10-31): كان MEDIUM؛ يتساوى مع CPI/FOMC (الحجم 25% في النافذة، و0.7 قبل أسبوع)
         event_time=next_nfp,
         hours_before=2, hours_after=1,
         crypto_impact=0.60,

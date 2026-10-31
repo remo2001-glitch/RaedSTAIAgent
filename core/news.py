@@ -1569,10 +1569,59 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
             logger.warning(f"detect_market_type error: {e}")
             return "spot"  # fallback آمن
 
+    async def read_chart_legend(self, image_data: bytes) -> dict:
+        """batch51: مرحلة النسخ الحرفي — قصّ الشريط العلوي ولوحات المؤشرات وتكبيرهما ثم نسخ القيم دون تفسير.
+        يعيد قاموس core.chart_vision.parse_legend أو {} عند أي فشل (فيعمل التحليل كما كان)."""
+        try:
+            if not self.groq_key:
+                return {}
+            from core import chart_vision as _cv
+            crops = _cv.crop_legend_images(image_data)
+            if not crops:
+                return {}
+            import base64, ssl, urllib.request, asyncio
+            content = []
+            for c in crops:
+                content.append({"type": "image_url",
+                                "image_url": {"url": "data:image/jpeg;base64," + base64.b64encode(c).decode("utf-8")}})
+            content.append({"type": "text", "text": _cv.legend_prompt()})
+            payload = json.dumps({
+                "model": "qwen/qwen3.8-27b",
+                "messages": [
+                    {"role": "system", "content": "أنت أداة نسخ دقيقة للأرقام. أجب بالأسطر المطلوبة فقط بلا تفكير ولا شرح."},
+                    {"role": "user", "content": content},
+                ],
+                "temperature": 0.0, "max_tokens": 700,
+                "reasoning_effort": "none",
+            }, ensure_ascii=False).encode("utf-8")
+            req = urllib.request.Request(
+                GROQ_API_URL, data=payload,
+                headers={"Authorization": f"Bearer {self.groq_key}",
+                         "Content-Type": "application/json",
+                         "User-Agent": "RaedTradingAgent/3.0"},
+                method="POST")
+            ctx = ssl.create_default_context()
+            loop = asyncio.get_event_loop()
+            resp = await loop.run_in_executor(
+                None, lambda r=req: urllib.request.urlopen(r, context=ctx, timeout=45).read().decode())
+            txt = json.loads(resp)["choices"][0]["message"]["content"].strip()
+            import re as _re_lg
+            txt = _re_lg.sub(r"<think>.*?</think>", "", txt, flags=_re_lg.S | _re_lg.I).strip()
+            leg = _cv.parse_legend(txt)
+            if not _cv.legend_is_usable(leg):
+                logger.info("chart legend: غير قابلة للاستخدام — يُكمَل بالقراءة الحرة")
+                return {}
+            logger.info(f"chart legend ✅ keys={[k for k in leg if k not in ('raw','rsi')]}")
+            return leg
+        except Exception as e:
+            logger.warning(f"chart legend pass: {e}")
+            return {}
+
     async def analyze_chart_image(self, image_data: bytes,
                                    symbol: str = "",
                                    current_price: float = 0.0,
-                                   quote: str = "USDT") -> str:
+                                   quote: str = "USDT",
+                                   facts_text: str = "") -> str:
         """تحليل صورة الشارت — نموذج Vision محدَّث مع fallback.
         T30_fix: symbol و current_price لمنع تحليل أصل خاطئ.
         """
@@ -1629,8 +1678,12 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
                     "PRICE_NOW:[السعر] مثال: PRICE_NOW:773.28\n"
                 )
             # chart_prompt_v2: هيكل جديد — قرار قابل للتنفيذ مع تحفظ واضح
+            _facts_block = (
+                "حقائق مؤكدة منسوخة من الشارت ومحسوبة برمجياً — استخدمها كما هي ولا تناقضها ولا تغيّر أرقامها:\n"
+                f"{facts_text}\n\n" if facts_text else "")
             prompt_text = (
                 f"أنت خبير تحليل فني كريبتو. حلل شارت {sym_text} واكتب بالعربية فقط.\n"
+                f"{_facts_block}"
                 f"{_px_instruction}"
                 "قبل كل شيء اكتب في سطر مستقل الإطار الزمني المحدَّد (الأزرق/المظلَّل) في شريط الإطارات أعلى الشارت هكذا:\n"
                 "TIMEFRAME:[القيمة] مثل TIMEFRAME:1W أو 1D أو 4H أو 1H أو 15m (إن لم يظهر شريط الإطارات اكتب TIMEFRAME:؟)\n"
@@ -1655,6 +1708,11 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
                 "- اذكر الأرقام الدقيقة من الشارت دائماً وانسخ الأرقام حرفياً كما تظهر بكل منازلها العشرية وأصفارها (لا تحذف ولا تضف رقماً)\n"
                 "- إذا ظهرت على الشارت خطوط مسمّاة (SUPPORT/RESISTANCE/VWAP/SAR/SuperTrend/BOLL) فاذكر قيمها كما هي بأسمائها؛ SuperTrend وSAR مؤشرا وقف متحرك لا مقاومة: تحت السعر = صاعد، فوقه = هابط\n"
                 "- خط MA5/MA10 داخل لوحة الحجم (Volume) هو متوسط حجم لا متوسط سعر\n"
+                "- لا تستخدم أرقام محور السعر (الأعمدة الرقمية على يمين الشارت) كمستويات دعم/مقاومة/أهداف؛ المستويات من الخطوط المسمّاة وقمم/قيعان الشموع فقط\n"
+                "- اكتب أسماء المؤشرات كما تظهر بالضبط (RSI6 وليس RSI10)، ولا تقل «إشارة بيع» لمؤشر في ذروة بيع: اذكر ذروة البيع واحتمال الارتداد\n"
+                "- لا تصف الاتجاه بـ«هابط بقوة» إذا كان السعر فوق SuperTrend أو فوق قاع مرتفع؛ وصف الشموع الأخيرة يجب أن يطابق الصورة (ارتداد/جانبي/هابط) ولا تذكر «شموع يومية» إن كان الإطار غير يومي\n"
+                "- اجعل الهدف الأول مستوى قريباً ظاهراً على الشارت (VWAP/منتصف أو حد البولنجر/قمة سابقة قريبة)، والمستوى البعيد (قمة النطاق كله) هدفاً ثانياً فقط إن كان منطقياً\n"
+                "- اكتب كل بند 6 و7 و8 بأسعار مفردة واضحة\n"
                 "- استخدم وحدة السعر الظاهرة على الشارت (USDT أو BTC أو ETH) ولا تضف رمز $ لأسعار مسعّرة بالبيتكوين أو الإيثريوم\n"
                 "- لا تجزم بالصعود أو الهبوط — استخدم: مشروط، إذا تحقق، محتمل\n"
                 "- إذا RSI>70: نبّه على خطر التصحيح قبل التوصية\n"

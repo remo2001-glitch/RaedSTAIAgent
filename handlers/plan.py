@@ -2919,11 +2919,22 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 _wk1_extra = _wk2_now = ""
             _mr_wk2 = bool((locals().get("_pw_asset_ctx") or {}).get("mr")) if len(symbols) == 1 else False
+            # batch51 (قرار رحال 2026-10-31): الأسبوعان 3/4 للأصل الواحد يذكران مستوياته الفعلية بدل النص العام
+            _wk3_extra = _wk4_extra = ""
+            try:
+                _c51 = locals().get("_pw_asset_ctx")
+                if len(symbols) == 1 and _c51 and _c51.get("support") and _c51.get("resistance"):
+                    _wk3_extra = (f" (الوقف المرجعي تحت الدعم {_fmt_price(_c51['support'])}؛ "
+                                  f"ثبات فوقه يدعم الاستمرار)")
+                    _wk4_extra = (f" — المرجع: دعم {_fmt_price(_c51['support'])} | مقاومة {_fmt_price(_c51['resistance'])}"
+                                  + (f" | Fear الآن {fear_val}" if fear_val is not None else ""))
+            except Exception:
+                _wk3_extra = _wk4_extra = ""
             week_lines = [
                 f"• أسبوع 1: مراقبة — لا دخول حتى تتضح الإشارات{_wk1_extra}",
                 f"• أسبوع 2: دخول جزئي (25%) فقط إذا تحقق شرط المصفوفة ({_wk2_cond(symbols, _mr_wk2)}){_wk2_now} مع ثقة ≥ حد الدخول وتأكيدات 2/4",
-                "• أسبوع 3: إن وُجدت صفقة مفتوحة فراجع وقف الخسارة؛ وإلا واصل المراقبة",
-                "• أسبوع 4: تقييم — هل بلغت الثقة حد الدخول (55%) وتحققت تأكيدات 2/4 مع اتجاه شراء؟",
+                f"• أسبوع 3: إن وُجدت صفقة مفتوحة فراجع وقف الخسارة{_wk3_extra}؛ وإلا واصل المراقبة",
+                f"• أسبوع 4: تقييم — هل بلغت الثقة حد الدخول (55%) وتحققت تأكيدات 2/4 مع اتجاه شراء؟{_wk4_extra}",
             ]
         lines, _closed_pw = _collapse_closed_notes(lines)
         if _closed_pw:
