@@ -1479,7 +1479,7 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 if (cand and not conf_warn and (cand or {}).get("direction") not in ("long", "short")
                         and conf < SIGNAL_DIRECTION_MIN_CONF):
-                    conf_warn = " ⚠️ الاتجاه محايد (الجهة تتطلب ثقة 65%)"
+                    conf_warn = " ⚠️ الاتجاه غير مؤكد (الجهة تتطلب ثقة 65%)"
             except Exception:
                 pass
             # تنسيق السعر الصحيح حسب حجمه
@@ -1824,7 +1824,7 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             _vd = (f"ثقة {_c_vd}% أقل من حد الدخول {_thr_vd}% → لا دخول الآن مهما تحقق شرط "
                                    + (("المصفوفة (ADX/EMA50)" if _nc_now else "المصفوفة (Fear/ADX)") if _pm_neutral_matrix else "RSI/الحجم"))
                         elif _d_vd not in ("long", "short"):
-                            _vd = f"ثقة {_c_vd}% لكن الاتجاه محايد → لا دخول الآن"
+                            _vd = f"ثقة {_c_vd}% لكن الاتجاه غير مؤكد → لا دخول الآن"
                         else:
                             _vd = f"ثقة {_c_vd}% ≥ حد الدخول {_thr_vd}% — الدخول مشروط بتأكيدات 2/4"
                         lines.append(f"  ↳ الحكم الحالي: {_vd}")

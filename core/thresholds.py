@@ -112,10 +112,10 @@ def neutral_direction_reason(conf) -> str:
     try:
         c = float(conf)
         c = c * 100 if c <= 1 else c
-        return (f"الاتجاه محايد: لا إشارة شراء/بيع قبل ثقة {SIGNAL_DIRECTION_MIN_CONF:.0%} "
+        return (f"الاتجاه غير مؤكد: لا إشارة شراء/بيع قبل ثقة {SIGNAL_DIRECTION_MIN_CONF:.0%} "
                 f"(حد تحديد الجهة، منفصل عن حد الدخول — الحالية {c:.0f}%)")
     except (TypeError, ValueError):
-        return f"الاتجاه محايد: لا إشارة شراء/بيع قبل ثقة {SIGNAL_DIRECTION_MIN_CONF:.0%}"
+        return f"الاتجاه غير مؤكد: لا إشارة شراء/بيع قبل ثقة {SIGNAL_DIRECTION_MIN_CONF:.0%}"
 
 
 # ── batch34: رموز مدعومة بسلعة (ذهب) — ليست عملات كريبتو تقليدية ─────────────

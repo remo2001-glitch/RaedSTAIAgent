@@ -14,12 +14,13 @@ from typing import Dict, List, Optional, Tuple
 
 # مفاتيح مرحلة النسخ الحرفي
 LEGEND_KEYS = (
-    "TIMEFRAME", "PRICE", "CHANGE_24H", "VWAP", "BOLL_MID", "BOLL_UB", "BOLL_LB",
+    # batch54: SYMBOL يُقرأ ثانياً — أي بتر لاحق للرد (كما حدث: 7 مفاتيح فقط) لا يُفقد الرمز
+    "TIMEFRAME", "SYMBOL", "PRICE", "CHANGE_24H", "VWAP", "BOLL_MID", "BOLL_UB", "BOLL_LB",
     "RESISTANCE", "SUPPORT", "SUPERTREND_GREEN", "SUPERTREND_RED", "SAR",
     "RSI_A", "RSI_B", "RSI_C", "MACD_DIFF", "MACD_DEA", "MACD_HIST",
     "KDJ_K", "KDJ_D", "KDJ_J", "VOL", "VOL_MA5",
     # batch53
-    "SYMBOL", "CHART_HIGH", "CHART_LOW", "PERF_7D", "PERF_30D", "AXIS_TICKS",
+    "CHART_HIGH", "CHART_LOW", "PERF_7D", "PERF_30D", "AXIS_TICKS",
 )
 
 _LEVEL_KEYS = ("VWAP", "BOLL_MID", "BOLL_UB", "BOLL_LB", "RESISTANCE", "SUPPORT",
@@ -129,6 +130,29 @@ def parse_legend(text: str) -> Dict[str, object]:
         res[k] = f
         res["raw"][k] = raw  # type: ignore[index]
     return res
+
+
+def legend_missing_keys(text: str) -> List[str]:
+    """batch54: مفاتيح النسخ الحرفي التي لا سطر لها في رد النموذج (قيمتها «--» تُحسب موجودة)."""
+    present = set()
+    for line in (text or "").splitlines():
+        if ":" in line:
+            present.add(line.split(":", 1)[0].strip().upper().replace(" ", "_"))
+    return [k for k in LEGEND_KEYS if k not in present]
+
+
+def legend_is_truncated(text: str) -> bool:
+    """batch54: الرد مبتور إن غاب SYMBOL أو أقل من 80% من المفاتيح (يحدث حين يستهلك التفكير سقف الإخراج)."""
+    miss = legend_missing_keys(text)
+    return ("SYMBOL" in miss) or (len(LEGEND_KEYS) - len(miss) < int(len(LEGEND_KEYS) * 0.8))
+
+
+def drop_partial_last_line(text: str) -> str:
+    """batch54: عند البتر يكون آخر سطر مقطوعاً غالباً (مثل «BOLL_LB: 0.000» بدل 0.0009643) فيُحذف بدل أن يُقرأ كقيمة."""
+    lines = [ln for ln in (text or "").splitlines() if ln.strip()]
+    if lines:
+        lines = lines[:-1]
+    return "\n".join(lines)
 
 
 def legend_is_usable(leg: Dict[str, object]) -> bool:
@@ -393,7 +417,9 @@ def replace_item(text: str, num: int, new_lines: List[str]) -> str:
     a, b = _item_span(lines, num)
     if a < 0:
         return text
-    return "\n".join(lines[:a] + new_lines + lines[b:])
+    # batch54 (#420): كان الاستبدال يأكل السطر الفارغ الفاصل بين البنود فيلتصق البند 3 بقائمة المستويات
+    tail = [""] if (b > a and lines[b - 1].strip() == "") else []
+    return "\n".join(lines[:a] + new_lines + tail + lines[b:])
 
 
 def build_levels_item(leg: Dict[str, object], price: float, quote_unit: str = "") -> List[str]:

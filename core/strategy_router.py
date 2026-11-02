@@ -32,12 +32,14 @@ def _neutral_dir_b53(s) -> str:
         lean = ""
         if srcs:
             avg = sum(srcs) / len(srcs)
+            # batch54 (#452/#460/#469): أساس الميل يُذكر (متوسط مصادر الإشارة وعددها) كي لا يُقرأ كحكم على السعر اللحظي
+            _basis = f" (متوسط مصادر الإشارة {avg:.0%} من {len(srcs)} مصادر)"
             if avg <= 0.45:
-                lean = " — الميل: 🔴 هابط"
+                lean = " — الميل: 🔴 هابط" + _basis
             elif avg >= 0.55:
-                lean = " — الميل: 🟢 صاعد"
+                lean = " — الميل: 🟢 صاعد" + _basis
             else:
-                lean = " — الميل: بلا ميل واضح"
+                lean = " — الميل: بلا ميل واضح" + _basis
         return f"⚪ غير مؤكد (ثقة {s.confidence:.0%} < {_DMC:.0%}){lean}"
     except Exception:
         return "⚪ محايد"

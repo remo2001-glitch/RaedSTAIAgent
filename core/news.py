@@ -635,6 +635,7 @@ class NewsEngine:
   إذا لم يكن له اسم عربي شائع ومعروف (مثال: "شركة Strategy (MicroStrategy)"
   وليس "ميتاستراتجى" أو أي تحويل صوتي مُخترَع) — لا تخترع نقحرة عربية لاسم
   علم؛ استخدم الاسم الإنجليزي كما هو عند الشك
+- batch54: لا تنسب حدثاً أو رقماً لجهة (FBI، SEC، شركة…) إلا إذا ورد في العنوان صراحةً أنها هي من قالته أو فعلته؛ ولا تدمج خبرين مختلفين في جملة واحدة. شركة Strategy تُكتب «Strategy (MicroStrategy سابقاً)» في كل المواضع، ولا تكتب «الاستراتيجية» وحدها
 - crypto_ticker_transliteration_fix: نفس قاعدة company_name_fix أعلاه تنطبق
   على رموز العملات الرقمية (tickers) أيضاً — اكتب الرمز بحروفه اللاتينية
   كما هو دائماً (XRP وليس "إكس آر بي"، BTC وليس "بي تي سي"، SOL وليس "سول")،
@@ -1040,6 +1041,10 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
     def _fix_ticker_transliteration(self, text: str) -> str:
         if not text:
             return text
+        # batch54 (#500): «الاستراتيجية تعيد شراء…» تُقرأ استراتيجية تداول لا اسم شركة
+        import re as _rt54
+        text = _rt54.sub(r"(?<![\w])(?:شركة\s+)?الاستراتيجية(?=\s+(?:تعيد|تشتري|تستحوذ|تضيف|اشترت|تحتفظ|تعلن))", "Strategy (MicroStrategy سابقاً)", text)
+        text = text.replace("MicroStrategy تعيد", "Strategy (MicroStrategy سابقاً) تعيد") if "Strategy (MicroStrategy" not in text else text
         for phonetic, ticker in self._TICKER_TRANSLITERATIONS.items():
             text = text.replace(phonetic, ticker)
         return text
@@ -1065,6 +1070,15 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
         )
 
         _conf_news = analysis.get("confidence", 0)
+        # batch54 (#497): تقدير النموذج لا يتجاوز 60% في العرض عند مصدر واحد (التحذير والرقم كانا متناقضين: «مصدر واحد» مع 78%)
+        _conf_capped_b54 = False
+        try:
+            _srcs_b54 = {str((_i or {}).get("source", "") or "").strip() for _i in (items or []) if (_i or {}).get("source")}
+            if len(_srcs_b54) == 1 and _conf_news > 0.60:
+                _conf_news = 0.60
+                _conf_capped_b54 = True
+        except Exception:
+            pass
         _bars_news = int(_conf_news * 10)
         _sentiment_bar = "█" * _bars_news + "░" * (10 - _bars_news)
         _n_sources = len(items) if items else 0
@@ -1096,9 +1110,9 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
             ]
         elif _is_negative:
             _scenarios = [
-                "🔴 *هابط:* إذا استمر ضغط الأخبار السلبية → حركة محتملة من -3% إلى -5% (تقدير تقريبي وليس هدفاً)",
-                "⚪ *محايد:* إذا تم تسعير الأخبار مسبقاً → استقرار",
-                "🟢 *صاعد:* إذا تحسنت البيانات الاقتصادية → ارتداد",
+                "🔴 *هابط:* إذا استمر ضغط الأخبار السلبية → حركة محتملة من -3% إلى -5% (نطاق تقريبي ثابت غير مربوط بتقلب السوق الحالي — ليس هدفاً)",
+                "⚪ *محايد:* إذا كانت الأخبار مُسعَّرة مسبقاً (لا هبوط ملحوظ في السعر خلال 24 ساعة) → استقرار",
+                "🟢 *صاعد:* إذا تلاشى أثر الأخبار السلبية أو عاد الشراء المؤسسي/التدفقات الداخلة → ارتداد",
             ]
         else:
             _scenarios = [
@@ -1128,7 +1142,7 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
             "📰 *تقرير الأخبار — رائد*",
             "━━━━━━━━━━━━━━━━━━",
             f"المشاعر: {sent_label} | التأثير: {impact_ar}",
-            f"ثقة التحليل (تقدير النموذج اللغوي): {_sentiment_bar} {_conf_news:.0%} | الأخبار: {_n_sources}{_src_txt}"
+            f"ثقة التحليل (تقدير النموذج اللغوي): {_sentiment_bar} {_conf_news:.0%}{' (مقيَّدة بسقف 60% لمصدر واحد)' if _conf_capped_b54 else ''} | الأخبار: {_n_sources}{_src_txt}"
             + (" — مصدر واحد فقط" if len(_src_names) == 1 else ""),
             *([f"العملات المطلوبة: {'، '.join(symbols)} — {_sym_cov_txt}"] if symbols else []),
             "",
@@ -1148,8 +1162,9 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
                               "استغلال","اختراق","سرقة","هجوم","احتيال",
                               "خارجة","تدفقات خروج","تدفق خروج","نزوح","تراجع حاد","هبوط حاد","تصفية")
         _neg_sue_news    = r"\bsues?\b"
-        _pos_exact_news  = r"\b(approve|approved|launch|partner|etf|adopt|record|high|charter|trust|license|grant|bullish|surge|rally|inflows?)\b"
-        _pos_ar_news     = ("موافقة","إطلاق","شراكة","قياسي","تبنّي","ترخيص","تدفقات داخلة","تدفقات دخول")
+        _pos_exact_news  = r"\b(approve|approved|launch|partner|etf|adopt|record|high|charter|trust|license|grant|bullish|surge|rally|inflows?|buys|bought|accumulat\w*)\b"
+        _pos_ar_news     = ("موافقة","إطلاق","شراكة","قياسي","تبنّي","ترخيص","تدفقات داخلة","تدفقات دخول",
+                            "تعيد شراء","تشتري بيتكوين","شراء بيتكوين","يشتري بيتكوين","تستحوذ على بيتكوين","تضيف بيتكوين")
         def _news_impact(e):
             el = str(e).lower()
             if (_re_news.search(_neg_exact_news, el) or _re_news.search(_neg_sue_news, el)
@@ -1281,7 +1296,11 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
             logger.debug(f"news token dedup: {_dedup_e}")
 
         if extra:
-            lines += ["", "📡 *أخبار إضافية* (نفس مفتاح الأيقونات)"]
+            try:  # batch54 (#501): السلبي أولاً أيضاً في الأخبار الإضافية (كما في الأحداث الرئيسية)
+                extra = sorted(extra, key=lambda _x: _news_impact(str(_x))[0])
+            except Exception:
+                pass
+            lines += ["", "📡 *أخبار إضافية* (نفس مفتاح الأيقونات — السلبي أولاً)"]
             for t in extra:
                 # V4b (#1345/#1347): رفع حد العنوان من 90 → 150 حرف
                 title = _truncate_at_word(t, 150)
@@ -1571,6 +1590,8 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
 
     # ── batch52: Gemini (طبقة مجانية) مساراً أول لرؤية الشارت؛ Groq احتياطي ─────────
     _gemini_models_cache_b52 = None  # آخر نموذج Gemini نجح (يُجرَّب أولاً)
+    _gemini_cooldown_b54 = {}        # batch54: نموذج → وقت انتهاء تبريد 429 (يتخطّاه بدل طلب مرفوض)
+    _gemini_last_b54 = {}            # batch54: آخر finishReason/thoughtsTokenCount (للتشخيص)
 
     @staticmethod
     def _gemini_key_b52() -> str:
@@ -1587,7 +1608,7 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
 
     async def _gemini_vision_b52(self, images, system_text: str, user_text: str,
                                  max_tokens: int = 3500, thinking: int = 0,
-                                 timeout: int = 60):
+                                 timeout: int = 60, thinking_level: str = ""):
         """يعيد (نص|None، حالة). الحالة: ok / nokey / rate / auth / error.
         لا يرفع استثناءً؛ أي فشل يُترجَم لحالة فيُجرَّب Groq."""
         import os, base64, ssl, urllib.request, urllib.error
@@ -1613,19 +1634,29 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
                         continue
                     raise
 
+        import time as _tm54, re as _re54
         status = "error"
         tried = set()
+        retried_429 = set()
         discovered = False
         queue = list(self._gemini_models_cache_b52 or models)
         while queue:
             model = queue.pop(0)
             if model in tried:
                 continue
+            _cd = NewsEngine._gemini_cooldown_b54.get(model, 0)
+            if _cd > _tm54.time():
+                logger.info(f"Gemini Vision ({model}): في تبريد 429 ({int(_cd - _tm54.time())}ث) — تخطٍّ")
+                status = "rate"
+                tried.add(model)
+                continue
             tried.add(model)
-            for use_thinking in ((True, False) if "2.5" in model else (False,)):
+            # batch54: نماذج 3.x تفكّر افتراضياً وتوكنات التفكير تُحسب من سقف الإخراج فيُبتر الرد؛ نحدّد مستوى التفكير
+            for use_thinking in ((True, False) if ("2.5" in model or thinking_level) else (False,)):
                 gen_cfg = {"temperature": 0.1, "maxOutputTokens": int(max_tokens) * (2 if "2.5" not in model else 1)}
                 if use_thinking:
-                    gen_cfg["thinkingConfig"] = {"thinkingBudget": int(thinking)}
+                    gen_cfg["thinkingConfig"] = ({"thinkingBudget": int(thinking)} if "2.5" in model
+                                                 else {"thinkingLevel": thinking_level})
                 body = {"contents": [{"role": "user", "parts": parts}], "generationConfig": gen_cfg}
                 if system_text:
                     body["systemInstruction"] = {"parts": [{"text": system_text}]}
@@ -1645,6 +1676,14 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
                             if pt.get("text") and not pt.get("thought"):
                                 txt += pt["text"]
                     txt = txt.strip()
+                    try:
+                        _fr = (cands[0].get("finishReason") if cands else "") or ""
+                        _th = (data.get("usageMetadata") or {}).get("thoughtsTokenCount")
+                        NewsEngine._gemini_last_b54 = {"finish": _fr, "thoughts": _th, "model": model, "len": len(txt)}
+                        if _fr and _fr != "STOP":
+                            logger.warning(f"Gemini Vision ({model}): finishReason={_fr} thoughts={_th} len={len(txt)}")
+                    except Exception:
+                        pass
                     if len(txt) < 20 and max_tokens > 100:
                         logger.warning(f"Gemini Vision ({model}): رد فارغ/محجوب — تجربة التالي")
                         status = "error"
@@ -1655,12 +1694,24 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
                 except urllib.error.HTTPError as e:
                     err = ""
                     try:
-                        err = e.read().decode()[:300]
+                        err = e.read().decode()[:3000]
                     except Exception:
                         pass
                     logger.error(f"Gemini Vision ({model}) HTTP {e.code}: {err[:200]}")
                     if e.code == 429:
                         status = "rate"
+                        # batch54: retryDelay قصير ← انتظار وإعادة مرة واحدة؛ وإلا تبريد النموذج فلا نكرر طلباً مرفوضاً
+                        _dm = _re54.search(r'"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"', err)
+                        _delay = float(_dm.group(1)) if _dm else 0.0
+                        if 0 < _delay <= 20 and model not in retried_429:
+                            retried_429.add(model)
+                            logger.info(f"Gemini Vision ({model}): 429 — انتظار {_delay:.0f}ث وإعادة مرة واحدة")
+                            await asyncio.sleep(_delay + 0.5)
+                            tried.discard(model)
+                            queue.insert(0, model)
+                        else:
+                            _cool = 3600 if "PerDay" in err else max(_delay, 45.0)
+                            NewsEngine._gemini_cooldown_b54[model] = _tm54.time() + _cool
                         break
                     if e.code in (401, 403):
                         return None, "auth"
@@ -1706,14 +1757,27 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
             crops = _cv.crop_legend_images(image_data)
             if not crops:
                 return {}
+            _sys_lg = "أنت أداة نسخ دقيقة للأرقام. أجب بالأسطر المطلوبة فقط بلا تفكير ولا شرح."
             txt, st = await self._gemini_vision_b52(
-                crops, "أنت أداة نسخ دقيقة للأرقام. أجب بالأسطر المطلوبة فقط بلا تفكير ولا شرح.",
-                _cv.legend_prompt(), max_tokens=1200, thinking=0, timeout=25)
+                crops, _sys_lg, _cv.legend_prompt(), max_tokens=2500, thinking=0, timeout=30,
+                thinking_level="minimal")
             if not txt:
                 logger.info(f"chart legend: Gemini {st} — يُكمَل بالقراءة الحرة")
                 return {}
             import re as _re_lg
             txt = _re_lg.sub(r"<think>.*?</think>", "", txt, flags=_re_lg.S | _re_lg.I).strip()
+            # batch54: رد مبتور (7 مفاتيح فقط وآخر رقم مقطوع) ← إعادة مرة واحدة بسقف أكبر، وإلا حذف آخر سطر مقطوع
+            if _cv.legend_is_truncated(txt):
+                logger.warning(f"chart legend: رد مبتور ({len(txt)} حرف، ناقص {len(_cv.legend_missing_keys(txt))} مفتاحاً) — {self._gemini_last_b54}")
+                txt2, st2 = await self._gemini_vision_b52(
+                    crops, _sys_lg, _cv.legend_prompt(), max_tokens=4000, thinking=0, timeout=30,
+                    thinking_level="minimal")
+                if txt2:
+                    txt2 = _re_lg.sub(r"<think>.*?</think>", "", txt2, flags=_re_lg.S | _re_lg.I).strip()
+                    if len(_cv.legend_missing_keys(txt2)) < len(_cv.legend_missing_keys(txt)):
+                        txt = txt2
+                if _cv.legend_is_truncated(txt):
+                    txt = _cv.drop_partial_last_line(txt)
             leg = _cv.parse_legend(txt)
             if not _cv.legend_is_usable(leg):
                 logger.info("chart legend: غير قابلة للاستخدام — يُكمَل بالقراءة الحرة")
@@ -1828,6 +1892,11 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
                 "- وصف الاتجاه العام يجب أن يطابق «ملخص الاتجاه» و«ميزان المؤشرات» في الحقائق؛ لا تقل «قناة صاعدة» دون دليل ولا تستخدم كلمات إنجليزية داخل النص العربي\n"
                 "- لا تجزم بالصعود أو الهبوط — استخدم: مشروط، إذا تحقق، محتمل\n"
                 "- إذا RSI>70: نبّه على خطر التصحيح قبل التوصية\n"
+                "- نقطة الدخول (بند 6) يجب أن تتسق مع شرط التفعيل في بند 5: إن اشترطت إغلاقاً فوق مستوى فلا تضع الدخول تحت ذلك المستوى\n"
+                "- لا تتحدث عن حجم التداول أو أحجام الشموع إلا إن ظهر VOL في الحقائق؛ ولا تسمِّ نماذج مركّبة (قاع/قمة ثنائية، رأس وكتفين) دون وضوح تام\n"
+                "- اكتب مرحلة السوق (بند 14) بالعربية فقط دون مصطلح إنجليزي بين قوسين\n"
+                "- لا تقترح شراء عند مستوى يبعد أكثر من 15% عن السعر الحالي كفرصة قريبة؛ اذكره كدعم بعيد فقط\n"
+                "- في سيناريو الفشل اذكر المحطات الوسطى بين الدعم وأدنى قاع من الخطوط المقروءة (SAR/الحد السفلي للبولنجر…) ثم القاع\n"
                 "- اذكر سيناريو الاختراق (شروطه) وسيناريو الفشل\n"
                 "- لا تستخدم ** أو _ أو # أو markdown\n"
             )
@@ -1846,7 +1915,8 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
             _gem_status = "nokey"
             if self._gemini_key_b52():
                 _gtxt, _gem_status = await self._gemini_vision_b52(
-                    [image_data], _sys_txt, prompt_text, max_tokens=4000, thinking=1024, timeout=70)
+                    [image_data], _sys_txt, prompt_text, max_tokens=4000, thinking=1024, timeout=70,
+                    thinking_level="low")
                 if _gtxt:
                     _gtxt = _strip_markdown_headers(_gtxt)
                     if len(_gtxt) >= 20:

@@ -341,7 +341,7 @@ def evaluate_signal(s: SignalInput) -> dict:
 
     # اتجاه محايد / قرار WAIT / حجم 0%: لا يجوز "مقبولة بشروط" أو "قوية" بجانب انتظار
     if s.decision_wait and verdict in ("PASS", "CONDITIONAL"):
-        reasons.append("ح: القرار الفعلي انتظار (الاتجاه محايد، حجم الصفقة 0%) — "
+        reasons.append("ح: القرار الفعلي انتظار (الاتجاه غير مؤكد، حجم الصفقة 0%) — "
                        "الحكم مُقيَّد بحالة «انتظار»")
         verdict = "WATCH ONLY"
 

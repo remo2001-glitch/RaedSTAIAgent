@@ -189,6 +189,7 @@ async def _fetch_pair_full_b53(resolution: PairResolution, data_layer):
     price = float(price_d["price"])
 
     support = resistance = None
+    near_sup = None
     lean = ""
     candles = await data_layer.get_ohlcv(base, "1d", 60, quote)
     if isinstance(candles, list) and len(candles) >= 20:
@@ -230,6 +231,15 @@ async def _fetch_pair_full_b53(resolution: PairResolution, data_layer):
                 if c < price and (price - c) / price >= min_gap:
                     support = c
                     break
+            # batch54 (#450): أقرب دعم مباشر تخطّاه الحد الأدنى للمسافة — يُذكر كي لا يختلف عن «دعم الشارت» بلا تفسير
+            near_sup = None
+            _below = [c for c in sup_c if c < price]
+            if _below:
+                near_sup = max(_below)
+                if support is not None and near_sup <= support:
+                    near_sup = None
+                elif support is None and (price - near_sup) / price >= min_gap:
+                    near_sup = None
             for c in res_c:
                 if c > price and (c - price) / price >= min_gap:
                     resistance = c
@@ -267,10 +277,13 @@ async def _fetch_pair_full_b53(resolution: PairResolution, data_layer):
                 parts.append(f"7 أيام {ch7:+.1f}%")
             if bull + bear >= 2:
                 word = "🟢 صاعد" if bull > bear else "🔴 هابط" if bear > bull else "⚪ مختلط"
-                lean = f"• ميل الزوج (يومي): {word} — " + "، ".join(parts)
+                # batch54 (#451/#459): الأساس (بوحدة الزوج) وعدد المعايير الحاكمة
+                lean = (f"• ميل الزوج بوحدة {quote} (يومي، بأغلبية {max(bull, bear)} من {bull + bear} معايير): {word} — "
+                        + "، ".join(parts))
         except Exception:
             support = resistance = None
-    return price, support, resistance, lean
+            near_sup = None
+    return price, support, resistance, lean, near_sup
 
 
 async def _fetch_pair_price_and_levels(resolution: PairResolution, data_layer):
@@ -279,7 +292,7 @@ async def _fetch_pair_price_and_levels(resolution: PairResolution, data_layer):
     full = await _fetch_pair_full_b53(resolution, data_layer)
     if full is None:
         return None
-    return full[0], full[1], full[2]
+    return full[0], full[1], full[2]  # batch54: الدالة الكاملة تُرجع الآن 5 عناصر (الأخير أقرب دعم مباشر)
 
 
 async def build_pair_addon_lines(resolution: PairResolution, data_layer) -> Optional[List[str]]:
@@ -311,7 +324,8 @@ async def build_pair_addon_lines(resolution: PairResolution, data_layer) -> Opti
         fetched = await _fetch_pair_full_b53(resolution, data_layer)
         if fetched is None:
             return ["", f"ℹ️ {base}/{quote} غير متوفر مباشرة على OKX حالياً."]
-        price, support, resistance, _lean = fetched
+        price, support, resistance, _lean = fetched[:4]
+        _near_sup = fetched[4] if len(fetched) > 4 else None
 
         lines = [
             "",
@@ -321,6 +335,8 @@ async def build_pair_addon_lines(resolution: PairResolution, data_layer) -> Opti
         if support is not None and resistance is not None:
             _sup_s, _res_s = _fmt_pair_price_pair(support, resistance, quote)
             lines.append(f"• دعم: {_sup_s} | مقاومة: {_res_s}")
+            if _near_sup:
+                lines.append(f"  ↳ أقرب دعم مباشر {_fmt_pair_price(_near_sup, quote)} على بُعد {(price - _near_sup) / price * 100:.1f}% (أقرب من الحد الأدنى للمسافة فلم يُعتمد دعماً رئيسياً)")
         if _lean:
             lines.append(_lean)
         lines.append(f"💡 التقرير الكامل لهذا الزوج: /quicksignal {base}{quote}")
