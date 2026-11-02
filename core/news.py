@@ -1600,6 +1600,19 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
         parts.append({"text": user_text})
         ctx = ssl.create_default_context()
         loop = asyncio.get_event_loop()
+        async def _call_b52(rq):
+            # أخطاء الخادم المؤقتة (500/502/503/504 «ضغط عالٍ») تُعاد مرتين بتأخير قصير قبل ترك النموذج
+            for _i in range(3):
+                try:
+                    return await loop.run_in_executor(
+                        None, lambda r=rq: urllib.request.urlopen(r, context=ctx, timeout=timeout).read().decode())
+                except urllib.error.HTTPError as _he:
+                    if _he.code in (500, 502, 503, 504) and _i < 2:
+                        logger.warning(f"Gemini Vision: HTTP {_he.code} مؤقت — إعادة محاولة {_i + 1}")
+                        await asyncio.sleep(1.5 * (_i + 1))
+                        continue
+                    raise
+
         status = "error"
         tried = set()
         discovered = False
@@ -1623,8 +1636,7 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
                              "User-Agent": "RaedTradingAgent/3.0"},
                     method="POST")
                 try:
-                    resp = await loop.run_in_executor(
-                        None, lambda r=req: urllib.request.urlopen(r, context=ctx, timeout=timeout).read().decode())
+                    resp = await _call_b52(req)
                     data = json.loads(resp)
                     cands = data.get("candidates") or []
                     txt = ""
