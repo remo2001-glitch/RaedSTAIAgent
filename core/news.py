@@ -1570,6 +1570,8 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
             return "spot"  # fallback آمن
 
     # ── batch52: Gemini (طبقة مجانية) مساراً أول لرؤية الشارت؛ Groq احتياطي ─────────
+    _gemini_models_cache_b52 = None  # آخر نموذج Gemini نجح (يُجرَّب أولاً)
+
     @staticmethod
     def _gemini_key_b52() -> str:
         import os
@@ -1592,61 +1594,93 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
         key = self._gemini_key_b52()
         if not key:
             return None, "nokey"
-        models = [m.strip() for m in (os.getenv("GEMINI_VISION_MODEL") or "gemini-2.5-flash,gemini-2.0-flash").split(",") if m.strip()]
+        models = [m.strip() for m in (os.getenv("GEMINI_VISION_MODEL") or "gemini-3.8-flash,gemini-2.5-flash").split(",") if m.strip()]
         parts = [{"inline_data": {"mime_type": self._img_mime_b52(im),
                                   "data": base64.b64encode(im).decode("utf-8")}} for im in images]
         parts.append({"text": user_text})
         ctx = ssl.create_default_context()
         loop = asyncio.get_event_loop()
         status = "error"
-        for model in models:
-            gen_cfg = {"temperature": 0.1, "maxOutputTokens": int(max_tokens)}
-            if "2.5" in model:
-                gen_cfg["thinkingConfig"] = {"thinkingBudget": int(thinking)}
-            body = {"contents": [{"role": "user", "parts": parts}], "generationConfig": gen_cfg}
-            if system_text:
-                body["systemInstruction"] = {"parts": [{"text": system_text}]}
-            req = urllib.request.Request(
-                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-                data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-                headers={"x-goog-api-key": key, "Content-Type": "application/json",
-                         "User-Agent": "RaedTradingAgent/3.0"},
-                method="POST")
-            try:
-                resp = await loop.run_in_executor(
-                    None, lambda r=req: urllib.request.urlopen(r, context=ctx, timeout=timeout).read().decode())
-                data = json.loads(resp)
-                cands = data.get("candidates") or []
-                txt = ""
-                if cands:
-                    for pt in (cands[0].get("content") or {}).get("parts") or []:
-                        if pt.get("text") and not pt.get("thought"):
-                            txt += pt["text"]
-                txt = txt.strip()
-                if len(txt) < 20 and max_tokens > 100:
-                    logger.warning(f"Gemini Vision ({model}): رد فارغ/محجوب — تجربة التالي")
-                    status = "error"
-                    continue
-                logger.info(f"Gemini Vision ({model}): {len(txt)} حرف ✅")
-                return txt, "ok"
-            except urllib.error.HTTPError as e:
-                err = ""
+        tried = set()
+        discovered = False
+        queue = list(self._gemini_models_cache_b52 or models)
+        while queue:
+            model = queue.pop(0)
+            if model in tried:
+                continue
+            tried.add(model)
+            for use_thinking in ((True, False) if "2.5" in model else (False,)):
+                gen_cfg = {"temperature": 0.1, "maxOutputTokens": int(max_tokens) * (2 if "2.5" not in model else 1)}
+                if use_thinking:
+                    gen_cfg["thinkingConfig"] = {"thinkingBudget": int(thinking)}
+                body = {"contents": [{"role": "user", "parts": parts}], "generationConfig": gen_cfg}
+                if system_text:
+                    body["systemInstruction"] = {"parts": [{"text": system_text}]}
+                req = urllib.request.Request(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                    data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+                    headers={"x-goog-api-key": key, "Content-Type": "application/json",
+                             "User-Agent": "RaedTradingAgent/3.0"},
+                    method="POST")
                 try:
-                    err = e.read().decode()[:300]
-                except Exception:
-                    pass
-                logger.error(f"Gemini Vision ({model}) HTTP {e.code}: {err[:200]}")
-                if e.code == 429:
-                    status = "rate"
-                elif e.code in (401, 403):
-                    return None, "auth"
-                else:
+                    resp = await loop.run_in_executor(
+                        None, lambda r=req: urllib.request.urlopen(r, context=ctx, timeout=timeout).read().decode())
+                    data = json.loads(resp)
+                    cands = data.get("candidates") or []
+                    txt = ""
+                    if cands:
+                        for pt in (cands[0].get("content") or {}).get("parts") or []:
+                            if pt.get("text") and not pt.get("thought"):
+                                txt += pt["text"]
+                    txt = txt.strip()
+                    if len(txt) < 20 and max_tokens > 100:
+                        logger.warning(f"Gemini Vision ({model}): رد فارغ/محجوب — تجربة التالي")
+                        status = "error"
+                        break
+                    logger.info(f"Gemini Vision ({model}): {len(txt)} حرف ✅")
+                    NewsEngine._gemini_models_cache_b52 = [model] + [m for m in models if m != model]
+                    return txt, "ok"
+                except urllib.error.HTTPError as e:
+                    err = ""
+                    try:
+                        err = e.read().decode()[:300]
+                    except Exception:
+                        pass
+                    logger.error(f"Gemini Vision ({model}) HTTP {e.code}: {err[:200]}")
+                    if e.code == 429:
+                        status = "rate"
+                        break
+                    if e.code in (401, 403):
+                        return None, "auth"
+                    if e.code == 400 and use_thinking:
+                        continue  # أعد المحاولة بلا thinkingConfig
                     status = "error"
-                continue
-            except Exception as ge:
-                logger.warning(f"Gemini Vision ({model}): {ge}")
-                status = "error"
-                continue
+                    break
+                except Exception as ge:
+                    logger.warning(f"Gemini Vision ({model}): {ge}")
+                    status = "error"
+                    break
+            # كل النماذج المعروفة فشلت بـ404/خطأ → اكتشاف أحدث نموذج flash متاح لمرة واحدة
+            if not queue and not discovered and status == "error":
+                discovered = True
+                try:
+                    lreq = urllib.request.Request(
+                        "https://generativelanguage.googleapis.com/v1beta/models?pageSize=200",
+                        headers={"x-goog-api-key": key, "User-Agent": "RaedTradingAgent/3.0"})
+                    lresp = await loop.run_in_executor(
+                        None, lambda r=lreq: urllib.request.urlopen(r, context=ctx, timeout=20).read().decode())
+                    names = []
+                    for m in json.loads(lresp).get("models", []):
+                        nm = (m.get("name") or "").replace("models/", "")
+                        if ("flash" in nm and "generateContent" in (m.get("supportedGenerationMethods") or [])
+                                and not any(b in nm for b in ("lite", "image", "tts", "live", "audio", "embedding", "thinking", "exp"))):
+                            names.append(nm)
+                    import re as _rem
+                    names.sort(key=lambda n: [int(x) for x in _rem.findall(r"\d+", n)], reverse=True)
+                    queue = [n for n in names if n not in tried][:3]
+                    logger.info(f"Gemini Vision: نماذج مكتشفة {queue}")
+                except Exception as le:
+                    logger.warning(f"Gemini model discovery: {le}")
         return None, status
 
     async def read_chart_legend(self, image_data: bytes) -> dict:
@@ -1662,7 +1696,7 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
                 return {}
             txt, st = await self._gemini_vision_b52(
                 crops, "أنت أداة نسخ دقيقة للأرقام. أجب بالأسطر المطلوبة فقط بلا تفكير ولا شرح.",
-                _cv.legend_prompt(), max_tokens=700, thinking=0, timeout=45)
+                _cv.legend_prompt(), max_tokens=1200, thinking=0, timeout=45)
             if not txt:
                 logger.info(f"chart legend: Gemini {st} — يُكمَل بالقراءة الحرة")
                 return {}
