@@ -139,6 +139,9 @@ async def agent_okx_review() -> Dict[str, Any]:
                         "okx-cex-market", "okx-cex-trade",
                         "okx-cex-portfolio", "okx-cex-smartmoney",
                         "okx-sentiment-tracker",
+                        # batch52: عُرفت في مراجعة 2026-11-02
+                        "okx-cex-earn", "_shared", "earn-hunter", "okx-cex-auth",
+                        "okx-cex-skill-mp", "okx-cex-bot",
                     }
                     new_skills = set(skills) - known_skills
                     if new_skills:
@@ -150,15 +153,17 @@ async def agent_okx_review() -> Dict[str, Any]:
         # فحص OKX API للأصول المُرمَّزة الجديدة
         try:
             stock_url = ("https://www.okx.com/api/v5/public/instruments"
-                         "?instType=SPOT&instFamily=STOCKS")
+                         "?instType=SPOT")
             req = urllib.request.Request(
                 stock_url,
                 headers={"User-Agent": "RaedReview/1.0"})
-            stock_data = await asyncio.to_thread(_fetch_json, req, 8)
+            stock_data = await asyncio.to_thread(_fetch_json, req, 15)
             if stock_data.get("code") == "0":
                 instruments = stock_data.get("data", [])
+                # batch52: instFamily لا يصلح لسوق SPOT (HTTP 400)؛ نجلب SPOT ونفلتر محلياً X-prefix مقابل USDT
                 x_stocks = [i["instId"] for i in instruments
-                            if i.get("instId", "").startswith("X")]
+                            if i.get("instId", "").startswith("X")
+                            and i.get("instId", "").endswith("-USDT")]
                 result["findings"].append(
                     f"📊 أصول X-prefix في OKX Spot: {len(x_stocks)} أصل")
                 # الأصول المعروفة حالياً
@@ -216,7 +221,10 @@ def agent_finance_review(project_files: Dict[str, str]) -> Dict[str, Any]:
             result["ok"].append(f"✅ {msg}")
 
     # ── فحص Stop Loss ──
-    sl_patterns = re.findall(r"(\d+\.?\d*)%[-–]?\)", an)
+    # batch52: كان يلتقط أي «NN%)» في الملف (ثقة/حدود/تعليقات) فيعدّها وقفاً؛ الآن حدود الوقف الفعلية فقط
+    # (سطور تعيّن sl_pct*/_sl_cap* بـ min(..., سقف)).
+    sl_patterns = re.findall(
+        r"(?:sl_pct\w*|_sl_cap\w*|sl_cap\w*)\s*=\s*min\(.*?,\s*(\d+\.?\d*)\s*\)", an)
     large_sl = [p for p in sl_patterns if float(p) > 20]
     if large_sl:
         result["warnings"].append(
@@ -300,7 +308,9 @@ def agent_code_review(project_files: Dict[str, str]) -> Dict[str, Any]:
             ("FIN3b: Trailing RSI",           "rsi < 15"),
             ("BT1_fix: Yahoo backtest",       "_ohlcv_yahoo"),
             ("core.data_layer imports",       "from core.data_layer import"),
-            ("R1: /risk command",             'CommandHandler("risk"'),
+        ],
+        "trading.py": [
+            ("R1: /risk command",     'CommandHandler("risk"'),
         ],
         "plan.py": [
             ("TK5_fix: plan_month",   "_use_futures_pm"),
@@ -375,9 +385,9 @@ def agent_qa_review(project_files: Dict[str, str]) -> Dict[str, Any]:
 
     # ── اختبارات X-prefix ──
     x_tests = [
-        ("XSPCX bypass check_spot",  "_is_x_prefix = _raw_symbol.startswith" in an),
-        ("XAMZN bypass analyze",      "_is_x_an = raw_arg.upper().startswith" in an),
-        ("XGOOGL bypass quicksignal", "_is_x_qs = raw_arg.upper().startswith" in an),
+        ("XSPCX bypass check_spot",  "_is_x_prefix = is_tokenized_x_ticker(_raw_symbol)" in an),
+        ("XAMZN bypass analyze",      "_is_x_an = is_tokenized_x_ticker(raw_arg)" in an),
+        ("XGOOGL bypass quicksignal", "_is_x_qs = is_tokenized_x_ticker(raw_arg)" in an),
         ("X-prefix display symbol",   "signal.symbol = _display_symbol" in an),
         ("X-prefix chart link",       "CHART_SIG_fix" in an),
     ]
@@ -721,7 +731,7 @@ async def cmd_review(update, context):
         # جمع ملفات المشروع
         project_files = {}
         base_paths = ["/app/handlers", "/app/core", "/app", ".", "./handlers", "./core"]
-        for fname in ["analysis.py", "plan.py", "data_layer.py", "news.py"]:
+        for fname in ["analysis.py", "plan.py", "data_layer.py", "news.py", "trading.py"]:
             for base in base_paths:
                 try:
                     with open(f"{base}/{fname}", encoding="utf-8") as f:

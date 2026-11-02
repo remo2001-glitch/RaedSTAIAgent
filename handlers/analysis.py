@@ -254,18 +254,18 @@ def _harmonize_llm_text(text, vol_ratio=None, rsi=None, cvd_available=None):
         return text
 
 
-def _chart_accuracy_line_px(plotted: float, live_px: float) -> str:
+def _chart_accuracy_line_px(plotted: float, live_px: float, quote: str = "USDT") -> str:
     """batch51: سطر الدقة من سعر مقروء من الصورة نفسها بمرحلة نسخ مستقلة (لا من سعر السوق الممرَّر للنموذج) —
     فلا يمكن أن يقارن سعراً بنفسه. فارق ≤3% منسجم؛ 3–10% تنبيه؛ >10% تحذير."""
     try:
         if not plotted or not live_px or float(plotted) <= 0 or float(live_px) <= 0:
             return ""
-        return _chart_accuracy_line(f"PRICE_NOW:{float(plotted):.10f}", float(live_px))
+        return _chart_accuracy_line(f"PRICE_NOW:{float(plotted):.10f}", float(live_px), quote)
     except Exception:
         return ""
 
 
-def _chart_accuracy_line(analysis: str, live_px: float) -> str:
+def _chart_accuracy_line(analysis: str, live_px: float, quote: str = "USDT") -> str:
     """batch37 (قرار رحال 16): سطر دقة /chart — يقارن آخر سعر مقروء من الصورة (PRICE_NOW) بالسعر الحي.
     فرق ≤3%: قراءة منسجمة؛ 3–10%: تنبيه؛ >10%: تحذير شديد (صورة قديمة/رمز خاطئ/قراءة خاطئة).
     يُرجع نصاً فارغاً إن غاب أحد السعرين (لا تخمين)."""
@@ -279,12 +279,12 @@ def _chart_accuracy_line(analysis: str, live_px: float) -> str:
             return ""
         dev = abs(plotted - float(live_px)) / float(live_px) * 100.0
         if dev <= 3.0:
-            return f"✅ دقة القراءة: آخر سعر في الصورة {_fmt_price(plotted)} قريب من السعر الحي (فرق {dev:.1f}%)"
+            return f"✅ دقة القراءة: آخر سعر في الصورة {_fmt_price(plotted, quote)} قريب من السعر الحي (فرق {dev:.1f}%)"
         if dev <= 10.0:
-            return (f"⚠️ دقة القراءة: آخر سعر في الصورة {_fmt_price(plotted)} يختلف عن السعر الحي "
-                    f"{_fmt_price(float(live_px))} بـ{dev:.1f}% — قد تكون الصورة قديمة؛ حدّثها قبل الاعتماد على المستويات")
-        return (f"🚨 دقة القراءة: فرق كبير {dev:.1f}% بين سعر الصورة {_fmt_price(plotted)} والسعر الحي "
-                f"{_fmt_price(float(live_px))} — صورة قديمة أو رمز/قراءة خاطئة؛ لا تعتمد على مستويات هذا التحليل")
+            return (f"⚠️ دقة القراءة: آخر سعر في الصورة {_fmt_price(plotted, quote)} يختلف عن السعر الحي "
+                    f"{_fmt_price(float(live_px), quote)} بـ{dev:.1f}% — قد تكون الصورة قديمة؛ حدّثها قبل الاعتماد على المستويات")
+        return (f"🚨 دقة القراءة: فرق كبير {dev:.1f}% بين سعر الصورة {_fmt_price(plotted, quote)} والسعر الحي "
+                f"{_fmt_price(float(live_px), quote)} — صورة قديمة أو رمز/قراءة خاطئة؛ لا تعتمد على مستويات هذا التحليل")
     except Exception:
         return ""
 
@@ -299,6 +299,26 @@ _CHART_TF_MAP_B50 = {
 }
 
 
+def _chart_norm_tf_b52(raw: str) -> str:
+    """batch52: يحوّل تسميات الإطار العربية في واجهة OKX («1 ي» «4 س» «15 د» «1 أ» «1 ش») إلى مفاتيح الخريطة (1D 4H 15M 1W 1MO).
+    يترك المفاتيح اللاتينية كما هي."""
+    import re as _r
+    t = (raw or "").strip().upper().replace(" ", "")
+    m = _r.fullmatch(r"(\d+)(يوم|ي|ساعة|ساعات|س|دقيقة|دقائق|د|اسبوع|أسبوع|أ|شهر|ش)", t)
+    if not m:
+        return t
+    n, u = m.group(1), m.group(2)
+    if u in ("ي", "يوم"):
+        return f"{n}D"
+    if u in ("س", "ساعة", "ساعات"):
+        return f"{n}H"
+    if u in ("د", "دقيقة", "دقائق"):
+        return "1MIN" if n == "1" else f"{n}M"
+    if u in ("أ", "أسبوع", "اسبوع"):
+        return f"{n}W"
+    return f"{n}MO"
+
+
 def _chart_parse_timeframe_b50(analysis: str):
     """batch50: الإطار الزمني الفعلي من الصورة (سطر TIMEFRAME:) — كان يُعرض «يومي (1D)» ثابتاً
     حتى لشارت أسبوعي. يُرجع (وصف، نص التحليل بدون السطر). غير محدد → «غير محدد»."""
@@ -307,7 +327,7 @@ def _chart_parse_timeframe_b50(analysis: str):
     m = _r.search(r"TIMEFRAME:\s*\[?\s*([^\]\n]*)", txt)
     label = "غير محدد (تحقق من الإطار في صورتك)"
     if m:
-        raw = m.group(1).strip().upper().replace(" ", "")
+        raw = _chart_norm_tf_b52(m.group(1))
         if raw in ("1M", "M") and "MIN" in txt.upper():
             raw = "1MIN"
         label = _CHART_TF_MAP_B50.get(raw, label)
@@ -6478,7 +6498,7 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             facts_text=_facts_b51)
         _chart_tf_label, analysis = _chart_parse_timeframe_b50(analysis)
         if "غير محدد" in _chart_tf_label and _legend_b51.get("TIMEFRAME"):
-            _chart_tf_label = _CHART_TF_MAP_B50.get(str(_legend_b51["TIMEFRAME"]).replace(" ", ""), _chart_tf_label)
+            _chart_tf_label = _CHART_TF_MAP_B50.get(_chart_norm_tf_b52(str(_legend_b51["TIMEFRAME"])), _chart_tf_label)
         analysis = _chart_fix_size_line_b50(analysis)
         if _legend_b51:
             try:
@@ -6672,7 +6692,7 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
         if not _live_px_chart and _market_px_chart > 0:
             _live_px_chart = float(_market_px_chart)  # batch50: لا نقارن سعر الصورة بنفسه
-        _chart_acc_line = _chart_accuracy_line_px(float((_legend_b51 or {}).get("PRICE", 0) or 0), _live_px_chart)
+        _chart_acc_line = _chart_accuracy_line_px(float((_legend_b51 or {}).get("PRICE", 0) or 0), _live_px_chart, _chart_quote)
         if _chart_acc_line:
             header_lines.append(_chart_acc_line)
         # إصلاح #236: ربط /chart ↔ /signal للتكامل التحليلي
@@ -6714,6 +6734,9 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if _chart_rr_notes:
             _analysis_clean += "\n\n" + "\n".join(_chart_rr_notes)
+        # batch52: فشل التحليل (حد الطلبات/انقطاع) مع قراءة ناجحة للشريط ← نعرض الحقائق المقروءة بدل رسالة اعتذار وحدها
+        if _analysis_clean.startswith(("⚠️", "❌")) and _facts_b51:
+            _analysis_clean += "\n\n📌 ما قُرئ من الشارت (دون تحليل):\n" + _facts_b51
         # NYSE_hours_fix: تنبيه خارج ساعات NYSE في /analyze
         try:
             _sm_an2 = context.bot_data.get("subscription_manager")

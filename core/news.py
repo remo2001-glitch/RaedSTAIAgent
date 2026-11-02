@@ -1569,42 +1569,103 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
             logger.warning(f"detect_market_type error: {e}")
             return "spot"  # fallback آمن
 
+    # ── batch52: Gemini (طبقة مجانية) مساراً أول لرؤية الشارت؛ Groq احتياطي ─────────
+    @staticmethod
+    def _gemini_key_b52() -> str:
+        import os
+        return (os.getenv("GEMINI_API_KEY") or "").strip()
+
+    @staticmethod
+    def _img_mime_b52(data: bytes) -> str:
+        if data[:8] == b"\x89PNG\r\n\x1a\n":
+            return "image/png"
+        if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+            return "image/webp"
+        return "image/jpeg"
+
+    async def _gemini_vision_b52(self, images, system_text: str, user_text: str,
+                                 max_tokens: int = 3500, thinking: int = 0,
+                                 timeout: int = 60):
+        """يعيد (نص|None، حالة). الحالة: ok / nokey / rate / auth / error.
+        لا يرفع استثناءً؛ أي فشل يُترجَم لحالة فيُجرَّب Groq."""
+        import os, base64, ssl, urllib.request, urllib.error
+        key = self._gemini_key_b52()
+        if not key:
+            return None, "nokey"
+        models = [m.strip() for m in (os.getenv("GEMINI_VISION_MODEL") or "gemini-2.5-flash,gemini-2.0-flash").split(",") if m.strip()]
+        parts = [{"inline_data": {"mime_type": self._img_mime_b52(im),
+                                  "data": base64.b64encode(im).decode("utf-8")}} for im in images]
+        parts.append({"text": user_text})
+        ctx = ssl.create_default_context()
+        loop = asyncio.get_event_loop()
+        status = "error"
+        for model in models:
+            gen_cfg = {"temperature": 0.1, "maxOutputTokens": int(max_tokens)}
+            if "2.5" in model:
+                gen_cfg["thinkingConfig"] = {"thinkingBudget": int(thinking)}
+            body = {"contents": [{"role": "user", "parts": parts}], "generationConfig": gen_cfg}
+            if system_text:
+                body["systemInstruction"] = {"parts": [{"text": system_text}]}
+            req = urllib.request.Request(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+                headers={"x-goog-api-key": key, "Content-Type": "application/json",
+                         "User-Agent": "RaedTradingAgent/3.0"},
+                method="POST")
+            try:
+                resp = await loop.run_in_executor(
+                    None, lambda r=req: urllib.request.urlopen(r, context=ctx, timeout=timeout).read().decode())
+                data = json.loads(resp)
+                cands = data.get("candidates") or []
+                txt = ""
+                if cands:
+                    for pt in (cands[0].get("content") or {}).get("parts") or []:
+                        if pt.get("text") and not pt.get("thought"):
+                            txt += pt["text"]
+                txt = txt.strip()
+                if len(txt) < 20 and max_tokens > 100:
+                    logger.warning(f"Gemini Vision ({model}): رد فارغ/محجوب — تجربة التالي")
+                    status = "error"
+                    continue
+                logger.info(f"Gemini Vision ({model}): {len(txt)} حرف ✅")
+                return txt, "ok"
+            except urllib.error.HTTPError as e:
+                err = ""
+                try:
+                    err = e.read().decode()[:300]
+                except Exception:
+                    pass
+                logger.error(f"Gemini Vision ({model}) HTTP {e.code}: {err[:200]}")
+                if e.code == 429:
+                    status = "rate"
+                elif e.code in (401, 403):
+                    return None, "auth"
+                else:
+                    status = "error"
+                continue
+            except Exception as ge:
+                logger.warning(f"Gemini Vision ({model}): {ge}")
+                status = "error"
+                continue
+        return None, status
+
     async def read_chart_legend(self, image_data: bytes) -> dict:
-        """batch51: مرحلة النسخ الحرفي — قصّ الشريط العلوي ولوحات المؤشرات وتكبيرهما ثم نسخ القيم دون تفسير.
-        يعيد قاموس core.chart_vision.parse_legend أو {} عند أي فشل (فيعمل التحليل كما كان)."""
+        """batch51/52: مرحلة النسخ الحرفي — قصّ الشريط العلوي ولوحات المؤشرات وتكبيرهما ثم نسخ القيم دون تفسير.
+        batch52: تعمل عبر Gemini فقط؛ مع Groq وحده (حد 7000 توكن إدخال/دقيقة) لا تتسع مرحلتان فتُتخطّى
+        ويُكمَل بالتحليل الحر كما كان قبل الدفعة 51. يعيد قاموس core.chart_vision.parse_legend أو {}."""
         try:
-            if not self.groq_key:
+            if not self._gemini_key_b52():
                 return {}
             from core import chart_vision as _cv
             crops = _cv.crop_legend_images(image_data)
             if not crops:
                 return {}
-            import base64, ssl, urllib.request, asyncio
-            content = []
-            for c in crops:
-                content.append({"type": "image_url",
-                                "image_url": {"url": "data:image/jpeg;base64," + base64.b64encode(c).decode("utf-8")}})
-            content.append({"type": "text", "text": _cv.legend_prompt()})
-            payload = json.dumps({
-                "model": "qwen/qwen3.8-27b",
-                "messages": [
-                    {"role": "system", "content": "أنت أداة نسخ دقيقة للأرقام. أجب بالأسطر المطلوبة فقط بلا تفكير ولا شرح."},
-                    {"role": "user", "content": content},
-                ],
-                "temperature": 0.0, "max_tokens": 700,
-                "reasoning_effort": "none",
-            }, ensure_ascii=False).encode("utf-8")
-            req = urllib.request.Request(
-                GROQ_API_URL, data=payload,
-                headers={"Authorization": f"Bearer {self.groq_key}",
-                         "Content-Type": "application/json",
-                         "User-Agent": "RaedTradingAgent/3.0"},
-                method="POST")
-            ctx = ssl.create_default_context()
-            loop = asyncio.get_event_loop()
-            resp = await loop.run_in_executor(
-                None, lambda r=req: urllib.request.urlopen(r, context=ctx, timeout=45).read().decode())
-            txt = json.loads(resp)["choices"][0]["message"]["content"].strip()
+            txt, st = await self._gemini_vision_b52(
+                crops, "أنت أداة نسخ دقيقة للأرقام. أجب بالأسطر المطلوبة فقط بلا تفكير ولا شرح.",
+                _cv.legend_prompt(), max_tokens=700, thinking=0, timeout=45)
+            if not txt:
+                logger.info(f"chart legend: Gemini {st} — يُكمَل بالقراءة الحرة")
+                return {}
             import re as _re_lg
             txt = _re_lg.sub(r"<think>.*?</think>", "", txt, flags=_re_lg.S | _re_lg.I).strip()
             leg = _cv.parse_legend(txt)
@@ -1625,8 +1686,8 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
         """تحليل صورة الشارت — نموذج Vision محدَّث مع fallback.
         T30_fix: symbol و current_price لمنع تحليل أصل خاطئ.
         """
-        if not self.groq_key:
-            return "⚠️ Groq API غير مُفعَّل — أضف GROQ_API_KEY في Railway"
+        if not self.groq_key and not self._gemini_key_b52():
+            return "⚠️ لا يوجد مفتاح رؤية — أضف GEMINI_API_KEY أو GROQ_API_KEY في Railway"
 
         import base64, ssl, urllib.request, urllib.error, asyncio
 
@@ -1686,7 +1747,7 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
                 f"{_facts_block}"
                 f"{_px_instruction}"
                 "قبل كل شيء اكتب في سطر مستقل الإطار الزمني المحدَّد (الأزرق/المظلَّل) في شريط الإطارات أعلى الشارت هكذا:\n"
-                "TIMEFRAME:[القيمة] مثل TIMEFRAME:1W أو 1D أو 4H أو 1H أو 15m (إن لم يظهر شريط الإطارات اكتب TIMEFRAME:؟)\n"
+                "TIMEFRAME:[القيمة] مثل TIMEFRAME:1W أو 1D أو 4H أو 1H أو 15m (إن لم يظهر شريط الإطارات اكتب TIMEFRAME:؟). في واجهة OKX العربية: «ي»=يوم و«س»=ساعة و«د»=دقيقة و«أ»=أسبوع و«ش»=شهر (مثلاً «1 ي» = 1D)\n"
                 "اتبع هذا الهيكل بالضبط:\n\n"
                 "0- نوع السوق: Spot أو Futures/Perp\n"
                 "1- الاتجاه العام وقوته: صاعد/هابط/جانبي + قوة الاتجاه\n"
@@ -1727,7 +1788,26 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
             # _price_str مُعرَّف أعلاه في chart_price_prompt_fix
             _price_str_legacy = f"${current_price:,.4f}" if current_price > 0 else "غير متوفر"
 
-            for model in VISION_MODELS:
+            # batch52: Gemini أولاً (حدود مجانية أوسع)؛ أي فشل ← Groq
+            _sys_txt = ("أنت خبير تحليل فني. أجب مباشرة بالعربية بدون أي تفكير داخلي أو debugging. "
+                        "لا تستخدم <think> أو Step N أو Let me أو Wait. "
+                        "اكتب التحليل مباشرة بأرقام 1- 2- 3- فقط.")
+            _gem_status = "nokey"
+            if self._gemini_key_b52():
+                _gtxt, _gem_status = await self._gemini_vision_b52(
+                    [image_data], _sys_txt, prompt_text, max_tokens=4000, thinking=1024, timeout=70)
+                if _gtxt:
+                    _gtxt = _strip_markdown_headers(_gtxt)
+                    if len(_gtxt) >= 20:
+                        return _gtxt
+                logger.info(f"chart analysis: Gemini {_gem_status} — الانتقال إلى Groq")
+            if not self.groq_key:
+                return ("⚠️ تجاوزت حد طلبات Gemini — حاول بعد دقيقة" if _gem_status == "rate"
+                        else "❌ تعذّر تحليل الشارت حالياً. حاول لاحقاً")
+            _groq_rate_wait = 0
+            _groq_retried_b52 = False
+            _models_try = list(VISION_MODELS)
+            for model in _models_try:
                 try:
                     payload = json.dumps({
                         "model": model,
@@ -1807,7 +1887,25 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
                     if e.code in (401, 403):
                         return "❌ مفتاح Groq غير صحيح — تحقق من GROQ_API_KEY"
                     if e.code == 429:
-                        return "⚠️ تجاوزت حد الطلبات — حاول بعد دقيقة"
+                        _ra = 0.0
+                        try:
+                            _ra = float(e.headers.get("retry-after") or 0)
+                        except Exception:
+                            _ra = 0.0
+                        if not _ra:
+                            import re as _re_ra
+                            _mra = _re_ra.search(r"try again in\s+([\d.]+)\s*(ms|s|m)", err, _re_ra.I)
+                            if _mra:
+                                _v = float(_mra.group(1))
+                                _ra = _v / 1000.0 if _mra.group(2).lower() == "ms" else (_v * 60.0 if _mra.group(2).lower() == "m" else _v)
+                        _groq_rate_wait = max(_groq_rate_wait, _ra)
+                        if 0 < _ra <= 25 and not _groq_retried_b52:
+                            _groq_retried_b52 = True
+                            await asyncio.sleep(_ra + 0.5)
+                            _models_try.append(model)
+                        else:
+                            _wtxt = f"حاول بعد {int(_ra) + 1} ثانية" if _ra > 0 else "حاول بعد دقيقة"
+                            return f"⚠️ تجاوزت حد الطلبات — {_wtxt}"
                     continue
                 except Exception as me:
                     logger.warning(f"Groq Vision ({model}): {me}")
