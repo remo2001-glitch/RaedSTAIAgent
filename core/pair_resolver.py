@@ -179,9 +179,9 @@ async def resolve_symbol(raw_symbol: str, tier: str, data_layer) -> PairResoluti
     )
 
 
-async def _fetch_pair_price_and_levels(resolution: PairResolution, data_layer):
-    """يجلب سعر الزوج المباشر + دعم/مقاومة (من شموع الزوج). يُعيد
-    (price, support_or_None, resistance_or_None) أو None عند الفشل."""
+async def _fetch_pair_full_b53(resolution: PairResolution, data_layer):
+    """batch53: سعر الزوج + دعم/مقاومة + ميل الزوج اليومي. المستويات تُختار بمسافة دنيا عن السعر (كانت مقاومة على بُعد 0.19% فلا قيمة لها)
+    ثم يُرجع (price, support, resistance, lean_text)."""
     base, quote = resolution.base, resolution.quote
     price_d = await data_layer.get_price(base, quote)
     if not price_d or float(price_d.get("price", 0)) <= 0:
@@ -189,41 +189,97 @@ async def _fetch_pair_price_and_levels(resolution: PairResolution, data_layer):
     price = float(price_d["price"])
 
     support = resistance = None
+    lean = ""
     candles = await data_layer.get_ohlcv(base, "1d", 60, quote)
     if isinstance(candles, list) and len(candles) >= 20:
-        # batch50: نفس منطق /quicksignal للمستويات (كانت min/max 20 يوماً ×0.99/1.01 فتختلف عنه):
-        # (1) أقرب 5 شموع إن كانت ضمن ±15% من السعر، (2) وإلا 20 شمعة، (3) ثم أقرب مستوى فيبوناتشي
-        # (المصدر نفسه الذي يعتمده /quicksignal وcompute_shared_levels لتوصيات غير البيع).
         try:
-            def _lows(n):
-                return [float(c.get("low", c.get("close", 0))) for c in candles[-n:]
-                        if float(c.get("low", c.get("close", 0))) > 0]
+            def _vals(key, n):
+                out = []
+                for c in candles[-n:]:
+                    v = float(c.get(key, c.get("close", 0)) or 0)
+                    if v > 0:
+                        out.append(v)
+                return out
+            closes = _vals("close", len(candles))
+            # ATR تقريبي (متوسط المدى النسبي لآخر 14 شمعة)
+            rng = [(float(c.get("high", 0) or 0) - float(c.get("low", 0) or 0)) for c in candles[-14:]]
+            rng = [r for r in rng if r > 0]
+            atr_frac = (sum(rng) / len(rng) / price) if rng and price > 0 else 0.0
+            min_gap = max(0.005, 0.5 * atr_frac)
 
-            def _highs(n):
-                return [float(c.get("high", c.get("close", 0))) for c in candles[-n:]
-                        if float(c.get("high", c.get("close", 0))) > 0]
-            l5, h5 = _lows(5), _highs(5)
-            if l5 and h5:
-                s5, r5 = min(l5) * 0.999, max(h5) * 1.001
-                if (price - s5) / price <= 0.15 and (r5 - price) / price <= 0.15:
-                    support, resistance = s5, r5
-            if support is None or resistance is None:
-                l20, h20 = _lows(20), _highs(20)
-                if l20 and h20:
-                    support, resistance = min(l20) * 0.99, max(h20) * 1.01
+            fs = fr = 0.0
             try:
                 from handlers.analysis import _calc_fibonacci
                 _fib = _calc_fibonacci(candles)
-                _fs = float((_fib or {}).get("nearest_support") or 0)
-                _fr = float((_fib or {}).get("nearest_resistance") or 0)
-                if _fs > 0 and _fr > 0:
-                    support, resistance = _fs, _fr
+                fs = float((_fib or {}).get("nearest_support") or 0)
+                fr = float((_fib or {}).get("nearest_resistance") or 0)
             except Exception:
                 pass
+            sup_c, res_c = [], []
+            if fs > 0:
+                sup_c.append(fs)
+            if fr > 0:
+                res_c.append(fr)
+            for n, ks, kr in ((5, 0.999, 1.001), (10, 0.999, 1.001), (20, 0.99, 1.01)):
+                lo, hi = _vals("low", n), _vals("high", n)
+                if lo:
+                    sup_c.append(min(lo) * ks)
+                if hi:
+                    res_c.append(max(hi) * kr)
+            for c in sup_c:
+                if c < price and (price - c) / price >= min_gap:
+                    support = c
+                    break
+            for c in res_c:
+                if c > price and (c - price) / price >= min_gap:
+                    resistance = c
+                    break
+            # ميل الزوج اليومي: EMA20/EMA50 وتغير 7 أيام (حقائق محسوبة من شموع الزوج نفسه)
+            def _ema(vals, n):
+                if len(vals) < n:
+                    return 0.0
+                k = 2.0 / (n + 1)
+                e = sum(vals[:n]) / n
+                for v in vals[n:]:
+                    e = v * k + e * (1 - k)
+                return e
+            e20, e50 = _ema(closes, 20), _ema(closes, 50)
+            bull = bear = 0
+            parts = []
+            if e20 > 0:
+                if price > e20:
+                    bull += 1
+                else:
+                    bear += 1
+                parts.append(f"السعر {'فوق' if price > e20 else 'تحت'} EMA20")
+            if e50 > 0:
+                if price > e50:
+                    bull += 1
+                else:
+                    bear += 1
+                parts.append(f"{'فوق' if price > e50 else 'تحت'} EMA50")
+            if len(closes) >= 8 and closes[-8] > 0:
+                ch7 = (price / closes[-8] - 1) * 100
+                if ch7 >= 0:
+                    bull += 1
+                else:
+                    bear += 1
+                parts.append(f"7 أيام {ch7:+.1f}%")
+            if bull + bear >= 2:
+                word = "🟢 صاعد" if bull > bear else "🔴 هابط" if bear > bull else "⚪ مختلط"
+                lean = f"• ميل الزوج (يومي): {word} — " + "، ".join(parts)
         except Exception:
             support = resistance = None
+    return price, support, resistance, lean
 
-    return price, support, resistance
+
+async def _fetch_pair_price_and_levels(resolution: PairResolution, data_layer):
+    """يجلب سعر الزوج المباشر + دعم/مقاومة (من شموع الزوج). يُعيد
+    (price, support_or_None, resistance_or_None) أو None عند الفشل."""
+    full = await _fetch_pair_full_b53(resolution, data_layer)
+    if full is None:
+        return None
+    return full[0], full[1], full[2]
 
 
 async def build_pair_addon_lines(resolution: PairResolution, data_layer) -> Optional[List[str]]:
@@ -252,10 +308,10 @@ async def build_pair_addon_lines(resolution: PairResolution, data_layer) -> Opti
         return ["", f"ℹ️ {base}/{quote} غير متوفر مباشرة على OKX حالياً."]
 
     try:
-        fetched = await _fetch_pair_price_and_levels(resolution, data_layer)
+        fetched = await _fetch_pair_full_b53(resolution, data_layer)
         if fetched is None:
             return ["", f"ℹ️ {base}/{quote} غير متوفر مباشرة على OKX حالياً."]
-        price, support, resistance = fetched
+        price, support, resistance, _lean = fetched
 
         lines = [
             "",
@@ -265,6 +321,8 @@ async def build_pair_addon_lines(resolution: PairResolution, data_layer) -> Opti
         if support is not None and resistance is not None:
             _sup_s, _res_s = _fmt_pair_price_pair(support, resistance, quote)
             lines.append(f"• دعم: {_sup_s} | مقاومة: {_res_s}")
+        if _lean:
+            lines.append(_lean)
         lines.append(f"💡 التقرير الكامل لهذا الزوج: /quicksignal {base}{quote}")
         return lines
     except Exception:

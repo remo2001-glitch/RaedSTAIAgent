@@ -18,6 +18,8 @@ LEGEND_KEYS = (
     "RESISTANCE", "SUPPORT", "SUPERTREND_GREEN", "SUPERTREND_RED", "SAR",
     "RSI_A", "RSI_B", "RSI_C", "MACD_DIFF", "MACD_DEA", "MACD_HIST",
     "KDJ_K", "KDJ_D", "KDJ_J", "VOL", "VOL_MA5",
+    # batch53
+    "SYMBOL", "CHART_HIGH", "CHART_LOW", "PERF_7D", "PERF_30D", "AXIS_TICKS",
 )
 
 _LEVEL_KEYS = ("VWAP", "BOLL_MID", "BOLL_UB", "BOLL_LB", "RESISTANCE", "SUPPORT",
@@ -57,6 +59,10 @@ def legend_prompt() -> str:
         "SUPERTREND_GREEN قيمة SUPERTREND بالأخضر وSUPERTREND_RED بالأحمر. "
         "RSI_A وRSI_B وRSI_C هي قيم RSI الثلاث بالترتيب الظاهر (مثل RSI6 وRSI12 وRSI24) بالشكل RSI6=37.39. "
         "MACD_HIST هي قيمة STICK. VOL هي قيمة VOL الأولى وVOL_MA5 هي MA5 في سطر الحجم. "
+        "SYMBOL هو اسم الزوج في أعلى الشاشة بالشكل OKB/BTC. "
+        "CHART_HIGH وCHART_LOW هما أعلى وأدنى سعر مكتوبين كتسمية على الشارت نفسه (مثل 0.0016590 و0.0013195). "
+        "PERF_7D وPERF_30D نسبتا الأداء في الشريط السفلي (7 أيام و30 يوماً) مع الإشارة: ‎+1.37%‎ للأخضر و‎-7.28%‎ للأحمر (علامة - بعد الرقم تعني سالب). "
+        "AXIS_TICKS هي أرقام محور السعر الرأسي على يمين الشارت مفصولة بفواصل. "
         "لا تضف أي نص آخر."
     )
 
@@ -87,6 +93,21 @@ def parse_legend(text: str) -> Dict[str, object]:
             continue
         if k == "TIMEFRAME":
             res["TIMEFRAME"] = v.strip("[] ").upper()
+            continue
+        if k == "SYMBOL":
+            m = re.search(r"([A-Za-z0-9]{2,12})\s*[/\-]\s*([A-Za-z0-9]{2,8})", v)
+            if m:
+                res["SYMBOL"] = (m.group(1).upper(), m.group(2).upper())
+            continue
+        if k == "AXIS_TICKS":
+            ticks = []
+            for tk in re.findall(r"\d[\d,]*\.?\d*", v):
+                try:
+                    ticks.append(float(tk.replace(",", "")))
+                except ValueError:
+                    pass
+            if ticks:
+                res["AXIS_TICKS"] = ticks
             continue
         if k in ("RSI_A", "RSI_B", "RSI_C"):
             m = re.match(r"\s*(RSI\s*\d+)\s*[=:]?\s*([-+]?\d[\d.,]*)", v, re.I)
@@ -195,6 +216,14 @@ def build_facts(leg: Dict[str, object], ref_price: float = 0.0, quote_unit: str 
     if "VOL" in leg and "VOL_MA5" in leg and float(leg["VOL_MA5"]) > 0:
         r = float(leg["VOL"]) / float(leg["VOL_MA5"])
         lines.append(f"حجم الشمعة الأخيرة {'أقل' if r < 1 else 'أعلى'} من متوسطه MA5 (نسبة {r:.2f}x) — MA5 هنا متوسط حجم لا سعر")
+    for k, lab in (("CHART_HIGH", "أعلى قمة مكتوبة على الشارت"), ("CHART_LOW", "أدنى قاع مكتوب على الشارت")):
+        if k in leg:
+            lines.append(f"{lab} = {fmt(k)}{unit} — استعمل القاع المكتوب هدفاً لسيناريو كسر الدعم، ولا تسمِّ خط SUPPORT «القاع»")
+    if "MACD_DIFF" in leg and "MACD_DEA" in leg and float(leg["MACD_DIFF"]) < 0 and float(leg["MACD_DEA"]) < 0:
+        lines.append("MACD: DIFF وDEA كلاهما تحت الصفر — لا تصف الزخم «صاعداً» بل «تحسّن دون تأكيد»")
+    _tsf = trend_summary_fact(leg, price)
+    if _tsf:
+        lines.append("ملخص الاتجاه: " + _tsf)
     if bull or bear:
         lines.append(f"ميزان المؤشرات المقروءة: {bull} صاعد مقابل {bear} هابط — اجعل وصف الاتجاه العام متسقاً معه "
                      f"(لا «هابط بقوة» إذا كان السعر فوق SuperTrend/دعم متحرك)")
@@ -270,3 +299,261 @@ def round_indicator_lines(text: str) -> str:
             ln = re.sub(r"(?<![\d.])(-?\d+\.\d{4,})(?!\d)", lambda m: f"{float(m.group(1)):.2f}", ln)
         out.append(ln)
     return "\n".join(out)
+
+
+# ───────────────────────── batch53 ─────────────────────────
+_NAME_KEYS = (
+    # (regex للاسم في النص، مفاتيح القيم الصحيحة له)
+    (r"SuperTrend|سوبر\s?ترند|السوبر\s?ترند", ("SUPERTREND_RED", "SUPERTREND_GREEN")),
+    (r"\bSAR\b", ("SAR",)),
+    (r"\bVWAP\b", ("VWAP",)),
+    (r"منتصف\s+(?:نطاق\s+)?البولنجر|منتصف\s+BOLL|BOLL\s*MID", ("BOLL_MID",)),
+    (r"الحد\s+العلوي\s+(?:لـ?\s*)?(?:ال)?بولنجر|BOLL\s*UB", ("BOLL_UB",)),
+    (r"الحد\s+السفلي\s+(?:لـ?\s*)?(?:ال)?بولنجر|BOLL\s*LB", ("BOLL_LB",)),
+    (r"\bSUPPORT\b", ("SUPPORT",)),
+    (r"\bRESISTANCE\b", ("RESISTANCE",)),
+)
+_NUM_TOKEN = re.compile(r"(?<![\d.])\d[\d,]*\.\d{3,}(?![\d])")
+
+
+def _lvl_values(leg: Dict[str, object]) -> Dict[str, float]:
+    out = {}
+    for k in _LEVEL_KEYS:
+        if k in leg:
+            try:
+                out[k] = float(leg[k])
+            except (TypeError, ValueError):
+                pass
+    return out
+
+
+def verify_name_value(text: str, leg: Dict[str, object]) -> Tuple[str, int]:
+    """batch53 (#389): اسم مؤشر مقروناً بقيمة خط آخر (SuperTrend: 0.0012586 وهي منتصف البولنجر) → القيمة الصحيحة لاسمه.
+    يصحّح فقط حين يطابق الرقم تماماً قيمة مفتاح آخر ولا يطابق أياً من قيم الاسم نفسه."""
+    raw = leg.get("raw", {}) if isinstance(leg.get("raw"), dict) else {}
+    vals = _lvl_values(leg)
+    if len(vals) < 3:
+        return text, 0
+    count = 0
+    lines = (text or "").split("\n")
+    for i, ln in enumerate(lines):
+        for pat, keys in _NAME_KEYS:
+            own = [k for k in keys if k in vals]
+            if not own:
+                continue
+            for m in list(re.finditer(pat, ln)):
+                tail = ln[m.end(): m.end() + 40]
+                nm = _NUM_TOKEN.search(tail)
+                if not nm:
+                    continue
+                # لا نتجاوز اسماً آخر بين الاسم والرقم
+                between = tail[: nm.start()]
+                if any(re.search(p2, between) for p2, _k in _NAME_KEYS if p2 != pat):
+                    continue
+                try:
+                    num = float(nm.group(0).replace(",", ""))
+                except ValueError:
+                    continue
+                if any(abs(num - vals[k]) < 1e-12 * max(1.0, abs(num)) for k in own):
+                    continue
+                other = [k for k, v in vals.items() if k not in own and abs(num - v) < 1e-12 * max(1.0, abs(num))]
+                if not other:
+                    continue
+                # الأقرب للسعر عند تعدد قيم الاسم (SuperTrend أخضر/أحمر): قيمة واحدة فقط عادةً
+                repl = raw.get(own[0]) or f"{vals[own[0]]:g}"
+                start = m.end() + nm.start()
+                ln = ln[:start] + repl + ln[start + len(nm.group(0)):]
+                count += 1
+                break
+        lines[i] = ln
+    return "\n".join(lines), count
+
+
+def _item_span(lines: List[str], num: int) -> Tuple[int, int]:
+    """نطاق أسطر البند المرقَّم num (من سطره حتى قبل البند التالي)."""
+    start = -1
+    for i, ln in enumerate(lines):
+        mm = re.match(r"\s*(\d{1,2})\s*[-–.)]", ln)
+        if mm and int(mm.group(1)) == num:
+            start = i
+            break
+    if start < 0:
+        return -1, -1
+    end = len(lines)
+    for j in range(start + 1, len(lines)):
+        mm = re.match(r"\s*(\d{1,2})\s*[-–.)]", lines[j])
+        if mm and int(mm.group(1)) != num:
+            end = j
+            break
+    return start, end
+
+
+def replace_item(text: str, num: int, new_lines: List[str]) -> str:
+    lines = (text or "").split("\n")
+    a, b = _item_span(lines, num)
+    if a < 0:
+        return text
+    return "\n".join(lines[:a] + new_lines + lines[b:])
+
+
+def build_levels_item(leg: Dict[str, object], price: float, quote_unit: str = "") -> List[str]:
+    """batch53 (#390/#394/#397): بند 2 من الكود — كل الخطوط المقروءة مرتبة تنازلياً بالنسبة للسعر الحالي (فوقه/تحته)."""
+    vals = _lvl_values(leg)
+    raw = leg.get("raw", {}) if isinstance(leg.get("raw"), dict) else {}
+    if len(vals) < 3 or price <= 0:
+        return []
+    unit = f" {quote_unit}" if quote_unit and quote_unit != "USDT" else ""
+    nm = {"RESISTANCE": "RESISTANCE (مقاومة الشارت)", "SUPPORT": "SUPPORT (دعم الشارت)", "VWAP": "VWAP",
+          "BOLL_MID": "منتصف البولنجر", "BOLL_UB": "الحد العلوي للبولنجر", "BOLL_LB": "الحد السفلي للبولنجر",
+          "SUPERTREND_RED": "SuperTrend (الأحمر)", "SUPERTREND_GREEN": "SuperTrend (الأخضر)", "SAR": "SAR"}
+    items = []
+    for k, v in vals.items():
+        items.append((v, nm.get(k, k), raw.get(k) or f"{v:g}", k))
+    for k, lab in (("CHART_HIGH", "أعلى قمة مكتوبة على الشارت"), ("CHART_LOW", "أدنى قاع مكتوب على الشارت")):
+        if k in leg:
+            try:
+                v = float(leg[k])
+                items.append((v, lab, raw.get(k) or f"{v:g}", k))
+            except (TypeError, ValueError):
+                pass
+    items.sort(key=lambda x: -x[0])
+    out = ["2- مستويات الدعم والمقاومة (من الخطوط المقروءة، مرتبة من الأعلى):"]
+    for v, lab, rs, k in items:
+        d = (v / price - 1) * 100.0
+        side = "فوق السعر" if v > price else "تحت السعر"
+        role = ""
+        if k in ("SUPERTREND_RED", "SAR", "SUPERTREND_GREEN"):
+            role = " — مقاومة متحركة" if v > price else " — دعم متحرك"
+        out.append(f"   • {lab}: {rs}{unit} ({side} بنحو {abs(d):.1f}%){role}")
+    return out
+
+
+def build_rsi_item(leg: Dict[str, object]) -> List[str]:
+    rs = leg.get("rsi") or []
+    if not rs:
+        return []
+    parts = []
+    for nm, v in rs:
+        z = ("ذروة بيع" if v < 30 else "قرب ذروة البيع" if v < 35 else "ذروة شراء" if v > 70 else "محايد")
+        parts.append(f"{nm} = {v:.2f} ({z})")
+    s = "10- مؤشر RSI: " + " | ".join(parts)
+    if len(rs) >= 2:
+        spread = rs[0][1] - rs[-1][1]
+        if spread > 15:
+            s += " — الأقصر أعلى بكثير من الأطول: زخم قصير الأجل يتسارع"
+        elif spread < -15:
+            s += " — الأقصر أدنى بكثير من الأطول: زخم قصير الأجل يضعف"
+    return [s]
+
+
+def build_macd_item(leg: Dict[str, object]) -> List[str]:
+    if "MACD_DIFF" not in leg or "MACD_DEA" not in leg:
+        return []
+    raw = leg.get("raw", {}) if isinstance(leg.get("raw"), dict) else {}
+    d, e = float(leg["MACD_DIFF"]), float(leg["MACD_DEA"])
+    rd = raw.get("MACD_DIFF") or f"{d:g}"
+    re_ = raw.get("MACD_DEA") or f"{e:g}"
+    s = f"12- مؤشر MACD: DIFF {rd} {'فوق' if d > e else 'تحت'} DEA {re_}"
+    h = leg.get("MACD_HIST")
+    if h is not None:
+        s += f"، STICK {'موجب' if float(h) > 0 else 'سالب'} ({raw.get('MACD_HIST') or h})"
+    if d < 0 and e < 0:
+        s += " — كلاهما تحت الصفر: " + ("تحسّن في الزخم دون تأكيد صعود" if d > e else "زخم هابط")
+    elif d > 0 and e > 0:
+        s += " — كلاهما فوق الصفر: " + ("زخم صاعد" if d > e else "تباطؤ صعود")
+    return [s]
+
+
+def fix_circular_breakdown(text: str, leg: Dict[str, object]) -> Tuple[str, int]:
+    """batch53 (#391): «كسر X ... نحو X» (هدف الكسر هو مستوى الكسر نفسه) → نحو أدنى قاع مكتوب على الشارت إن وُجد وكان أدنى."""
+    if "CHART_LOW" not in leg:
+        return text, 0
+    raw = leg.get("raw", {}) if isinstance(leg.get("raw"), dict) else {}
+    low = float(leg["CHART_LOW"])
+    low_s = raw.get("CHART_LOW") or f"{low:g}"
+    count = 0
+
+    def _sub(m):
+        nonlocal count
+        a, b = m.group(2), m.group(4)
+        try:
+            if float(a.replace(",", "")) == float(b.replace(",", "")) and low < float(a.replace(",", "")):
+                count += 1
+                return f"{m.group(1)}{a}{m.group(3)}{low_s}"
+        except ValueError:
+            pass
+        return m.group(0)
+
+    out = re.sub(r"(كسر[^\n]{0,160}?)(\d[\d,]*\.\d{3,})([^\n]{0,120}?(?:نحو|باتجاه|إلى)\s*)(\d[\d,]*\.\d{3,})", _sub, text or "")
+    return out, count
+
+
+def axis_tick_targets(text: str, leg: Dict[str, object]) -> List[float]:
+    """batch53 (#398): أسعار في بند الأهداف (8) تطابق رقماً من محور السعر ولا تطابق خطاً مسمّى ولا قمة/قاعاً مكتوباً."""
+    ticks = leg.get("AXIS_TICKS") or []
+    if not ticks:
+        return []
+    named = list(_lvl_values(leg).values())
+    for k in ("CHART_HIGH", "CHART_LOW", "PRICE"):
+        if k in leg:
+            try:
+                named.append(float(leg[k]))
+            except (TypeError, ValueError):
+                pass
+    lines = (text or "").split("\n")
+    a, b = _item_span(lines, 8)
+    if a < 0:
+        return []
+    out = []
+    for tok in _NUM_TOKEN.findall("\n".join(lines[a:b])):
+        try:
+            v = float(tok.replace(",", ""))
+        except ValueError:
+            continue
+        if any(abs(v - t) < 1e-12 * max(1.0, abs(v)) for t in ticks) and not any(abs(v - n) < 1e-12 * max(1.0, abs(v)) for n in named):
+            out.append(v)
+    return out
+
+
+_MA_PHRASES = (
+    (r"خطوط\s+المتوسطات(?:\s+المتحركة)?", "خطوط المؤشرات المعروضة"),
+    (r"خط\s+المتوسطات(?:\s+المتحركة)?", "خطوط المؤشرات المعروضة"),
+    (r"المتوسطات\s+المتحركة", "خطوط المؤشرات المعروضة"),
+)
+
+
+def strip_unseen_mas(text: str, leg: Dict[str, object]) -> Tuple[str, int]:
+    """batch53 (#350/#359): النموذج يخترع EMA/MA وهي غير ظاهرة في الشريط المنسوخ → تُستبدل العبارات العامة، وأرقام EMA/MA تُزال."""
+    if not leg:
+        return text, 0
+    count = 0
+    out = text or ""
+    for pat, rep in _MA_PHRASES:
+        out, n = re.subn(pat, rep, out)
+        count += n
+    out, n = re.subn(r"\s*\(?\b(?:EMA|MA|SMA)\s*\d+(?:\s*(?:و|,|،|/)\s*(?:EMA|MA|SMA)?\s*\d+)*\)?", "", out)
+    count += n
+    return out, count
+
+
+def trend_summary_fact(leg: Dict[str, object], price: float) -> str:
+    """batch53 (#393/#400/#401): جملة اتجاه محسوبة من علاقة السعر بكل الخطوط + أداء 7/30 يوماً."""
+    vals = _lvl_values(leg)
+    if price <= 0 or len(vals) < 3:
+        return ""
+    above = [k for k in ("VWAP", "BOLL_MID") if k in vals and price > vals[k]]
+    below = [k for k in ("VWAP", "BOLL_MID", "SUPERTREND_RED", "SAR") if k in vals and price < vals[k]]
+    parts = []
+    if below:
+        parts.append(f"السعر تحت {len(below)} من خطوط الاتجاه/الوقف المقروءة")
+    if above:
+        parts.append(f"وفوق {len(above)} (VWAP/منتصف البولنجر)")
+    p30 = leg.get("PERF_30D")
+    p7 = leg.get("PERF_7D")
+    if p30 is not None and p7 is not None:
+        parts.append(f"الأداء: 7 أيام {float(p7):+.2f}% و30 يوماً {float(p30):+.2f}%")
+        if float(p30) < -5 and float(p7) > 0:
+            parts.append("الصورة: ارتداد قصير داخل اتجاه أكبر هابط — لا تصفها «قناة صاعدة» ولا «صاعد قوي»")
+        elif float(p30) < -5 and float(p7) < 0 and len(below) >= 3:
+            parts.append("الصورة: هبوط قائم على الإطارين — لا تصفه «ضعيفاً» ولا «جانبياً»")
+    return "؛ ".join(parts)

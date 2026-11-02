@@ -21,6 +21,28 @@ logger = logging.getLogger(__name__)
 # ══════════════════════════════════════════════════════════════
 # التمييز الثلاثي للسيناريو — الجولة الجديدة
 # ══════════════════════════════════════════════════════════════
+
+def _neutral_dir_b53(s) -> str:
+    """batch53 (#374/#384): «⚪ محايد» كانت تُقرأ «لا اتجاه» بينما كل المؤشرات هابطة؛ المعنى الفعلي: الجهة غير مؤكدة (ثقة دون حد تحديد الجهة)
+    مع ميل مستخرج من متوسط مصادر الإشارة. عرض فقط — لا يغيّر القرار ولا الحدود."""
+    try:
+        from core.thresholds import SIGNAL_DIRECTION_MIN_CONF as _DMC
+        srcs = [float(v) for k, v in (s.signal_sources or {}).items()
+                if isinstance(v, (int, float)) and k not in ((s.technicals or {}).get("excluded_sources", []) or [])]
+        lean = ""
+        if srcs:
+            avg = sum(srcs) / len(srcs)
+            if avg <= 0.45:
+                lean = " — الميل: 🔴 هابط"
+            elif avg >= 0.55:
+                lean = " — الميل: 🟢 صاعد"
+            else:
+                lean = " — الميل: بلا ميل واضح"
+        return f"⚪ غير مؤكد (ثقة {s.confidence:.0%} < {_DMC:.0%}){lean}"
+    except Exception:
+        return "⚪ محايد"
+
+
 class TradeScenario:
     """
     يُميّز بين 3 سيناريوهات مختلفة جذرياً:
@@ -661,7 +683,7 @@ class SignalLayer:
         text = (
             f"📡 *إشارة رائد — {s.symbol}*{trade_label}\n"
             f"━━━━━━━━━━━━━━━━━━\n"
-            f"الاتجاه: {'🟢 شراء' if s.direction=='long' else '🔴 بيع' if s.direction=='short' else '⚪ محايد'}"
+            f"الاتجاه: {'🟢 شراء' if s.direction=='long' else '🔴 بيع' if s.direction=='short' else _neutral_dir_b53(s)}"
             + (f" ({tt.replace('_', ' ').title()})" if tt != 'spot' else "") + "\n"
             f"الثقة:  {bar} {s.confidence:.0%}\n\n"
             f"📊 *مصادر الإشارة*\n"

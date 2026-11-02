@@ -442,6 +442,125 @@ def _chart_fix_size_line_b50(analysis: str) -> str:
         return analysis
 
 
+def _chart_postprocess_b53(analysis: str, leg: dict, price: float, quote: str = "USDT"):
+    """batch53: معالجات برمجية بعد التحليل الحر (كلها من قيم الشريط المنسوخة):
+    اسم↔قيمة، إزالة EMA/MA غير الظاهرة، هدف الكسر، بند 2 (المستويات) و10 (RSI) و12 (MACD) من الكود، وأسعار محور السعر.
+    يعيد (النص، قائمة أهداف مأخوذة من محور السعر)."""
+    try:
+        from core import chart_vision as _cv
+        txt = analysis or ""
+        txt, _n1 = _cv.verify_name_value(txt, leg)
+        txt, _n2 = _cv.strip_unseen_mas(txt, leg)
+        txt, _n3 = _cv.fix_circular_breakdown(txt, leg)
+        axis_bad = _cv.axis_tick_targets(txt, leg)
+        pr = float(price or 0) or float(leg.get("PRICE", 0) or 0)
+        lv = _cv.build_levels_item(leg, pr, quote)
+        if lv:
+            txt = _cv.replace_item(txt, 2, lv)
+        ri = _cv.build_rsi_item(leg)
+        if ri:
+            txt = _cv.replace_item(txt, 10, ri)
+        mi = _cv.build_macd_item(leg)
+        if mi:
+            txt = _cv.replace_item(txt, 12, mi)
+        if _n1 or _n2 or _n3 or axis_bad:
+            logger.info(f"chart b53: اسم↔قيمة={_n1} EMA/MA={_n2} كسر دائري={_n3} محور={len(axis_bad)}")
+        return txt, axis_bad
+    except Exception as _e:
+        logger.warning(f"chart postprocess b53: {_e}")
+        return analysis, []
+
+
+def _chart_nums_b53(body: str):
+    import re as _r
+    body = body.split(":", 1)[1] if ":" in body else body
+    body = _r.sub(r"[+-]?\d+(?:\.\d+)?\s*%", " ", body)
+    body = _r.sub(r"\b\d+\s*:\s*\d+(?:\.\d+)?\b", " ", body)
+    body = _r.sub(r"(?:هدف|الهدف)\s*(?:ال)?(?:أول|ثاني|1|2)", " ", body)
+    return [float(x.replace(",", "")) for x in _r.findall(r"(?<![\d.])\d[\d,]*(?:\.\d+)?", body) if float(x.replace(",", "")) > 0]
+
+
+def _chart_rr_block_b53(analysis: str, quote: str = "USDT", live_px: float = 0.0, axis_bad=()):
+    """batch53: R/R لكل نقطة دخول مذكورة (حتى 2)، تحذير الدخول = الهدف الأول، واستبعاد الأهداف المأخوذة من محور السعر.
+    يعيد (نص، R/R للهدف الأول عند الدخول الأول أو None، مسافة الوقف % أو None)."""
+    try:
+        items = _chart_item_lines_b51(analysis)
+        entries = []
+        for n in _chart_nums_b53(items.get("6", "")):
+            if not any(abs(n - e) < 1e-12 * max(1.0, n) for e in entries):
+                entries.append(n)
+        entries = entries[:2]
+        sl_l = _chart_nums_b53(items.get("7", ""))
+        tps_all = _chart_nums_b53(items.get("8", ""))
+        bad = [float(b) for b in (axis_bad or [])]
+        tps = [t for t in tps_all if not any(abs(t - b) < 1e-12 * max(1.0, t) for b in bad)]
+        if not (entries and sl_l and tps_all):
+            return "", None, None
+        sl = sl_l[0]
+        lines, rr_first, stop_first = [], None, None
+        warns = []
+        if bad and len(tps) != len(tps_all):
+            warns.append("⚠️ أحد الأهداف رقم من محور السعر لا مستوى مسمّى على الشارت — استُبعد من حساب R/R")
+        if not tps:
+            return ("\n".join(warns), None, None) if warns else ("", None, None)
+        for idx, e in enumerate(entries):
+            tp1 = tps[0]
+            long_ok = sl < e < tp1
+            short_ok = tp1 < e < sl
+            if not (long_ok or short_ok):
+                if (sl < e and tp1 <= e * 1.001) or (sl > e and tp1 >= e * 0.999):
+                    warns.append(f"⚠️ الدخول {e:g} يساوي الهدف الأول {tp1:g} أو يتجاوزه — لا عائد حتى الهدف الأول؛ راجع المستويات")
+                continue
+            risk = abs(e - sl)
+            if risk <= 0 or risk / e > 0.5:
+                continue
+            rr1 = abs(tp1 - e) / risk
+            txt = f"الهدف 1 = {rr1:.2f}:1"
+            if len(tps) > 1:
+                tp2 = tps[1]
+                if (long_ok and tp2 > tp1) or (short_ok and tp2 < tp1):
+                    txt += f" | الهدف 2 = {abs(tp2 - e) / risk:.2f}:1"
+            lines.append(f"📐 R/R المحسوب من الأسعار عند الدخول {e:g}: {txt} (وقف {sl:g})")
+            if idx == 0 or rr_first is None:
+                rr_first, stop_first = rr1, risk / e * 100.0
+            if rr1 < 1.0:
+                warns.append(f"⚠️ عند الدخول {e:g}: عائد الهدف الأول أقل من المخاطرة (R/R دون 1:1)")
+        if live_px and live_px > 0 and entries:
+            d_e = abs(entries[0] / live_px - 1) * 100
+            d_t = abs(tps[0] / live_px - 1) * 100
+            if d_e >= 10:
+                warns.append(f"⚠️ نقطة الدخول تبعد {d_e:.0f}% عن السعر الحالي — خطة بعيدة المدى")
+            if d_t >= 50:
+                warns.append(f"⚠️ الهدف الأول يبعد {d_t:.0f}% عن السعر الحالي — قد يكون قمة النطاق كله لا هدفاً قريباً")
+        out = "\n".join(lines + warns)
+        return out, rr_first, stop_first
+    except Exception:
+        return "", None, None
+
+
+def _chart_fix_risk_size_b53(analysis: str, rr1, stop_pct):
+    """batch53 (#399): المخاطرة والحجم لا يتناقضان: R/R<1 → لا حجم؛ وإلا المخاطرة الفعلية = الحجم × مسافة الوقف."""
+    import re as _r
+    try:
+        lines = (analysis or "").split("\n")
+        i13 = next((i for i, l in enumerate(lines) if _r.match(r"\s*13\s*[-–.)]", l)), -1)
+        i9 = next((i for i, l in enumerate(lines) if _r.match(r"\s*9\s*[-–.)]", l)), -1)
+        if i13 < 0:
+            return analysis
+        m = _r.search(r"(\d+(?:\.\d+)?)\s*%", lines[i13])
+        if rr1 is not None and rr1 < 1.0 and m:
+            lines[i13] = "13- حجم الصفقة المقترح: لا حجم قبل تأكيد الدخول وتحسّن R/R (الحالي دون 1:1)"
+            if i9 >= 0:
+                lines[i9] = "9- مستوى المخاطرة: غير محدد قبل تأكيد الدخول (لا حجم الآن)"
+        elif m and stop_pct and i9 >= 0:
+            size = float(m.group(1))
+            lines[i9] = (f"9- مستوى المخاطرة: المخاطرة الفعلية ≈ {size * stop_pct / 100.0:.2f}% من رأس المال "
+                         f"(حجم {size:g}% × مسافة الوقف {stop_pct:.1f}%)")
+        return "\n".join(lines)
+    except Exception:
+        return analysis
+
+
 def _llm_decision_ctx(sig) -> str:
     """batch36: جملة قرار النظام تُمرَّر لنموذج /analyze كي لا تتناقض الفقرة مع القرار."""
     try:
@@ -1401,7 +1520,7 @@ def _build_professional_block(
                     _cond3 = (f"3. ✅ السعر فوق الدعم {_sup_display} بالفعل — {_vol_part} "
                               f"الحفاظ على إغلاق 4H فوقه (مسار الارتداد)")
                 else:
-                    _cond3 = (f"3. السعر فوق الدعم {_sup_display} (متحقق الآن) — يتبقى شرطان: حجم 1.5x+ "
+                    _cond3 = (f"3. السعر فوق الدعم {_sup_display} (متحقق الآن) — يتبقى في هذا البند شرطان: حجم 1.5x+ "
                               f"(حالياً {fmt_vol_ratio(_vr3)}) وإغلاق 4H فوقه (مسار الارتداد)")
             else:
                 _cond3 = f"3. إغلاق 4H فوق {_sup_display} + حجم 1.5x+ (مسار الارتداد)"  # signal_logic_fix; vol_threshold_unify_fix: 1.5x كما في Checklist
@@ -2421,7 +2540,7 @@ def _build_professional_block(
             _cvd_n = int(_onchain.get("cvd_n", 1) or 1)
         except (TypeError, ValueError):
             _cvd_n = 1
-        _cvd_avg = f" — متوسط {_cvd_n} قراءات" if _cvd_n > 1 else ""
+        _cvd_avg = f" — متوسط {_cvd_n} قراءات" if _cvd_n > 1 else " — قراءة واحدة (غير مُنعَّمة)"
         deriv_lines.append(f"• CVD (آخر 500 صفقة): {_cvd_sig} ({_cvd_pct:+.1f}%){_cvd_avg}{_cvd_note}")
     else:
         # cvd_missing_notice: كان السطر يختفي بصمت عند فشل جلب CVD فيبدو كأنه غير مدعوم
@@ -2567,15 +2686,14 @@ def _build_professional_block(
         if atr_pct and wc_bd1 and wc_bd2 and price:
             _wc_atr_x = abs(_px_anchor - wc_bd2) / max(_px_anchor * float(atr_pct) / 100.0, 1e-9)
             _wc_ent_txt += f"، ≈ {_wc_atr_x:.1f}× ATR من آخر إغلاق"
-            # batch37: المقياس مرتبط بـ4×ATR لكن بسقف 15% وحدّ أدنى 5% — يُذكر عند تطبيق السقف كي لا يُظنّ الرقم خطأً
-            # batch42: عندما يكون القاع = الوقف−5% (الأعمق) لا يكون مقياس 4×ATR هو الحاكم فلا نذكره (كان يربك: 6.3× مع «4×ATR مرفوع»)
+            # batch53 (#368/#387): رقم المقياس يُذكر مرة واحدة وبوضوح عند وجود سقف/حد أدنى فقط (كان «3.5×ATR (مقياس 4×ATR…)» يربك)
             _wc_sl_bound = bool(pro_sl) and abs(wc_bd2 - pro_sl * 0.95) <= max(abs(wc_bd2), 1e-9) * 1e-6
             if _wc_sl_bound:
                 _wc_ent_txt += " (أبعد بـ5% من الوقف — الحد الأدنى للمسافة بعد الكسر)"
             elif 4.0 * float(atr_pct) / 100.0 > 0.15:
-                _wc_ent_txt += " (مقياس 4×ATR مقيَّد بسقف 15%)"
+                _wc_ent_txt += " — المسافة مقيَّدة بسقف 15% (4×ATR أكبر منه)"
             elif 4.0 * float(atr_pct) / 100.0 < 0.05:
-                _wc_ent_txt += " (مقياس 4×ATR مرفوع للحد الأدنى 5%)"
+                _wc_ent_txt += " — المسافة مرفوعة للحد الأدنى 5%"
     except Exception:
         pass
     # 5. إدارة المخاطر + Time Exit + Worst-Case
@@ -2720,7 +2838,7 @@ def _build_professional_block(
                         _r4_m = _calc_rsi_from_closes([float(c.get("close", 0)) for c in _c4_m if c.get("close")])
                 except Exception:
                     _r4_m = None
-                _miss.append(f"RSI < 30 (حالياً {rsi:.0f} يومي"
+                _miss.append(f"RSI < 30 كتأكيد تشبع (حالياً {rsi:.0f} يومي؛ مسار الارتداد يكتفي بـ≤35"
                              + (f"؛ 4H = {_r4_m:.0f} دون 30 لكنه لا يُحتسب كتأكيد" if (_r4_m and 0 < _r4_m < 30) else "")
                              + ")")
             if not _cvd_oc_m.get("cvd_signal"):
@@ -4216,7 +4334,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     # mtf_neutral_fix: إشارة محايدة → 4H يُعرض كسياق إعلامي
                     # فقط دون ادعاء تعارض أو تأكيد مع اتجاه غير موجود أصلاً
-                    _mtf_confirm = f"ℹ️ اتجاه 4H: {_c4h_trend} (الإشارة الرئيسية محايدة)"
+                    _mtf_confirm = ""  # batch53: سطر «الأطر» يعرض 4H أصلاً — لا تكرار
                 if _c4h_rsi > 0:
                     if _c4h_rsi > 70:
                         _mtf_warns.append(f"⚠️ RSI 4H={_c4h_rsi:.0f} ذروة شراء")
@@ -4292,13 +4410,13 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # FA_name_fix: استخدام _display_symbol للعرض
                 _sym_disp = f" {_display_symbol}" if "_display_symbol" in dir() else f" {symbol}"
                 if _corr_diff > 2:
-                    _btc_corr_txt = f"\n• 🟢{_sym_disp} يتفوق على BTC بـ {abs(_corr_diff):.1f}% — قوة نسبية"
+                    _btc_corr_txt = f"\n• 🟢{_sym_disp} يتفوق على BTC بـ {abs(_corr_diff):.1f}% (24س) — قوة نسبية"
                 elif _corr_diff < -2:
-                    _btc_corr_txt = f"\n• 🔴{_sym_disp} أضعف من BTC بـ {abs(_corr_diff):.1f}% — ضعف نسبي"
+                    _btc_corr_txt = f"\n• 🔴{_sym_disp} أضعف من BTC بـ {abs(_corr_diff):.1f}% (24س) — ضعف نسبي"
                 else:
                     _btc_corr_txt = (f"\n• ⚪{_sym_disp} شبه ثابت بينما BTC {_signed_pct(_btc_chg)}% — فرق {abs(_corr_diff):.1f}% (ضمن ±2%)"
                                      if (abs(_price_chg) < 0.3 and abs(_btc_chg) >= 1.0) else
-                                     f"\n• ⚪{_sym_disp} قريب من BTC ({_signed_pct(_price_chg)}% مقابل BTC {_signed_pct(_btc_chg)}%؛ فرق ضمن ±2%)")
+                                     f"\n• ⚪{_sym_disp} قريب من BTC (24س: {_signed_pct(_price_chg)}% مقابل BTC {_signed_pct(_btc_chg)}%؛ فرق ضمن ±2%)")
                 if _sw_sig:
                     _btc_corr_txt += "\n• " + _sw_sig
             except Exception:
@@ -4529,7 +4647,11 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _is_x_sig = is_tokenized_x_ticker(_display_symbol)
         # إصلاح #236: ربط /signal ↔ /chart للتكامل التحليلي
         # CHART_SIG_fix: استخدام _display_symbol (XSPY وليس SPY)
-        full_text += f"\n📊 للتحليل البصري: /chart {_display_symbol}"
+        try:
+            _chart_arg_b53 = (f"{resolution.base}/{resolution.quote}" if getattr(resolution, "is_pair_request", False) and getattr(resolution, "pair_available", False) else _display_symbol)
+        except Exception:
+            _chart_arg_b53 = _display_symbol
+        full_text += f"\n📊 للتحليل البصري: /chart {_chart_arg_b53}"
         # batch30: تحذير Synthetic موحّد أعلى الرسالة (كان في آخرها بعد رابط /chart)
         try:
             if is_tokenized_x_ticker(_display_symbol):
@@ -6027,13 +6149,13 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # FA_missing_fix: إظهار FA دائماً في /analyze
                 _sym_an_disp = f" {_display_symbol_an if _display_symbol_an else symbol}"
                 if _corr_diff_an > 2:
-                    _btc_corr_an = f"\n• 🟢{_sym_an_disp} يتفوق على BTC بـ {abs(_corr_diff_an):.1f}% — قوة نسبية"
+                    _btc_corr_an = f"\n• 🟢{_sym_an_disp} يتفوق على BTC بـ {abs(_corr_diff_an):.1f}% (24س) — قوة نسبية"
                 elif _corr_diff_an < -2:
-                    _btc_corr_an = f"\n• 🔴{_sym_an_disp} أضعف من BTC بـ {abs(_corr_diff_an):.1f}% — ضعف نسبي"
+                    _btc_corr_an = f"\n• 🔴{_sym_an_disp} أضعف من BTC بـ {abs(_corr_diff_an):.1f}% (24س) — ضعف نسبي"
                 else:
                     _btc_corr_an = (f"\n• ⚪{_sym_an_disp} شبه ثابت بينما BTC {_signed_pct(_btc_chg_an)}% — فرق {abs(_corr_diff_an):.1f}% (ضمن ±2%)"
                                     if (abs(_sym_chg_an) < 0.3 and abs(_btc_chg_an) >= 1.0) else
-                                    f"\n• ⚪{_sym_an_disp} قريب من BTC ({_signed_pct(_sym_chg_an)}% مقابل BTC {_signed_pct(_btc_chg_an)}%؛ فرق ضمن ±2%)")
+                                    f"\n• ⚪{_sym_an_disp} قريب من BTC (24س: {_signed_pct(_sym_chg_an)}% مقابل BTC {_signed_pct(_btc_chg_an)}%؛ فرق ضمن ±2%)")
             except Exception:
                 pass
 
@@ -6177,8 +6299,9 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         _m4h = (f"✅ 4H يؤكد الاتجاه ({_t4h_an})" if "هابط" in _t4h_an
                                 else "⚠️ Counter-Trend: 4H صاعد + إشارة بيع — مخاطر أعلى، قلل الحجم")
                     else:
-                        _m4h = f"ℹ️ اتجاه 4H: {_t4h_an} (الإشارة الرئيسية محايدة)"
-                    parts.append("\n" + _m4h)
+                        _m4h = ""  # batch53: سطر «الأطر» يعرض 4H أصلاً — لا تكرار
+                    if _m4h:
+                        parts.append("\n" + _m4h)
                     # batch49 (قرار 15): سطر «الأطر» (يومي | 4H) موحّد مع /signal
                     try:
                         _dd49 = ("🟢 صاعد" if "صاعد" in str(regime_desc) else "🔴 هابط" if "هابط" in str(regime_desc) else "🟡 محايد")
@@ -6278,7 +6401,11 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
         full += "\n\n" + _DISC
-        full += f"\n📊 للتحليل البصري: /chart {_display_symbol_an}"
+        try:
+            _chart_arg_an53 = (f"{resolution.base}/{resolution.quote}" if getattr(resolution, "is_pair_request", False) and getattr(resolution, "pair_available", False) else _display_symbol_an)
+        except Exception:
+            _chart_arg_an53 = _display_symbol_an
+        full += f"\n📊 للتحليل البصري: /chart {_chart_arg_an53}"
 
         # auditing_agent: تدقيق /analyze قبل الإرسال
         _an_approved, full = audit_financial_content(full, source="analyze")
@@ -6462,6 +6589,26 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _tz_chart = 3
         _pre_market_warn = ""  # يُحسَب بعد chart_sym_fix v2
 
+        # batch53: مرحلة قراءة الشريط أولاً — الرمز/الزوج المكتوب أعلى الصورة يُستعمل عند غياب الكابشن (كان السعر بالدولار والزوج مجهولاً)
+        _legend_b51 = {}
+        _chart_img_note_b53 = ""
+        try:
+            _legend_b51 = await engine.news_engine.read_chart_legend(bytes(image_bytes)) or {}
+            _img_pair_b53 = _legend_b51.get("SYMBOL") if _legend_b51 else None
+            if _img_pair_b53:
+                _b53, _q53 = _img_pair_b53
+                if not symbol:
+                    symbol = _b53
+                    if _q53 in ("BTC", "ETH") and _q53 != _b53:
+                        _chart_quote = _q53
+                    logger.info(f"chart: الرمز من الصورة {_b53}/{_q53}")
+                elif symbol.upper() != _b53 and not symbol.upper().startswith(_b53):
+                    _chart_img_note_b53 = (f"⚠️ الرمز في الصورة ({_b53}/{_q53}) يخالف الكابشن ({symbol}) — "
+                                           "تأكد أن الصورة للأصل المقصود قبل الاعتماد على المستويات")
+        except Exception as _e53:
+            logger.warning(f"chart legend pre-read: {_e53}")
+            _legend_b51 = {}
+
         # T30_fix: تمرير السعر الحالي لـ Qwen3 لمنع تحليل أصل خاطئ
         _current_px = 0.0
         try:
@@ -6478,10 +6625,8 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _market_px_chart = float(_current_px or 0)
 
         # batch51: مرحلة نسخ حرفي للقيم (قصّ وتكبير) ثم حقائق محسوبة برمجياً تُمرَّر للتحليل
-        _legend_b51 = {}
         _facts_b51 = ""
         try:
-            _legend_b51 = await engine.news_engine.read_chart_legend(bytes(image_bytes)) or {}
             if _legend_b51:
                 from core.chart_vision import build_facts as _bf51
                 _facts_b51 = _bf51(_legend_b51, ref_price=_market_px_chart or 0.0,
@@ -6500,16 +6645,22 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if "غير محدد" in _chart_tf_label and _legend_b51.get("TIMEFRAME"):
             _chart_tf_label = _CHART_TF_MAP_B50.get(_chart_norm_tf_b52(str(_legend_b51["TIMEFRAME"])), _chart_tf_label)
         analysis = _chart_fix_size_line_b50(analysis)
+        _axis_bad_b53 = []
         if _legend_b51:
             try:
                 from core.chart_vision import fix_near_miss_levels as _fnm51, round_indicator_lines as _ril51
                 analysis, _n_fix51 = _fnm51(analysis, _legend_b51)
+                analysis, _axis_bad_b53 = _chart_postprocess_b53(
+                    analysis, _legend_b51, _market_px_chart or float(_legend_b51.get("PRICE", 0) or 0), _chart_quote)
                 analysis = _ril51(analysis)
                 if _n_fix51:
                     logger.info(f"chart: صُحِّح {_n_fix51} رقم/أرقام قريبة من قيم الشارت المنسوخة")
             except Exception as _e51b:
                 logger.warning(f"chart fix levels: {_e51b}")
         analysis = _chart_fix_tf_wording_b51(analysis, _chart_tf_label)
+        _rr_text_b53, _rr1_b53, _stop_pct_b53 = _chart_rr_block_b53(
+            analysis, _chart_quote, _market_px_chart or float((_legend_b51 or {}).get("PRICE", 0) or 0), _axis_bad_b53)
+        analysis = _chart_fix_risk_size_b53(analysis, _rr1_b53, _stop_pct_b53)
 
         # chart_px_extract v4: PRICE_NOW marker — الحل الجذري النهائي
         # Qwen3 يكتب "PRICE_NOW:773.28" في أول سطر → نستخرجه بـ str.find
@@ -6695,6 +6846,8 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _chart_acc_line = _chart_accuracy_line_px(float((_legend_b51 or {}).get("PRICE", 0) or 0), _live_px_chart, _chart_quote)
         if _chart_acc_line:
             header_lines.append(_chart_acc_line)
+        if _chart_img_note_b53:
+            header_lines.append(_chart_img_note_b53)
         # إصلاح #236: ربط /chart ↔ /signal للتكامل التحليلي
         _signal_hint = (f"\n💡 للتحليل الشامل متعدد المصادر: /signal {symbol}"
                         + (_chart_quote if _chart_quote != "USDT" else "")) if symbol else ""
@@ -6716,7 +6869,7 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # مجدداً — لا قيمة مضافة من "تحقق" قد يُناقض النموذج برقم خاطئ.
         _chart_rr_notes = []
         # batch50: R/R محسوب برمجياً من أسعار الدخول/الوقف/الهدف المقروءة (إضافي ومشروط بالتحقق المنطقي)
-        _rr_b50 = _chart_rr_line_b50(analysis, _chart_quote, _market_px_chart or float(_live_px_chart or 0))
+        _rr_b50 = _rr_text_b53
         if _rr_b50:
             _chart_rr_notes.append(_rr_b50)
 
