@@ -232,6 +232,17 @@ class EventRiskFilter:
         if state.exposure_multiplier == 1.0:
             return 1.0, ""
         reason = f"حدث نشط: {state.active_events[0].name_ar}" if state.active_events else ""
+        if not reason:
+            # batch55 (#546): تخفيض 70% بسبب حدث قادم كان يُعرض بلا اسم الحدث
+            try:
+                _ln = [l.strip() for l in (state.message_ar or "").split("\n")]
+                _nm = next((l[1:].strip() for l in _ln if l.startswith("•")), "")
+                import re as _re_ev
+                _hh = _re_ev.search(r"خلال (\d+) ساعة", state.message_ar or "")
+                if _nm:
+                    reason = f"حدث عالي المخاطر قادم: {_nm}" + (f" (خلال {_hh.group(1)} ساعة)" if _hh else "")
+            except Exception:
+                reason = ""
         return state.exposure_multiplier, reason
 
     # ═══════════════════════════════════════════════════════════

@@ -142,7 +142,7 @@ class OrderManager:
                 return
             trade.om_scope = self.scope
             data = asdict(trade)
-            ttl = 86400 * (365 if trade.status in ("OPEN", "PENDING") else 30)
+            ttl = 86400 * (365 if trade.status in ("OPEN", "PENDING") else 400)  # batch55 (#552): كانت المغلقة تُحذف بعد 30 يوماً فتسقط من التقرير الشهري
             r.setex(self._trade_key(trade), ttl,
                     json.dumps(data, ensure_ascii=False, default=str))
         except Exception as e:

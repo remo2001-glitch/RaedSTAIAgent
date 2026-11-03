@@ -12,6 +12,9 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+HISTORY_CAP = 2000  # قيود شراء/بيع (≈1000 صفقة مغلقة)
+
+
 class VirtualWallet:
     """
     محفظة افتراضية لكل مستخدم
@@ -31,7 +34,7 @@ class VirtualWallet:
             "invested":  round(self.invested, 2),
             "profit":    round(self.profit, 2),
             "positions": self.positions,
-            "history":   self.history[-50:],  # آخر 50 صفقة
+            "history":   self.history[-HISTORY_CAP:],  # batch55 (#552): كان 50 قيداً (≈25 صفقة شراء+بيع) فتسقط الصفقات من /stats والتقارير
         }
 
     @property

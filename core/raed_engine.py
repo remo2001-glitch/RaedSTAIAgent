@@ -1160,56 +1160,39 @@ class RaedEngine:
             logger.error(f"_run_4h_scan: {e}")
             return ""
 
+    def _system_status_section(self, title: str) -> str:
+        """batch55: قسم حالة النظام (للمالك) — المخاطر والنموذج فقط. أرقام الصفقات صارت شخصية
+        في core/period_report (كانت من audit_logger.pnl_summary الذي لا يُكتب فيه شيء فيظهر 0 دائماً)."""
+        drift = self.drift_monitor.assess()
+        risk_st = self.risk_engine.status_report(self.config.get("PORTFOLIO_SIZE", 10_000))
+        _ready = int(getattr(drift, "signals_evaluated", 0) or 0) >= int(getattr(self.drift_monitor, "MIN_SIGNALS", 10))
+        _drift_line = (f"• الانحراف عن خط الأساس ({drift.baseline_win_rate:.0%}): {drift.drift_pct:.1f}%"
+                       if _ready else "• الانحراف عن خط الأساس: غير مُقيَّم بعد")
+        return (
+            f"🛠️ *{title} (للمالك)*\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"⚖️ *المخاطر (المحرك العام)*\n"
+            f"• Drawdown: {risk_st.get('drawdown_pct', 0):.1f}%\n"
+            f"• صفقات مفتوحة: {risk_st.get('open_positions', 0)}\n\n"
+            f"🔬 *مراقب النموذج (إشارات مُقيَّمة لا صفقات)*\n"
+            + (f"• معدل فوز الإشارات: {drift.current_win_rate:.0%}\n" if _ready else "")
+            + f"{_drift_line}\n"
+            + f"• {drift.recommendation_ar}"
+        )
+
     async def _generate_weekly_report(self) -> str:
         try:
-            summary = self.audit_logger.pnl_summary()
-            drift   = self.drift_monitor.assess()
-            risk_st = self.risk_engine.status_report(
-                self.config.get("PORTFOLIO_SIZE", 10_000))
-
-            return (
-                f"📊 *التقرير الأسبوعي — رائد التداول الذكي*\n"
-                f"━━━━━━━━━━━━━━━━━━\n"
-                # V6 (#1042): إضافة تاريخ الأسبوع المنتهي
-                f"📅 الأسبوع المنتهي: {__import__('datetime').date.today().strftime('%Y-%m-%d')}\n\n"
-                f"💰 *الأداء*\n"
-                f"• إجمالي الصفقات: {summary.get('trades', 0)}\n"
-                f"• صافي الربح/الخسارة: ${summary.get('total_pnl', 0):+,.2f}\n"
-                f"• نسبة الفوز: {summary.get('win_rate', 0):.1f}%\n"
-                f"• متوسط الربح: ${summary.get('avg_win', 0):,.2f}\n"
-                f"• متوسط الخسارة: ${abs(summary.get('avg_loss', 0)):,.2f}\n\n"
-                f"⚖️ *المخاطر*\n"
-                f"• Drawdown: {risk_st.get('drawdown_pct', 0):.1f}%\n"
-                f"• صفقات مفتوحة: {risk_st.get('open_positions', 0)}\n\n"
-                f"🔬 *النموذج*\n"
-                f"• معدل الفوز: {drift.current_win_rate:.0%}\n"
-                f"• الانحراف: {drift.drift_pct:.1f}%\n"
-                f"• {drift.recommendation_ar}\n\n"
-                f"━━━━━━━━━━━━━━━━━━\n"
-                f"🤖 رائد التداول الذكي"
-            )
+            return self._system_status_section("حالة النظام الأسبوعية")
         except Exception as e:
             logger.error(f"Weekly report generation error: {e}")
-            return "❌ خطأ في إنشاء التقرير الأسبوعي"
+            return ""
 
     async def _generate_monthly_report(self) -> str:
         try:
-            summary = self.audit_logger.pnl_summary()
-            return (
-                f"📅 *التقرير الشهري — رائد التداول الذكي*\n"
-                f"━━━━━━━━━━━━━━━━━━\n"
-                # X2: إضافة تاريخ مماثل لـ V6 في التقرير الأسبوعي
-                f"📅 الشهر المنتهي: {__import__('datetime').date.today().strftime('%Y-%m')}\n\n"
-                f"💰 *ملخص الشهر*\n"
-                f"• إجمالي الصفقات: {summary.get('trades', 0)}\n"
-                f"• صافي الربح/الخسارة: ${summary.get('total_pnl', 0):+,.2f}\n"
-                f"• نسبة الفوز: {summary.get('win_rate', 0):.1f}%\n\n"
-                f"━━━━━━━━━━━━━━━━━━\n"
-                f"🤖 رائد التداول الذكي"
-            )
+            return self._system_status_section("حالة النظام الشهرية")
         except Exception as e:
             logger.error(f"Monthly report error: {e}")
-            return "❌ خطأ في إنشاء التقرير الشهري"
+            return ""
 
     # ═══════════════════════════════════════════════════════════
     # Kill Switch التلقائي — يُستدعى دورياً

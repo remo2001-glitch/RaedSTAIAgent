@@ -3302,6 +3302,20 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     _stats_extra_lines.append(f"• أكبر خسارة: {_fmt_signed_usd(min(t.get('pnl', 0) for t in _losses))}")
         except Exception:
             _stats_extra_lines = []
+        # batch55 (#542): الانحراف 0.0% قبل اكتمال العيّنة كان يبدو قياساً حقيقياً
+        try:
+            _drift_ready_b55 = int(getattr(drift_st, "signals_evaluated", 0) or 0) >= int(
+                getattr(engine.drift_monitor, "MIN_SIGNALS", 10))
+        except Exception:
+            _drift_ready_b55 = True
+        # batch55 (#544): فرق التقريب بين القيمة الكلية والصافي (كل صفقة تُقرَّب لسنتين)
+        try:
+            _rec_b55 = (_vw_total - portfolio_val) - _net_pnl if (_vw and not _vw_positions) else 0.0
+            if 0.005 <= abs(_rec_b55) < 1.0:
+                _stats_extra_lines.append(
+                    f"• ℹ️ فرق تقريب {_fmt_signed_usd(_rec_b55)} بين القيمة الكلية وصافي الربح (تقريب كل صفقة لسنتين)")
+        except Exception:
+            pass
         lines = [
             "📊 *إحصائيات رائد الفورية*",
             "━━━━━━━━━━━━━━━━━━",
@@ -3325,8 +3339,10 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🔬 *حالة النموذج*",
             # إصلاح #299 (H9): معدل الفوز من virtual_wallet (المصدر الحقيقي)
             f"• معدل فوز المحفظة: {_win_rate:.1f}% ({len(_wins)}/{_total_trades} صفقة مغلقة)",
-            f"• الانحراف عن خط الأساس ({drift_st.baseline_win_rate:.0%}): {drift_st.drift_pct:.1f}%",
-            f"• {drift_st.recommendation_ar}",
+            (f"• الانحراف عن خط الأساس ({drift_st.baseline_win_rate:.0%}): {drift_st.drift_pct:.1f}%"
+             if _drift_ready_b55 else
+             f"• الانحراف عن خط الأساس ({drift_st.baseline_win_rate:.0%}): غير مُقيَّم بعد"),
+            f"• {drift_st.recommendation_ar} (يقيس الإشارات المُقيَّمة لا الصفقات المغلقة)",
             "",
             "📅 *الأحداث*",
             f"• نسبة التعرض المسموحة بسبب الأحداث: {ev_mult:.0%}"
@@ -3365,6 +3381,16 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             f"• BTC (آخر 24 ساعة، للعلم): {btc_change:+.2f}%",
                             f"• صفقات مفتوحة: {_open_count} | مغلقة: {_total_trades}",
                         ]
+                        # batch55 (#545): العائد محسوب على المحفظة كاملة بينما الصفقة الواحدة ≤10% منها
+                        try:
+                            _dep_b55 = sum(float(t.get("amount", 0) or 0) - float(t.get("pnl", 0) or 0) for t in _sells)
+                            if _dep_b55 > 0:
+                                lines.append(
+                                    f"• العائد على رأس المال المستخدم فعلاً: {(_net_pnl / _dep_b55 * 100):+.2f}% "
+                                    f"(صافي ÷ مجموع تكلفة الصفقات المغلقة)")
+                            lines.append("• ℹ️ عائد رائد على كامل المحفظة ومعظمها نقد غير مستثمر، وBTC مستثمر 100% — ليست مقارنة استراتيجية مكافئة")
+                        except Exception:
+                            pass
                     else:
                         lines += [
                             f"• رائد (منذ أول صفقة محفوظة): {raed_pnl_pct:+.2f}%",

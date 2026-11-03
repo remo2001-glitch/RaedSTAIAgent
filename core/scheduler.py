@@ -255,92 +255,58 @@ class Scheduler:
         self._spawn(self._send_monthly())
 
     async def _send_weekly(self):
-        try:
-            if self._weekly_report_fn:
-                report = await self._weekly_report_fn()
-                # T6: إضافة ملخص الصفقات الافتراضية
-                report_with_trades = await self._append_trades_summary(report, "weekly")
-                await self._safe_send(report_with_trades)
-                logger.info("📊 التقرير الأسبوعي أُرسل")
-        except Exception as e:
-            logger.error(f"Weekly report error: {e}")
-
-    async def _append_trades_summary(self, report: str, period: str) -> str:
-        """T6: إضافة ملخص الصفقات والدروس المستفادة للتقرير."""
-        try:
-            from core.state_manager import state_manager as _sm_sc
-            from core.virtual_wallet import VirtualWallet as _VW_sc
-            import datetime as _dt
-
-            summaries = []
-            for uid in _sm_sc.get_all_user_ids():
-                vw_data = _sm_sc.get_virtual_wallet(uid)
-                if not vw_data:
-                    continue
-                vw = _VW_sc(vw_data)
-                history = vw.history or []
-                # فلتر حسب الفترة
-                now_ts = _dt.datetime.now().timestamp()
-                cutoff = now_ts - (7 * 86400 if period == "weekly" else 30 * 86400)
-                period_trades = [
-                    t for t in history
-                    if t.get("type") == "sell"
-                    and _dt.datetime.fromisoformat(t.get("time","2000-01-01")).timestamp() > cutoff
-                ]
-                if not period_trades:
-                    continue
-                wins   = [t for t in period_trades if t.get("pnl", 0) > 0]
-                losses = [t for t in period_trades if t.get("pnl", 0) <= 0]
-                net    = sum(t.get("pnl", 0) for t in period_trades)
-                wr     = len(wins) / max(len(period_trades), 1) * 100
-                # دروس مستفادة
-                lessons = []
-                if losses:
-                    worst = min(losses, key=lambda t: t.get("pnl", 0))
-                    lessons.append(f"أسوأ صفقة: {worst.get('symbol','-')} {worst.get('pnl_pct',0):+.1f}%")
-                if wins:
-                    best = max(wins, key=lambda t: t.get("pnl", 0))
-                    lessons.append(f"أفضل صفقة: {best.get('symbol','-')} {best.get('pnl_pct',0):+.1f}%")
-                # ملاحظات المستخدم
-                comments = _sm_sc.get_user_comments(uid)
-                recent_comments = [c for c in comments if c.get("ts", 0) > cutoff]
-
-                _period_ar = "الأسبوعي" if period == "weekly" else "الشهري"
-                summary = (
-                    f"\n📊 *ملخص الصفقات {_period_ar}*\n"
-                    f"━━━━━━━━━━━━━━━━━━\n"
-                    f"• إجمالي: {len(period_trades)} | رابحة: {len(wins)} | خاسرة: {len(losses)}\n"
-                    f"• نسبة الفوز: {wr:.0f}% | صافي: ${net:+,.2f}\n"
-                )
-                if lessons:
-                    summary += "\n💡 *الدروس المستفادة*\n"
-                    for l in lessons:
-                        summary += f"• {l}\n"
-                if recent_comments:
-                    summary += "\n💬 *ملاحظاتك المسجَّلة*\n"
-                    for c in recent_comments[-3:]:
-                        summary += f"• {c.get('text','')[:80]}\n"
-                summaries.append((uid, summary))
-
-            if summaries:
-                # أرسل لكل مستخدم تقريره الخاص
-                if hasattr(self, "_notify_user"):
-                    for uid, summary in summaries:
-                        await self._notify_user(uid, report + summary)
-                    return ""  # تم الإرسال الفردي
-            return report
-        except Exception as e:
-            logger.debug(f"_append_trades_summary: {e}")
-            return report
+        await self._send_period_reports("weekly")
 
     async def _send_monthly(self):
+        await self._send_period_reports("monthly")
+
+    async def _send_period_reports(self, period: str):
+        """batch55 (#536–#553): تقرير شخصي لكل مشترك من صفقاته هو (افتراضية + حقيقية) للفترة نفسها،
+        بصيغ /stats ذاتها. قسم «حالة النظام» (المخاطر/النموذج) للمالك فقط. المستلمون: من لديه محفظة
+        افتراضية أو صفقات حقيقية أو حساب منصة، والمالك دائماً — ومن لا صفقات له يصله ذلك صراحة."""
+        _name = "الأسبوعي" if period == "weekly" else "الشهري"
         try:
-            if self._monthly_report_fn:
-                report = await self._monthly_report_fn()
-                await self._safe_send(report)
-                logger.info("📅 التقرير الشهري أُرسل")
+            import os as _os
+            from core.state_manager import state_manager as _sm
+            from core import period_report as _pr
+            fn = self._weekly_report_fn if period == "weekly" else self._monthly_report_fn
+            system_txt = ""
+            if fn:
+                try:
+                    system_txt = (await fn()) or ""
+                except Exception as _e:
+                    logger.debug(f"system report {period}: {_e}")
+            r = None
+            try:
+                r = _sm._redis if getattr(_sm, "_redis_ok", False) else None
+            except Exception:
+                r = None
+            try:
+                owner = int(_os.environ.get("OWNER_CHAT_ID", "") or 0) or None
+            except ValueError:
+                owner = None
+            sent = 0
+            for uid in _pr.eligible_user_ids(_sm, r, owner):
+                try:
+                    try:
+                        has_ex = bool((_sm._get_user(uid) or {}).get("exchange"))
+                    except Exception:
+                        has_ex = False
+                    try:
+                        comments = _sm.get_user_comments(uid)
+                    except Exception:
+                        comments = []
+                    text = _pr.build_user_report(uid, period, _sm.get_virtual_wallet(uid), r,
+                                                 has_exchange=has_ex, comments=comments)
+                    if owner and uid == owner and system_txt:
+                        text += "\n\n" + system_txt
+                    await self._notify_user(uid, text)
+                    sent += 1
+                except Exception as _e:
+                    logger.debug(f"period report {period} user={uid}: {_e}")
+            logger.info(f"📊 التقرير {_name} أُرسل لـ {sent} مستخدم")
         except Exception as e:
-            logger.error(f"Monthly report error: {e}")
+            logger.error(f"{_name} report error: {e}")
 
     async def _safe_send(self, message: str):
         """إرسال آمن مع معالجة الأخطاء."""
@@ -408,7 +374,7 @@ class Scheduler:
                 return "التقرير الشهري: يوم 3 من الشهر القادم 1 ظهراً"
         hours = max(0, (nxt - now).total_seconds() / 3600)
         _d, _r = divmod(int(round(hours)), 24)
-        _after = (f"بعد {_d} يوم" + (f" و{_r} ساعة" if _r else "")) if hours >= 48 else f"بعد {hours:.0f} ساعة"
+        _after = (("بعد يومين" if _d == 2 else f"بعد {_d} {'أيام' if 3 <= _d <= 10 else 'يوماً'}") + (f" و{_r} ساعة" if _r else "")) if hours >= 48 else f"بعد {hours:.0f} ساعة"
         return (f"التقرير الشهري: "
                 f"{nxt.strftime('%Y-%m-%d')} يوم 3 1 ظهراً — {_after}")
 
