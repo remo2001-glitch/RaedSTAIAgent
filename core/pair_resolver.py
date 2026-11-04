@@ -191,7 +191,8 @@ async def _fetch_pair_full_b53(resolution: PairResolution, data_layer):
     support = resistance = None
     near_sup = None
     lean = ""
-    candles = await data_layer.get_ohlcv(base, "1d", 60, quote)
+    # batch61 (#757): نفس نافذة /quicksignal (365) — 60 شمعة كانت تجعل EMA50 قرابة متوسط بسيط فيختلف «فوق/تحت EMA50» بين الأمرين
+    candles = await data_layer.get_ohlcv(base, "1d", 365, quote)
     if isinstance(candles, list) and len(candles) >= 20:
         try:
             def _vals(key, n):
@@ -336,7 +337,7 @@ async def build_pair_addon_lines(resolution: PairResolution, data_layer) -> Opti
             _sup_s, _res_s = _fmt_pair_price_pair(support, resistance, quote)
             lines.append(f"• دعم: {_sup_s} | مقاومة: {_res_s}")
             if _near_sup:
-                lines.append(f"  ↳ أقرب دعم مباشر {_fmt_pair_price(_near_sup, quote)} على بُعد {(price - _near_sup) / price * 100:.1f}% (أقرب من الحد الأدنى للمسافة فلم يُعتمد دعماً رئيسياً)")
+                lines.append(f"  ↳ أقرب دعم مباشر {_fmt_pair_price(_near_sup, quote)} على بُعد {(price - _near_sup) / price * 100:.1f}% (أقرب من الحد الأدنى للمسافة فلم يُعتمد دعماً رئيسياً هنا؛ /quicksignal يعتمده نقطة دخول عند الدعم)")   # batch61 (#756)
         if _lean:
             lines.append(_lean)
         lines.append(f"💡 التقرير الكامل لهذا الزوج: /quicksignal {base}{quote}")

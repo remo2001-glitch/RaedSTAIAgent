@@ -1694,9 +1694,13 @@ async def cmd_trades(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lines.append(om.format_trade_ar(t))
             lines.append("")
         total = sum(t.pnl_usd for t in trades if t.status == "CLOSED")
+        # batch61 (#753): صفقات سُجّلت قبل الدفعة 58 بلا بيانات رسوم — رقمها إجمالي
+        _legacy_tr = any(t.status == "CLOSED" and not (getattr(t, "fee_open_usd", 0) or getattr(t, "fee_close_usd", 0))
+                         for t in trades)
         lines += ["━━━━━━━━━━━━━━━━━━",
-                   f"💹 PnL المغلق الصافي ({_period_label}): "
-                   + (f"{'+' if total >= 0 else '-'}${abs(total):,.4f}" if abs(total) < 0.1 else f"${total:+,.2f}")]
+                   f"💹 PnL المغلق ({_period_label}): "
+                   + (f"{'+' if total >= 0 else '-'}${abs(total):,.4f}" if abs(total) < 0.1 else f"${total:+,.2f}")
+                   + (" — يشمل صفقات إجمالية سُجّلت قبل احتساب الرسوم" if _legacy_tr else " — صافٍ بعد الرسوم")]
         _close_rows = [[InlineKeyboardButton(f"🔴 إغلاق {t.symbol}",
                                               callback_data=f"rclose_{t.symbol}")]
                        for t in trades if t.status == "OPEN"][:8]
@@ -3522,8 +3526,9 @@ async def cmd_vfutures(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = ["⚡ *مراكز Futures الافتراضية*", "━━━━━━━━━━━━━━━━━━"]
     for s_, p_ in vw.futures.items():   # batch59 (#719/#720): السعر الحالي والوقف/الهدف والصافي بعد الرسوم
         px = prices.get(s_, float(p_["entry"]))
-        g = vw.futures_pnl(s_, px)
-        net = g - float(p_.get("fee_open", 0) or 0) - float(p_["qty"]) * px * vw.FUT_FEE_RATE
+        _pxc = px * (0.999 if p_["side"] == "long" else 1.001)   # batch61 (#755): نفس انزلاق الإغلاق الفعلي
+        g = vw.futures_pnl(s_, _pxc)
+        net = g - float(p_.get("fee_open", 0) or 0) - float(p_["qty"]) * _pxc * vw.FUT_FEE_RATE
         pct = net / float(p_["margin"]) * 100 if p_.get("margin") else 0
         lev_ = int(p_.get("leverage", 1))
         lines += [

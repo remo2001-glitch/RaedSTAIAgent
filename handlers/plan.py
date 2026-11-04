@@ -140,6 +140,9 @@ def _wk2_cond(symbols, mr: bool = False) -> str:
     batch45 (ملاحظة 30): لأصل استراتيجيته الارتداد للمتوسط لا يُذكر «فوق EMA50» (يناقض شرط الاستراتيجية «دون EMA50»)."""
     try:
         if symbols and all(_non_crypto_sym(str(x)) for x in symbols):
+            # batch61 (#769): عدة أصول غير كريبتو باستراتيجيات مختلفة — شرط كل أصل لا «فوق EMA50» موحَّد
+            if len(symbols) > 1:
+                return "ADX > 20 + شرط استراتيجية كل أصل"
             return "ADX > 20" if mr else "ADX > 20 وفوق EMA50"
     except Exception:
         pass
@@ -711,6 +714,15 @@ def _fvr_fc50(v) -> str:
         return f"{float(v or 0):.2f}x"
 
 
+def _pf61(x: float) -> str:
+    """batch61 (#766): لا «-0.0%» — القيم دون 0.05% تُعرض «≈ 0%»."""
+    try:
+        x = float(x)
+        return "≈ 0%" if abs(x) < 0.05 else f"{x:+.1f}%"
+    except Exception:
+        return "≈ 0%"
+
+
 def _format_forecast_ar(symbol: str, price: float, fc: dict, days: int = 30, regime_desc: str = "") -> str:
     """
     تنسيق تنبؤ السعر المتقدم للعرض.
@@ -753,10 +765,10 @@ def _format_forecast_ar(symbol: str, price: float, fc: dict, days: int = 30, reg
          else f"• {({'مرتفع': '🔊', 'عادي': '🔉', 'أقل من المتوسط': '🔉'}).get(_vol_word(fc.get('vol_ratio', 1.0)), '🔇')} حجم {_vol_word(fc.get('vol_ratio', 1.0))} ({_fvr_fc50(fc.get('vol_ratio',0))})"),
         "",
         f"📊 *السيناريوهات الـ {days} يوم:*",
-        (f"  🟢 متفائل (Elliott 5): {p_fmt(bull)} ({bull_pct:+.1f}%)"
+        (f"  🟢 متفائل (Elliott 5): {p_fmt(bull)} ({_pf61(bull_pct)})"
          + (" — ⚠️ احتمال ضعيف: ضد الاتجاه الهابط" if fc.get("trend") == "bearish" else "")),
-        f"  🟡 محتمل (Base):       {p_fmt(base)} ({base_pct:+.1f}%)",
-        f"  🔴 متحفظ (Bear):       {p_fmt(bear)} ({bear_pct:+.1f}%)",
+        f"  🟡 محتمل (Base):       {p_fmt(base)} ({_pf61(base_pct)})",
+        f"  🔴 متحفظ (Bear):       {p_fmt(bear)} ({_pf61(bear_pct)})",
         "",
         # إصلاح #818: في السوق الهابط نُظهر فقط مستويات الدعم
         *(
@@ -1406,7 +1418,8 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "expected_return": (0.0 if _g4_pm else _est_return(signal, regime)),
                     "price":           price,
                     "ema50":           _cand_ema50_pm(candles_clean),
-                    "regime_ar":       str(getattr(_reg_asset_pm, "description_ar", "") or ""),   # batch35: نظام الأصل نفسه
+                    "regime_ar":       (__import__("core.regime_detector", fromlist=["regime_desc_display_b61"]).regime_desc_display_b61(_reg_asset_pm)
+                                        if _reg_asset_pm is not None else ""),   # batch35: نظام الأصل نفسه (batch61 #744)
                     "adx":             float(((getattr(_reg_asset_pm, "metrics", None) or {}).get("adx")) or 0),
                     "signal_id":       _sig_id_pm,
                     "change_24h":      float((((_prices_all[i] if not isinstance(_prices_all[i], Exception) else {}) or {}).get("change_24h")) or 0),
@@ -1799,7 +1812,9 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 if _fca:
                     lines.append(_format_forecast_ar(
-                        _fca_sym, _fca_p, _fca, days=30, regime_desc=getattr(regime, "description_ar", "")))
+                        _fca_sym, _fca_p, _fca, days=30,
+                        # batch61 (#768): نظام أصل التنبؤ نفسه لا مرجع BTC
+                        regime_desc=(_fca_cand.get("regime_ar") or getattr(regime, "description_ar", ""))))
         except Exception as _fcae:
             logger.debug(f"planmonth forecast30: {_fcae}")
 
@@ -2718,7 +2733,11 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 _pw_extra.append("  ℹ️ لا عقد دائم للأصل — البيانات من الفوري")
                     except Exception:
                         pass
-                    _ra_w = str(getattr(_reg_a, "description_ar", "") or "")
+                    try:   # batch61 (#744)
+                        from core.regime_detector import regime_desc_display_b61 as _rdd61w
+                        _ra_w = _rdd61w(_reg_a)
+                    except Exception:
+                        _ra_w = str(getattr(_reg_a, "description_ar", "") or "")
                     if _ra_w and str(sym).upper() != "BTC" and _ra_w != str(regime.description_ar):
                         _adx_w = float(((getattr(_reg_a, "metrics", None) or {}).get("adx")) or 0)
                         _pw_extra.append(f"  🌍 نظام الأصل نفسه: {_ra_w}" + (f" (ADX {_adx_w:.0f})" if _adx_w > 0 else "")
@@ -2796,7 +2815,10 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     atr_override=_pw_atr_by_sym.get(str(_fc_sym).upper()),
                 )
                 if _fc:
-                    _fct57 = _format_forecast_ar(_fc_sym, _fc_price, _fc, days=30, regime_desc=getattr(regime, "description_ar", ""))
+                    _fct57 = _format_forecast_ar(_fc_sym, _fc_price, _fc, days=30,
+                                                 # batch61 (#768): نظام أصل التنبؤ نفسه لا مرجع BTC
+                                                 regime_desc=(_pw_asset_reg_ar.get(str(_fc_sym).upper())
+                                                              or getattr(regime, "description_ar", "")))
                     # batch57 (#669): أفق التنبؤ أطول من الخطة الأسبوعية — يُوسَم
                     _fct57 = _fct57.replace("يوم القادمة*", "يوم القادمة* (أفق شهري مرجعي — أطول من هذه الخطة)", 1)
                     lines.append(_fct57)
@@ -2910,7 +2932,8 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if _mk_i is not None:
                         lines[_mk_i] = f"السوق (الأصل نفسه): {_regime_ar}"
                 elif len(symbols) > 1:
-                    _pw_ref_lbl = "السوق"
+                    # batch61 (#767): الرأس يقول «يختلف حسب الأصل» فالقيمة المذكورة في القرار هي مرجع BTC — تُسمّى كذلك
+                    _pw_ref_lbl = "السوق المرجعي BTC"
                     if _mk_i is not None:
                         lines[_mk_i] = "السوق: يختلف حسب الأصل (انظر كل أصل أدناه)"
         except Exception:
@@ -3316,7 +3339,10 @@ async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 try:
                     _pd_f = await engine.data_layer.get_price(_sym_f)
                     if _pd_f and _pd_f.get("price"):
-                        _live_pnl_p += _vw_p.futures_pnl(_sym_f, float(_pd_f["price"]))
+                        # batch61 (#754/#755): صافٍ كما في /vfutures — بعد رسوم الفتح والإغلاق وانزلاق الإغلاق
+                        _pxf = float(_pd_f["price"]) * (0.999 if _pos_f.get("side") == "long" else 1.001)
+                        _live_pnl_p += (_vw_p.futures_pnl(_sym_f, _pxf) - float(_pos_f.get("fee_open", 0) or 0)
+                                        - float(_pos_f.get("qty", 0) or 0) * _pxf * _vw_p.FUT_FEE_RATE)
                 except Exception:
                     pass
         try:
@@ -3348,7 +3374,7 @@ async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text += (
             f"\n\n⚖️ *حالة المخاطر — المحفظة الافتراضية 🎮*\n"
             f"• Drawdown من رصيد البداية: {_dd_p:.1f}%\n"
-            f"• PnL الحي (المراكز المفتوحة): {'+' if _live_pnl_p >= 0 else '-'}${abs(_live_pnl_p):,.2f}\n"
+            f"• PnL الحي (المراكز المفتوحة، صافٍ بعد رسوم Futures): {'+' if _live_pnl_p >= 0 else '-'}${abs(_live_pnl_p):,.2f}\n"
             f"• صفقات مفتوحة: {_open_p} Spot" + (f" + {_open_fut_p} Futures" if _open_fut_p else "")
         )
         # batch59 (#704): الحساب الحقيقي منفصل وموسوم
@@ -3358,11 +3384,25 @@ async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if _om_rp:
                 import time as _t_rp
                 _op_rp = len(_om_rp.get_open_trades(_uid_p) or [])
-                _day_rp = sum(float(t.pnl_usd or 0) for t in (_om_rp.get_all_trades(_uid_p) or [])
-                              if t.status == "CLOSED" and (t.closed_at or 0) >= _t_rp.time() - 86400)
+                # batch61 (#750): نفس مصدر /trades — الذاكرة + Redis (الذاكرة تُمسح مع كل نشر)
+                _all_rp = {t.trade_id: t for t in (_om_rp.get_all_trades(_uid_p) or [])}
+                try:
+                    from core.order_manager import OrderManager as _OMc_rp
+                    for _d_rp in _om_rp._load_trades_from_redis(_uid_p)[:100]:
+                        _lt_rp = _OMc_rp._trade_from_dict(_d_rp)
+                        if _lt_rp and _lt_rp.trade_id not in _all_rp:
+                            _all_rp[_lt_rp.trade_id] = _lt_rp
+                except Exception:
+                    pass
+                _cl_rp = [t for t in _all_rp.values()
+                          if t.status == "CLOSED" and (t.closed_at or 0) >= _t_rp.time() - 86400]
+                _day_rp = sum(float(t.pnl_usd or 0) for t in _cl_rp)
+                _legacy_rp = any(not (getattr(t, "fee_open_usd", 0) or getattr(t, "fee_close_usd", 0)) for t in _cl_rp)
                 from core.order_manager import _usd_b58 as _u_rp
                 text += (f"\n\n💱 *الحساب الحقيقي*\n• صفقات مفتوحة: {_op_rp}\n"
-                         f"• صافي المغلق (24 ساعة، بعد الرسوم): {_u_rp(_day_rp)}")
+                         + (f"• المغلق (24 ساعة): {len(_cl_rp)} صفقة — صافي {_u_rp(_day_rp)}"
+                            + (" (يشمل صفقة سُجّلت قبل احتساب الرسوم — إجمالي)" if _legacy_rp else " بعد الرسوم")
+                            if _cl_rp else "• لا صفقات حقيقية مغلقة خلال 24 ساعة"))   # batch61 (#751)
         except Exception as _rpe:
             logger.debug(f"portfolio real section: {_rpe}")
         # #759: أزرار التنقل

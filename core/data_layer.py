@@ -2042,6 +2042,8 @@ class DataLayer:
                 _sym_cvd = f"x{_sym_raw[1:]}-USDT"
             else:
                 _sym_cvd = f"{_sym_raw}-USDT"
+            if _sym_raw in _PERP_ONLY_COMMODITY:
+                _sym_cvd = f"{_sym_raw}-USDT-SWAP"   # batch61 (#770): XAG = الفضة — صفقات العقد الدائم (لا Spot لها: 51001)
             _url_cvd = f"https://www.okx.com/api/v5/market/trades?instId={_sym_cvd}&limit=500"
             # batch42: فيوتشر → صفقات العقد الدائم أولاً (للأصل الذي له عقد)، ثم الفوري إن لم توجد بيانات
             _urls_cvd = [_url_cvd]

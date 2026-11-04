@@ -99,6 +99,20 @@ class RegimeResult:
     market_phase:   str = "unknown" # "Accumulation" | "Distribution" | "Markup" | "Markdown"
 
 
+def regime_desc_display_b61(result) -> str:
+    """batch61 (#744): «اتجاه صاعد/هابط قوي» من المتوسطات مع +DI≈−DI (فرق <3) يُعرض «(غير محسوم — DI متعادل)»
+    بدل «قوي» — كان يناقض «الاتجاه غير مؤكد» و«ترتيب EMA مختلط» في الرسالة نفسها. عرض فقط."""
+    try:
+        d = str(getattr(result, "description_ar", "") or "")
+        m = getattr(result, "metrics", None) or {}
+        dp, dm = m.get("di_plus"), m.get("di_minus")
+        if dp is not None and dm is not None and abs(float(dp) - float(dm)) < 3 and "قوي" in d:
+            return d.replace(" قوي", "").replace("قوي", "").rstrip() + " (غير محسوم — DI متعادل)"
+        return d
+    except Exception:
+        return str(getattr(result, "description_ar", "") or "")
+
+
 def _strong_bear_b58(result) -> bool:
     """batch58 (#651): هبوط قائم — نفس قاعدة /signal (هابط أو السعر ≤ −3% عن EMA50، ADX ≥ 25، −DI أعلى بـ3)."""
     try:
@@ -660,7 +674,7 @@ class RegimeDetector:
         return (
             f"📊 *حالة السوق الحالية*\n"
             f"━━━━━━━━━━━━━━━━━━\n"
-            f"{result.description_ar}\n"
+            f"{regime_desc_display_b61(result)}\n"
             + (f"📊 مرحلة السوق: {_mp_ar(getattr(result, 'market_phase', ''))}"
                # batch57 (#654): «تعزيز» داخل هبوط قائم (ADX/DI وسعر تحت EMA50) يُوضَّح بدل أن يبدو متناقضاً
                + (" — ضمن هبوط قائم (ADX/DI)" if (getattr(result, 'market_phase', '') == "Consolidation"

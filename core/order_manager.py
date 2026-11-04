@@ -1248,9 +1248,10 @@ class OrderManager:
             pnl_icon = "📈" if trade.pnl_usd >= 0 else "📉"
             lines += [
                 f"• سعر الخروج: {_px_b58(trade.exit_price)}",
-                f"• {pnl_icon} PnL الصافي: {trade.pnl_pct:+.2f}% ({_usd_b58(trade.pnl_usd)})"
-                + (f" — بعد رسوم {_usd_b58(-(trade.fee_open_usd + trade.fee_close_usd))}"
-                   if (trade.fee_open_usd or trade.fee_close_usd) else ""),
+                (f"• {pnl_icon} PnL الصافي: {trade.pnl_pct:+.2f}% ({_usd_b58(trade.pnl_usd)})"
+                 + f" — بعد رسوم {_usd_b58(-(trade.fee_open_usd + trade.fee_close_usd))}")
+                if (trade.fee_open_usd or trade.fee_close_usd) else
+                f"• {pnl_icon} PnL (إجمالي — سُجّلت قبل احتساب الرسوم): {trade.pnl_pct:+.2f}% ({_usd_b58(trade.pnl_usd)})",   # batch61 (#753)
                 f"• السبب: {CLOSE_REASON_AR.get(trade.close_reason, trade.close_reason)}",
             ]
         return "\n".join(lines)
