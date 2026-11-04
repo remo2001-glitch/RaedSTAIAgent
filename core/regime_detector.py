@@ -99,6 +99,15 @@ class RegimeResult:
     market_phase:   str = "unknown" # "Accumulation" | "Distribution" | "Markup" | "Markdown"
 
 
+def _adx_fmt_b57(adx) -> str:
+    """batch57 (#660): عند حد 20/25 يُعرض بمنزلة عشرية (19.8 لا «20») كي لا يتناقض التصنيف مع الرقم المعروض."""
+    try:
+        a = float(adx or 0)
+        return f"{a:.1f}" if (19.5 <= a < 20.5 or 24.5 <= a < 25.5) else f"{a:.0f}"
+    except Exception:
+        return str(adx)
+
+
 class RegimeDetector:
     """
     يستخدم: ATR, ADX, EMA, BTC Dominance, Fear & Greed
@@ -631,12 +640,17 @@ class RegimeDetector:
             f"📊 *حالة السوق الحالية*\n"
             f"━━━━━━━━━━━━━━━━━━\n"
             f"{result.description_ar}\n"
-            + (f"📊 مرحلة السوق: {_mp_ar(getattr(result, 'market_phase', ''))}\n"
+            + (f"📊 مرحلة السوق: {_mp_ar(getattr(result, 'market_phase', ''))}"
+               # batch57 (#654): «تعزيز» داخل هبوط قائم (ADX/DI وسعر تحت EMA50) يُوضَّح بدل أن يبدو متناقضاً
+               + (" — ضمن هبوط قائم (ADX/DI)" if (getattr(result, 'market_phase', '') == "Consolidation"
+                     and float(m.get('adx', 0) or 0) >= 25 and m.get('di_minus') is not None and m.get('di_plus') is not None
+                     and float(m['di_minus']) - float(m['di_plus']) >= 3 and float(m.get('price_vs_ema50', 0) or 0) <= -3) else "")
+               + "\n"
                if getattr(result, 'market_phase', '') else "")
             + "\n"
             f"📈 *المؤشرات*\n"
             + (
-                f"• ATR: {fmt_atr_pct(m.get('atr_pct',0))}% | ADX: {m.get('adx',0):.0f} (+DI: {m.get('di_plus'):.0f} / -DI: {m.get('di_minus'):.0f})\n"
+                f"• ATR: {fmt_atr_pct(m.get('atr_pct',0))}% | ADX: {_adx_fmt_b57(m.get('adx',0))} (+DI: {m.get('di_plus'):.0f} / -DI: {m.get('di_minus'):.0f})\n"
                 if m.get("di_plus") is not None and m.get("di_minus") is not None else
                 f"• ATR: {fmt_atr_pct(m.get('atr_pct',0))}% | ADX: {m.get('adx',0):.0f}\n"
             )
@@ -710,7 +724,7 @@ def _action_ar(action: str) -> str:
         # action_size_sync_fix: نص مطابق تماماً لصيغة "2/4" المُستخدَمة في
         # كل مكان آخر بالنظام (بدل "تداول بحجم طبيعي"/"تقليل 50%" المتبقية
         # من حالة سابقة للإشارة رغم أن بوابة التأكيدات فرضت 0% لاحقاً)
-        "wait_confirmations_24": "⏳ انتظار — لا دخول حتى تتحقق شروط الدخول (تأكيدات 2/4 + اتجاه واضح + ثقة كافية)",
+        "wait_confirmations_24": "⏳ انتظار — لا دخول حتى تتحقق شروط الدخول (تأكيدات 2/4 + اتجاه شراء واضح + ثقة كافية)",
         # signal_logic_fix: RSI>70 مع تأكيدات غير كافية
         "overbought_wait":  "⚠️ ذروة شراء — انتظر تصحيح RSI تحت 60 ثم ارتداد",
     }.get(action, action)

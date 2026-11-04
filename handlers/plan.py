@@ -9,6 +9,24 @@ from core.thresholds import SIGNAL_DIRECTION_MIN_CONF
 from core.indicators import fmt_atr_pct as _fmt_atr_pct
 
 
+
+def _adxf57(adx) -> str:
+    """batch57 (#660): ADX عند حدَّي 20/25 بمنزلة عشرية — نفس عرض /signal."""
+    try:
+        from core.regime_detector import _adx_fmt_b57
+        return _adx_fmt_b57(adx)
+    except Exception:
+        return f"{float(adx or 0):.0f}"
+
+
+def _ft57(level, price, atr_pct=0.0) -> str:
+    """batch57 (#664): وسم مستوى Fib الملاصق للسعر (نفس دالة /signal)."""
+    try:
+        from handlers.analysis import _fib_tight_b57
+        return _fib_tight_b57(level, price, atr_pct)
+    except Exception:
+        return ""
+
 def _atr_vol_line(atr_pct) -> str:
     """batch37: سطر التقلب لخطط /planweek و/planmonth — ATR% اليومي وتصنيفه وأثره على الوقف والحجم."""
     try:
@@ -123,6 +141,11 @@ def _wk2_cond(symbols, mr: bool = False) -> str:
     try:
         if symbols and all(_non_crypto_sym(str(x)) for x in symbols):
             return "ADX > 20" if mr else "ADX > 20 وفوق EMA50"
+    except Exception:
+        pass
+    try:   # batch57 (#667): قائمة مختلطة — Fear للعملات الرقمية فقط
+        if symbols and any(_non_crypto_sym(str(x)) for x in symbols):
+            return "للعملات الرقمية: Fear < 30 وADX > 20؛ وللمُرمَّزة/الذهب: ADX > 20 مع شرط استراتيجيتها"
     except Exception:
         pass
     return "Fear < 30 وADX > 20"
@@ -722,7 +745,8 @@ def _format_forecast_ar(symbol: str, price: float, fc: dict, days: int = 30) -> 
          if not _is_commodity_fc(symbol) else
          f"• Fear&Greed: {fc.get('fear_greed',50)} | BTC Dom: {fc.get('btc_dom',50):.0f}% (مرجع للسوق الرقمي فقط — لا يخص الذهب)"),
         (f"• 🔊 حجم مرتفع (Wyckoff ✅) ({_fvr_fc50(fc.get('vol_ratio',0))})" if fc.get('wyckoff')
-         else f"• {'🔊' if float(fc.get('vol_ratio', 1.0) or 0) >= 1.2 else ('🔇' if float(fc.get('vol_ratio', 1.0) or 0) < 0.8 else '🔉')} حجم {_vol_word(fc.get('vol_ratio', 1.0))} ({_fvr_fc50(fc.get('vol_ratio',0))})"),
+         # batch57 (#661/#671): الأيقونة تتبع وصف volume_word نفسه (كان 1.2x «عادي» يظهر 🔊 مرة و🔉 مرة)
+         else f"• {({'مرتفع': '🔊', 'عادي': '🔉', 'أقل من المتوسط': '🔉'}).get(_vol_word(fc.get('vol_ratio', 1.0)), '🔇')} حجم {_vol_word(fc.get('vol_ratio', 1.0))} ({_fvr_fc50(fc.get('vol_ratio',0))})"),
         "",
         f"📊 *السيناريوهات الـ {days} يوم:*",
         (f"  🟢 متفائل (Elliott 5): {p_fmt(bull)} ({bull_pct:+.1f}%)"
@@ -750,7 +774,7 @@ def _format_forecast_ar(symbol: str, price: float, fc: dict, days: int = 30) -> 
                     if fc.get('fib_s1',0) < price else []) +
                    ([f"  🛡️ دعم 2 (0.618 من مدى 30 يوماً — يختلف عن جدول Fib في /signal): {p_fmt(fc.get('fib_s2',0))}"]
                     if fc.get('fib_s2',0) < price else []))
-                  or ([f"  ⚠️ السعر دون مستويي دعم فيبوناتشي (0.382/0.618) — أقرب قاع في آخر 30 يوم: {p_fmt(fc.get('recent_low',0))}"]
+                  or ([f"  ⚠️ السعر دون مستويي دعم فيبوناتشي (0.382/0.618 من مدى 30 يوماً — يختلف عن جدول Fib في /signal) — أقرب قاع في آخر 30 يوم: {p_fmt(fc.get('recent_low',0))}"]
                       if fc.get('recent_low', 0) else
                       ["  ⚠️ السعر دون مستويي دعم فيبوناتشي — لا دعم أدنى مرصود"])),
             ]
@@ -998,7 +1022,7 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _c = _def_crypto[:max(_lim_c_pm // 2, 4)]
             _t = _def_token[:max(_lim_t_pm // 2, 4)]
             symbols    = _c + _t
-            plan_label = f"خطة شاملة — رقمية + مُرمَّزة ({len(symbols)} أصل)"
+            plan_label = f"خطة شاملة — رقمية + مُرمَّزة ({len(symbols)} {'أصول' if 3 <= len(symbols) <= 10 else 'أصلاً'})"
         else:
             symbols    = _def_crypto[:_lim_c_pm]
             plan_label = f"مسح شامل للسوق"
@@ -1438,7 +1462,8 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                else "")),
             # regime_conf_hidden (بند 9): «ثقة تشخيص الاتجاه» ثابتة ~82% عبر أنظمة متعاكسة
             # فتُضلِّل؛ مخفية حتى تُراجَع معادلتها.
-            f"Fear & Greed: {fear_val} — {_fgz_pm(fear_val)[0]}",
+            f"Fear & Greed: {fear_val} — {_fgz_pm(fear_val)[0]}"
+            + (" (مرجع كريبتو — لا يخص هذه الأصول)" if (symbols and all(_non_crypto_sym(str(_s).upper()) for _s in symbols)) else ""),
         ]
         _pm_breadth = _breadth_note(regime.description_ar, [c.get("change_24h") for c in candidates], "أصول")
         if _pm_breadth:
@@ -1516,7 +1541,8 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     _ra_pm = str((cand or {}).get("regime_ar", "") or "")
                     if _ra_pm and sym_p.upper() != "BTC" and (_ra_pm != str(regime.description_ar) or _non_crypto_sym(sym_p)):
                         _adx_pm = float((cand or {}).get("adx", 0) or 0)
-                        line += f"\n    🌍 نظام الأصل نفسه: {_ra_pm}" + (f" (ADX {_adx_pm:.0f})" if _adx_pm > 0 else "")
+                        line += (f"\n    🌍 نظام الأصل نفسه: {_ra_pm}" + (f" (ADX {_adx_pm:.0f})" if _adx_pm > 0 else "")
+                                 + (" — ADX قوي: مراقبة خروج من النطاق" if ("جانبي" in _ra_pm and _adx_pm >= 25) else ""))
                 except Exception:
                     pass
                 if sym_p in _g4_blocked_pm:
@@ -1552,8 +1578,8 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             _syn_pm = [str(_s).upper() for _s in symbols if is_tokenized_x_ticker(str(_s).upper())]
             if _syn_pm:
-                lines.append("⚠️ " + ("، ".join(_syn_pm) if len(_syn_pm) <= 3 else f"{len(_syn_pm)} أصول")
-                             + (" أصل اصطناعي" if len(_syn_pm) == 1 else " أصول اصطناعية")
+                lines.append("⚠️ " + ("، ".join(_syn_pm) + (" أصل اصطناعي" if len(_syn_pm) == 1 else " أصول اصطناعية")
+                                      if len(_syn_pm) <= 3 else f"{len(_syn_pm)} أصول اصطناعية")
                              + " (Synthetic) — سيولة محدودة ولا حماية للمستثمرين؛ المؤشرات الفنية تقديرية (بيانات محدودة)")
         except Exception:
             pass
@@ -1795,13 +1821,13 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         # batch34: شرطا هذه المصفوفة Fear وADX — يُعرضان بجانب RSI/الحجم كي تُقارَن بها
                         try:
                             _adx_now = float(((regime.metrics or {}).get("adx")) or 0)
-                            _now_extra = f" | Fear = {fear_val}" + (f" | ADX (سوق BTC) = {_adx_now:.0f}" if _adx_now > 0 else "")
+                            _now_extra = f" | Fear = {fear_val}" + (f" | ADX (سوق BTC) = {_adxf57(_adx_now)}" if _adx_now > 0 else "")
                         except Exception:
                             _now_extra = f" | Fear = {fear_val}"
                     try:
                         _adx_ast = float((_fca_cand or {}).get("adx", 0) or 0)
                         if _pm_neutral_matrix and _adx_ast > 0 and str(_sym_now).upper() != "BTC":
-                            _now_extra += f" | ADX ({_sym_now}) = {_adx_ast:.0f}"
+                            _now_extra += f" | ADX ({_sym_now}) = {_adxf57(_adx_ast)}"
                         if _nc_now:
                             _e50_ast = float((_fca_cand or {}).get("ema50", 0) or 0)
                             _px_ast = float((_fca_cand or {}).get("price", 0) or 0)
@@ -2073,7 +2099,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _c_syms = _default_crypto[:_lim_c_pw // 2 or 4]
             _t_syms = _default_token[:_lim_t_pw // 2 or 4]
             symbols    = _c_syms + _t_syms
-            plan_label = f"خطة شاملة — رقمية + مُرمَّزة ({len(symbols)} أصل)"
+            plan_label = f"خطة شاملة — رقمية + مُرمَّزة ({len(symbols)} {'أصول' if 3 <= len(symbols) <= 10 else 'أصلاً'})"
         else:  # crypto
             symbols    = _default_crypto[:_lim_c_pw]
             plan_label = f"خطة عملات رقمية — Top {len(symbols)}"
@@ -2202,7 +2228,8 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
             (f"السوق (مرجع BTC): {_regime_ar}"
              if (_pw_all_tok or any(str(_s).upper() != "BTC" for _s in (symbols or [])))
              else f"السوق: {_regime_ar}"),
-            f"Fear & Greed: {fear_val} — {_fear_label}",
+            f"Fear & Greed: {fear_val} — {_fear_label}"
+            + (" (مرجع كريبتو — لا يخص هذه الأصول)" if (symbols and all(_non_crypto_sym(str(_s).upper()) for _s in symbols)) else ""),
             "",
         ]
         # open_position_exclusion_fix: نفس التوضيح المُطبَّق في /planmonth —
@@ -2389,6 +2416,12 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     _is_mr_w = (str(getattr(strat, "value", strat)) == "mean_reversion")
                 except Exception:
                     _is_mr_w = False
+                # batch57 (#665/#666): هبوط قائم (نفس قاعدة /signal) — يُحسب لكل أصل (لا يرث قيمة الأصل السابق)
+                try:
+                    from handlers.analysis import _bear_confirmed_b56 as _bcw57
+                    _bear_w57, _adx_w57 = _bcw57(_reg_a)
+                except Exception:
+                    _bear_w57, _adx_w57 = False, 0.0
                 if _is_mr_w and rsi_w < 70:
                     _rsi_ok_w = rsi_w <= 35
                     _rsi_mr_txt = (f"{rsi_w:.1f}" if round(rsi_w) == 35 else f"{rsi_w:.0f}")
@@ -2398,6 +2431,8 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     _ema_ok_w = price < ema50_w
                     _ema_room_w = ("مساحة الارتداد للمتوسط" if _ema50_dist_w >= 1.0
                                    else "مساحة ارتداد ضئيلة: السعر قريب جداً من EMA50")   # batch45 (ملاحظة 43)
+                    if _bear_w57:
+                        _ema_room_w += f" ⚠️ لكن الهبوط قائم (ADX {_adx_w57:.0f}) — ارتداد ضد الاتجاه عالي المخاطر"
                     _ema_cond = (f"  • ✅ السعر دون EMA50 ({_fmt_price(ema50_w)}) بـ{_ema50_dist_w:.1f}% — {_ema_room_w} — مُستوفى"
                                  if _ema_ok_w else
                                  f"  • ❌ السعر دون EMA50 ({_fmt_price(ema50_w)}) — لا مساحة ارتداد للمتوسط (السعر فوقه) — غير مُستوفى")
@@ -2544,7 +2579,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                              f"  • ❌ الثقة ≥ {_t_entry_plan}% (حالياً {signal.confidence:.0%}) — غير مُستوفى"),
                             (f"  • ✅ اتجاه الإشارة شراء — مُستوفى"
                              if locals().get("_dir_ok_w", False) else
-                             f"  • ❌ اتجاه الإشارة شراء (حالياً {'بيع' if signal.direction == 'short' else 'غير مؤكد'}) — غير مُستوفى"
+                             f"  • ❌ اتجاه الإشارة شراء (حالياً {'بيع' if signal.direction == 'short' else ('اتجاه هابط قائم — لا شراء' if _bear_w57 else 'غير مؤكد')}) — غير مُستوفى"
                              + (" (الجهة تتطلب ثقة 65%)" if (signal.direction not in ('long', 'short') and signal.confidence < SIGNAL_DIRECTION_MIN_CONF) else "")),
                             # plan_pro_fix: label واضح حسب حالة الإشارة
                             # pro_option_technical_gate_fix: يتطلب الآن
@@ -2563,7 +2598,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                  and locals().get("_dir_ok_w", False)
                                  and not locals().get("_g4_blocked_w", False))
                              else f"  🔒 خيار المحترف: غير مُفعَّل ({'السوق مغلق + حجم <0.3x' if locals().get('_g4_blocked_w', False) else 'ثقة ' + str(round(signal.confidence*100)) + '% < ' + str(_t_entry_plan) + '%' if round(signal.confidence * 100) < _t_entry_plan else 'الاتجاه محايد — لا جهة شراء واضحة' if not locals().get('_dir_ok_w', False) else 'شرط RSI/EMA50 غير مُستوفى'})"),
-                            f"  📊 Fib دعم: {_fmt_price(_disp_support)} | مقاومة: {_fmt_price(_disp_resistance)}",
+                            f"  📊 Fib دعم: {_fmt_price(_disp_support)}{_ft57(_disp_support, price, atr_v * 100)} | مقاومة: {_fmt_price(_disp_resistance)}{_ft57(_disp_resistance, price, atr_v * 100)}",
                         ]
                 # batch40: سياق الأصل لجمل الأسابيع (مستويات وقيم حالية بدل نص عام)
                 try:
@@ -2615,7 +2650,8 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     _ra_w = str(getattr(_reg_a, "description_ar", "") or "")
                     if _ra_w and str(sym).upper() != "BTC" and _ra_w != str(regime.description_ar):
                         _adx_w = float(((getattr(_reg_a, "metrics", None) or {}).get("adx")) or 0)
-                        _pw_extra.append(f"  🌍 نظام الأصل نفسه: {_ra_w}" + (f" (ADX {_adx_w:.0f})" if _adx_w > 0 else ""))
+                        _pw_extra.append(f"  🌍 نظام الأصل نفسه: {_ra_w}" + (f" (ADX {_adx_w:.0f})" if _adx_w > 0 else "")
+                                         + (" — ADX قوي: مراقبة خروج من النطاق" if ("جانبي" in _ra_w and _adx_w >= 25) else ""))
                 except Exception:
                     pass
                 lines += [
@@ -2660,6 +2696,19 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             _fc_sym    = symbols[0] if symbols else "BTC"
             _fc_idx    = 0
+            # batch57 (#670): التنبؤ لأول أصل بعد ترتيب الجاهزية/الثقة (كان أول رمز مُدخَل)
+            try:
+                for _l57 in lines[_pw_coin_start:]:
+                    _m57 = _re_sort.match(r"💎 \*([^*]+)\*", str(_l57))
+                    if _m57:
+                        _s57 = _m57.group(1).strip().upper()
+                        _cands57 = [i for i, s_ in enumerate(symbols) if str(s_).upper() == _s57
+                                    or str(s_).upper().endswith(_s57)]
+                        if _cands57:
+                            _fc_idx = _cands57[0]; _fc_sym = symbols[_fc_idx]
+                        break
+            except Exception:
+                _fc_sym, _fc_idx = (symbols[0] if symbols else "BTC"), 0
             _fc_candles = ohlcv_sym[_fc_idx] if (ohlcv_sym and
                           not isinstance(ohlcv_sym[_fc_idx], Exception)) else []
             _fc_price   = 0.0
@@ -2676,7 +2725,10 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     atr_override=_pw_atr_by_sym.get(str(_fc_sym).upper()),
                 )
                 if _fc:
-                    lines.append(_format_forecast_ar(_fc_sym, _fc_price, _fc, days=30))
+                    _fct57 = _format_forecast_ar(_fc_sym, _fc_price, _fc, days=30)
+                    # batch57 (#669): أفق التنبؤ أطول من الخطة الأسبوعية — يُوسَم
+                    _fct57 = _fct57.replace("يوم القادمة*", "يوم القادمة* (أفق شهري مرجعي — أطول من هذه الخطة)", 1)
+                    lines.append(_fct57)
         except Exception as _fce:
             logger.debug(f"planweek forecast30: {_fce}")
 
@@ -2943,7 +2995,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
             week_lines = [
                 f"• أسبوع 1: مراقبة — لا دخول حتى تتضح الإشارات{_wk1_extra}",
                 f"• أسبوع 2: دخول جزئي (25%) فقط إذا تحقق شرط المصفوفة ({_wk2_cond(symbols, _mr_wk2)}){_wk2_now} مع ثقة ≥ حد الدخول وتأكيدات 2/4",
-                f"• أسبوع 3: إن وُجدت صفقة مفتوحة فراجع وقف الخسارة{_wk3_extra}؛ وإلا واصل المراقبة",
+                f"• أسبوع 3: إن وُجدت صفقة مفتوحة فراجع وقف الخسارة{_wk3_extra or (' (وقف كل أصل بقاعدة /signal الخاص به: ≥1.5×ATR تحت الدخول)' if len(symbols) > 1 else '')}؛ وإلا واصل المراقبة",
                 f"• أسبوع 4: تقييم — هل بلغت الثقة حد الدخول (55%) وتحققت تأكيدات 2/4 مع اتجاه شراء؟{_wk4_extra}",
             ]
         lines, _closed_pw = _collapse_closed_notes(lines)

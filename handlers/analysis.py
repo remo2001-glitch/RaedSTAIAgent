@@ -812,6 +812,17 @@ def _llm_facts_ctx(sig) -> str:
         return ""
 
 
+def _fib_tight_b57(level: float, price: float, atr_pct: float = 0.0) -> str:
+    """batch57 (#664): مستوى ضمن max(0.5%، نصف ATR) من السعر ليس حاجزاً فعلياً — يُوسَم بدل حذفه (لا يغيّر الدخول)."""
+    try:
+        d = abs(level / price - 1) * 100
+        if d < max(0.5, 0.5 * float(atr_pct or 0)):
+            return f" — ملاصق للسعر ({d:.1f}%)، ليس حاجزاً فعلياً"
+    except Exception:
+        pass
+    return ""
+
+
 def _bear_confirmed_b56(regime_obj) -> tuple:
     """batch56 (#585/#596/#638): هبوط قائم = تصنيف «هابط» + ADX ≥ 25 + (−DI − +DI) ≥ 3. يعيد (bool، ADX)."""
     try:
@@ -821,7 +832,10 @@ def _bear_confirmed_b56(regime_obj) -> tuple:
         desc = str(getattr(regime_obj, "description_ar", "") or "")
         adx = float(m.get("adx", 0) or 0)
         dp, dm = float(m.get("di_plus", 0) or 0), float(m.get("di_minus", 0) or 0)
-        ok = ("BEAR" in reg or "هابط" in desc) and adx >= 25 and (dm - dp) >= 3
+        _pve = m.get("price_vs_ema50")
+        _below50 = (_pve is not None and float(_pve) <= -3.0)
+        # batch57 (#653): نظام «تقلب عالٍ» مع ADX/DI هابط وسعر تحت EMA50 بوضوح = هبوط قائم أيضاً
+        ok = ("BEAR" in reg or "هابط" in desc or _below50) and adx >= 25 and (dm - dp) >= 3
         return ok, adx
     except Exception:
         return False, 0.0
@@ -836,6 +850,8 @@ def _bear_wording_b56(text: str, regime_obj) -> str:
     import re as _r
     t = text
     t = _r.sub(r"الاتجاه: ⚪ غير مؤكد \(ثقة", f"الاتجاه: 🔴 هابط (ADX {adx:.0f}) — لا إشارة شراء (ثقة الشراء", t)
+    # batch57 (#646): «الميل: مائل للهبوط» بعد حكم «هابط قائم» أضعف منه ويشوّش عليه
+    t = _r.sub(r"(الاتجاه: 🔴 هابط \(ADX \d+\) — لا إشارة شراء \(ثقة الشراء \d+% < \d+%\)) — الميل: [^\n]*", r"\1", t)
     t = t.replace("🎯 الاتجاه: ⚪ غير مؤكد", f"🎯 الاتجاه: 🔴 هابط (ADX {adx:.0f}) — لا شراء")
     t = t.replace("الاتجاه غير مؤكد: لا جهة واضحة للصفقة", f"اتجاه هابط قائم (ADX {adx:.0f}): لا شراء في Spot")
     t = t.replace("الحجم: 0% — الاتجاه غير مؤكد، انتظر وضوح الجهة", "الحجم: 0% — اتجاه هابط قائم، لا شراء")
@@ -1537,8 +1553,8 @@ def _fmt_fib_lines(fib: dict, price: float) -> list:
         lines.append(f"  {icon} {label:>5} — {_fmt_price(val)}{mark}")
     ns = fib.get("nearest_support", 0)
     nr = fib.get("nearest_resistance", 0)
-    if ns > 0: lines.append(f"• أقرب دعم فيبو:    {_fmt_price(ns)} (Fib — يحتاج تأكيد سعري)")
-    if nr > 0: lines.append(f"• أقرب مقاومة فيبو: {_fmt_price(nr)} (Fib — يحتاج تأكيد سعري)")
+    if ns > 0: lines.append(f"• أقرب دعم فيبو:    {_fmt_price(ns)} (Fib — يحتاج تأكيد سعري){_fib_tight_b57(ns, price)}")
+    if nr > 0: lines.append(f"• أقرب مقاومة فيبو: {_fmt_price(nr)} (Fib — يحتاج تأكيد سعري){_fib_tight_b57(nr, price)}")
     return lines
 
 
@@ -1767,7 +1783,10 @@ def _build_professional_block(
         if _is_mr_pb:
             _below50 = bool(ema50_val and price < ema50_val)
             _adx_mr = float(tech.get("adx", 0) or 0) if isinstance(tech, dict) else 0.0
-            _bear_mr = "BEAR" in str(getattr(getattr(regime, "regime", ""), "value", getattr(regime, "regime", ""))).upper()
+            if not _adx_mr:   # batch57 (#647): ADX في metrics نظام الأصل لا في tech
+                _adx_mr = float(((getattr(regime, "metrics", None) or {}).get("adx")) or 0)
+            _bear_mr = ("BEAR" in str(getattr(getattr(regime, "regime", ""), "value", getattr(regime, "regime", ""))).upper()
+                        or "هابط" in str(getattr(regime, "description_ar", "") or ""))
             if rsi <= 35 and _below50 and _bear_mr and _adx_mr > 30:
                 # batch56 (#586): ارتداد ضد هبوط قائم (ADX>30) ليس «شبه جاهز» — يُعرض كمخاطرة لا كشرط متحقق
                 _mr_first = (f"1. ⚠️ شرط الارتداد متحقق شكلياً (RSI 1D = {rsi:.0f} ≤ 35 ودون EMA50) لكن الهبوط قائم وقوي "
@@ -2599,18 +2618,14 @@ def _build_professional_block(
     # إصلاح #19: فرض R/R ≥ 1:1 على مستوى النظام (يطابق منطق risk_engine)
     # بدلاً من عرض R/R<1 وترك القرار للمستخدم — نرفع TP1/TP2 تناسبياً
     _rr_adjusted_note = ""
-    if rr_real < 1.0:
-        # rr_entry_reference_fix (امتداد): نفس مرجع entry_agg بدل price هنا
-        # أيضاً، ليبقى التعديل التلقائي متسقاً مع الأرقام المعروضة فعلياً
-        _old_tp1 = tp1_v
-        _new_tp1 = entry_agg + _risk  # يضمن reward == risk → R/R = 1.0
-        if tp2_v and _old_tp1 > entry_agg:
-            _tp2_ratio = (tp2_v - entry_agg) / max(_old_tp1 - entry_agg, 1e-9)
-            tp2_v = entry_agg + (_new_tp1 - entry_agg) * _tp2_ratio
-        tp1_v   = _new_tp1
-        _reward = max(tp1_v - entry_agg, 1e-9)
-        rr_real = round(min(_reward / _risk, 5.0), 1)
-        _rr_adjusted_note = " (مُعدَّل تلقائياً لضمان 1:1)"
+    # batch57 (قرار رحال 2026-11-04 14:00): لا رفع آلي للهدف إلى 1:1 — كان يُخفي بنية بلا حافة بعد وقف ≥1.5×ATR
+    # (XKORU/SOL/ETH «1:1.0» بهدف مشتق من الوقف). يُعرض R/R الحقيقي، ودون 1:1 = لا حافة ⇒ حجم 0% وقرار انتظار.
+    _no_edge_b57 = rr_real < 1.0
+    if _no_edge_b57:
+        _rr_adjusted_note = " — ⛔ لا حافة إحصائية (دون 1:1)"
+        if not str(_pos_size_rule).strip().startswith("0%"):
+            _pos_size_rule = "0% — لا حافة إحصائية (R/R دون 1:1)"
+            _decision_label = "[WAIT] — لا حافة إحصائية: R/R دون 1:1"
 
     # rr_dup_fix (#293): تحذير R/R الآن يُبنى من نفس الرقم المعروض فعلياً
     # للمستخدم (rr_real إذا التأكيدات مكتملة، وإلا _rr_calc التقديري) —
@@ -2630,8 +2645,8 @@ def _build_professional_block(
                 + ("ضعيف" if _rr_shown < 1.5 else "مقبول لكن دون 2.0")
                 + " (يُفضَّل ≥ 2.0)"
                 # batch40: سبب R/R≈1 البنيوي (هدف 1 من 0.8×ATR مقابل وقف ≥1.5×ATR) بدل تركه لغزاً
-                + ((" — الهدف الأول المرجعي أقرب من الوقف فرُفع آلياً إلى 1:1؛ ليس لهذه البنية عائد يفوق المخاطرة"
-                    if _rr_adjusted_note else
+                + ((" — ⛔ لا حافة إحصائية: الهدف المرجعي أقرب من الوقف (≥1.5×ATR)؛ لا دخول بهذه البنية"
+                    if _rr_shown < 1.0 else
                     " — الهدف الأول المرجعي بمسافة الوقف تقريباً؛ ليس لهذه البنية عائد يفوق المخاطرة")
                    if _rr_shown <= 1.05 else ""))
 
@@ -2966,7 +2981,9 @@ def _build_professional_block(
             # التأكيدات متحققة؛ العائق الثقة/الاتجاه — الرقم نظري لأن الأهداف غير مفعّلة
             _rr_line = f"• R/R (نظري — الأهداف غير مفعّلة): 1:{_fmt_rr(_rr_calc)}"
         else:
-            _rr_line = (f"• R/R: 1:{_fmt_rr(_rr_calc)} (هدف مرجعي {_fmt_price(tp1_v)}) — انتظر تأكيد 2/4 مؤشرات (الحالي {_flags_found}/4)")
+            _rr_line = (f"• R/R: 1:{_fmt_rr(_rr_calc)} (هدف مرجعي {_fmt_price(tp1_v)})"
+                        + (" — ⛔ لا حافة إحصائية (دون 1:1)" if _rr_calc < 1.0 else
+                           f" — انتظر تأكيد 2/4 مؤشرات (الحالي {_flags_found}/4)"))
     else:
         _rr_line = "• R/R: يحتاج تحديد Entry/SL/TP"
     # pos_size_atr_fix: عرض حجم المركز من ATR بجانب النسبة
@@ -3159,7 +3176,7 @@ def _build_professional_block(
                         else "لا يوافق اتجاه الإشارة") + ")")
     if not _conf_flags and not _flags_ignored:
         parts.append("  • لا تأكيدات — انتظر 2/4 مؤشرات ("
-                     + ("حجم + RSI + CVD + BB" if _gold_fund_ex else "حجم + RSI + CVD + BB + Funding سالب") + ")")
+                     + ("حجم + RSI + CVD + BB" if (_gold_fund_ex or _is_x_asset or tech.get("is_perp_asset", False)) else "حجم + RSI + CVD + BB، أو Funding سالب") + ")")
     elif not _conf_flags:
         pass
     else:
@@ -4843,7 +4860,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 _4h_dir = "🟡 محايد"
         _daily_dir = ("🟢 صاعد" if regime.description_ar and "صاعد" in regime.description_ar
-                      else "🔴 هابط" if regime.description_ar and "هابط" in regime.description_ar
+                      else "🔴 هابط" if (regime.description_ar and "هابط" in regime.description_ar) or _bear_confirmed_b56(regime)[0]
                       else "🟡 محايد")
         # multi_tf_fix: تصنيف متعدد الأطر
         _tf_note = ""
@@ -6827,7 +6844,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         parts.append("\n" + _m4h)
                     # batch49 (قرار 15): سطر «الأطر» (يومي | 4H) موحّد مع /signal
                     try:
-                        _dd49 = ("🟢 صاعد" if "صاعد" in str(regime_desc) else "🔴 هابط" if "هابط" in str(regime_desc) else "🟡 محايد")
+                        _dd49 = ("🟢 صاعد" if "صاعد" in str(regime_desc) else "🔴 هابط" if ("هابط" in str(regime_desc) or _bear_confirmed_b56(locals().get("regime_obj"))[0]) else "🟡 محايد")
                         parts.append(f"📊 الأطر: يومي {_dd49} | 4H {_t4h_an}")
                     except Exception:
                         pass

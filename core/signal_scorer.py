@@ -102,7 +102,7 @@ def _differentiation_b56(s: "SignalInput", reasons: list) -> int:
         r = int(round(max(0.0, min(8.0, 8.0 * (float(s.rr_ratio) - 1.0) / 2.0))))
         pts += r
         if r < 8:
-            reasons.append(f"س: R/R ممتد 1:{float(s.rr_ratio):.1f} دون 1:3 (-{8 - r})")
+            reasons.append(f"س: المسافة إلى R/R المثالي 1:3 (الحالي 1:{float(s.rr_ratio):.1f}) — تكمل خصم العائد/المخاطرة أعلاه (-{8 - r})")
     else:
         pts += 8
     if s.stop_pct is not None and s.stop_pct > 0:

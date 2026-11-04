@@ -346,7 +346,7 @@ class CapitalAllocationEngine:
                 cause = (f"{'ثقة الأصل' if _single_pe else 'أعلى ثقة بين ' + _multi_noun_pe + ' المحلَّلة'} {_top:.0%} — دون حد التوزيع "
                          f"على المحفظة ({self.ALLOC_MIN_CONFIDENCE:.0%}؛ وهو أعلى من "
                          f"حد الإشارة الفردية 55%) "
-                         f"— السوق المرجعي: {regime.description_ar}")
+                         + ("" if _all_tok_pe else f"— السوق المرجعي: {regime.description_ar}"))   # batch57 (#673): لا مرجع BTC لخطة أصول مُرمَّزة
             return (
                 f"⚠️ {'لا يوجد أصل مؤهل للتوزيع حالياً' if len(candidates or []) == 1 else 'لا توجد أصول مؤهلة للتوزيع حالياً'}\n"
                 f"السبب: {cause}"

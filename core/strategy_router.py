@@ -56,10 +56,15 @@ def _tech_conflict_b56(s) -> str:
         t = s.technicals or {}
         side, rsi, adx = t.get("trend_side"), float(t.get("rsi", 50) or 50), t.get("adx_t")
         bb = float(t.get("bb_pos", 0.5) or 0.5)
+        # batch57 (#655): RSI 41/44 ليس «قرب ذروة البيع» — الوصف يتبع القيمة
         if side == "bear" and (rsi < 45 or bb < 0.2):
-            return f" — اتجاه هابط (ADX {adx:.0f}) تعاكسه قراءة قرب ذروة البيع (RSI {rsi:.0f})"
+            _w = (f"قرب ذروة البيع (RSI {rsi:.0f})" if rsi < 35 else
+                  f"RSI منخفض نسبياً ({rsi:.0f})" if rsi < 45 else "سعر قرب حد البولنجر السفلي")
+            return f" — اتجاه هابط (ADX {adx:.0f}) تعاكسه قراءة {_w}"
         if side == "bull" and (rsi > 55 or bb > 0.8):
-            return f" — اتجاه صاعد (ADX {adx:.0f}) تعاكسه قراءة قرب ذروة الشراء (RSI {rsi:.0f})"
+            _w = (f"قرب ذروة الشراء (RSI {rsi:.0f})" if rsi > 65 else
+                  f"RSI مرتفع نسبياً ({rsi:.0f})" if rsi > 55 else "سعر قرب حد البولنجر العلوي")
+            return f" — اتجاه صاعد (ADX {adx:.0f}) تعاكسه قراءة {_w}"
     except Exception:
         pass
     return ""
