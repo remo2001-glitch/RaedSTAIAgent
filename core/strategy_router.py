@@ -50,6 +50,21 @@ def _neutral_dir_b53(s) -> str:
         return "⚪ محايد"
 
 
+def _tech_conflict_b56(s) -> str:
+    """batch56 (ج): يشرح ما بقي من تعارض داخل «تقني» بين اتجاه قائم وقراءة ذروة بيع/شراء معاكسة. عرض فقط."""
+    try:
+        t = s.technicals or {}
+        side, rsi, adx = t.get("trend_side"), float(t.get("rsi", 50) or 50), t.get("adx_t")
+        bb = float(t.get("bb_pos", 0.5) or 0.5)
+        if side == "bear" and (rsi < 45 or bb < 0.2):
+            return f" — اتجاه هابط (ADX {adx:.0f}) تعاكسه قراءة قرب ذروة البيع (RSI {rsi:.0f})"
+        if side == "bull" and (rsi > 55 or bb > 0.8):
+            return f" — اتجاه صاعد (ADX {adx:.0f}) تعاكسه قراءة قرب ذروة الشراء (RSI {rsi:.0f})"
+    except Exception:
+        pass
+    return ""
+
+
 class TradeScenario:
     """
     يُميّز بين 3 سيناريوهات مختلفة جذرياً:
@@ -517,6 +532,23 @@ class SignalLayer:
             if ema_align:           bullish_pts += 1
             elif not ema_align:     bearish_pts += 1
 
+        # batch56 (قرار رحال 2026-11-04، الخيار ج): قوة الاتجاه تدخل الدرجة — ADX ≥ 25 وفرق DI ≥ 3 ⇒ نقطتان للجهة الأقوى.
+        # كانت قراءات ذروة البيع (RSI/BB) تلغي إشارات الهبوط فيبقى «تقني» محايداً (46–49%) في هبوط ADX 35.
+        trend_side = ""
+        adx_t = None
+        try:
+            from core.regime_detector import RegimeDetector as _RD56
+            adx_t, _dp56, _dm56 = _RD56._adx_full(highs, lows, closes, 14)
+            if adx_t and adx_t >= 25 and _dp56 is not None and _dm56 is not None and abs(_dp56 - _dm56) >= 3:
+                if _dm56 > _dp56:
+                    bearish_pts += 2
+                    trend_side = "bear"
+                else:
+                    bullish_pts += 2
+                    trend_side = "bull"
+        except Exception:
+            trend_side = ""
+
         total = bullish_pts + bearish_pts
         if total > 0:
             # batch36 (قرار رحال — تنعيم الدرجة عند قلة النقاط): نقطتان وهميتان محايدتان تُضافان للنسبة
@@ -552,6 +584,8 @@ class SignalLayer:
             "vol_profile": vol_profile,
             "conf_flags":  conf_flags,
             "pts_bull":    bullish_pts,   # batch34: لشفافية رقم «تقني» (يتطرف عند قلة النقاط)
+            "trend_side":  trend_side,    # batch56 (ج): جهة الاتجاه القائم المحتسبة في الدرجة
+            "adx_t":       round(float(adx_t), 1) if adx_t else None,
             "pts_bear":    bearish_pts,
         }
 
@@ -692,7 +726,7 @@ class SignalLayer:
             + (f" ({tt.replace('_', ' ').title()})" if tt != 'spot' else "") + "\n"
             f"الثقة:  {bar} {s.confidence:.0%}\n\n"
             f"📊 *مصادر الإشارة*\n"
-            f"• تقني:    {s.signal_sources['technical']:.0%}{_src_tag(s.signal_sources['technical'])}\n"
+            f"• تقني:    {s.signal_sources['technical']:.0%}{_src_tag(s.signal_sources['technical'])}{_tech_conflict_b56(s)}\n"
             f"• On-Chain: " + (_ex_tag.strip() if 'onchain' in _ex_src else f"{s.signal_sources['onchain']:.0%}{_src_tag(s.signal_sources['onchain'])}") + "\n"
             f"• أخبار:   " + (_ex_tag.strip() if 'news' in _ex_src else f"{s.signal_sources['news']:.0%}{_src_tag(s.signal_sources['news'])}") + "\n"
             f"• زخم 30 يوم: {s.signal_sources['momentum']:.0%}{_src_tag(s.signal_sources['momentum'])}\n"

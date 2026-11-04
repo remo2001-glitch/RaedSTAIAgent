@@ -88,9 +88,9 @@ class SignalInput:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # دوال مساعدة
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# batch56 (بند 1أ): مُعطَّل حتى يوافق رحال على جدول «قبل/بعد» — ثم يُفعَّل بتغيير هذه القيمة فقط (أو SETUP_QUALITY_V2=1)
+# batch56 (بند 1أ): مُفعَّل بموافقة رحال 2026-11-04 13:30 على جدول «قبل/بعد» (SETUP_QUALITY_V2=0 يعيد الحساب القديم)
 import os as _os_sq
-SETUP_QUALITY_V2 = _os_sq.getenv("SETUP_QUALITY_V2", "0") == "1"
+SETUP_QUALITY_V2 = _os_sq.getenv("SETUP_QUALITY_V2", "1") == "1"
 
 
 def _differentiation_b56(s: "SignalInput", reasons: list) -> int:
@@ -102,7 +102,7 @@ def _differentiation_b56(s: "SignalInput", reasons: list) -> int:
         r = int(round(max(0.0, min(8.0, 8.0 * (float(s.rr_ratio) - 1.0) / 2.0))))
         pts += r
         if r < 8:
-            reasons.append(f"ح: R/R ممتد 1:{float(s.rr_ratio):.1f} دون 1:3 (-{8 - r})")
+            reasons.append(f"س: R/R ممتد 1:{float(s.rr_ratio):.1f} دون 1:3 (-{8 - r})")
     else:
         pts += 8
     if s.stop_pct is not None and s.stop_pct > 0:
@@ -110,7 +110,7 @@ def _differentiation_b56(s: "SignalInput", reasons: list) -> int:
         st = 6 if sp <= 8 else 3 if sp <= 15 else 0
         pts += st
         if st < 6:
-            reasons.append(f"ح: مسافة الوقف {sp:.1f}% واسعة — مخاطرة أعلى لكل وحدة (-{6 - st})")
+            reasons.append(f"س: مسافة الوقف {sp:.1f}% واسعة — مخاطرة أعلى لكل وحدة (-{6 - st})")
     else:
         pts += 6
     if s.support_gap_pct is not None:
@@ -118,7 +118,7 @@ def _differentiation_b56(s: "SignalInput", reasons: list) -> int:
         su = 6 if g <= 1 else 3 if g <= 3 else 0
         pts += su
         if su < 6:
-            reasons.append(f"ح: الدخول يبعد {g:.1f}% عن أقرب دعم (-{6 - su})")
+            reasons.append(f"س: الدخول يبعد {g:.1f}% عن أقرب دعم (-{6 - su})")
     else:
         pts += 6
     return pts
@@ -440,13 +440,14 @@ _CAT_LABELS = {
     "أ": "سلامة الإشارة", "ب": "العائد/المخاطرة", "ج": "الوقف والأهداف (ATR)",
     "د": "السيولة والتنفيذ", "هـ": "الاتساق الداخلي", "و": "نوع الأصل",
     "ز": "التأكيدات", "ز2": "التأكيد المستقل", "ح": "سقف الحكم (تأكيدات)", "ط": "سقف الحكم (بيانات/ثقة)",
+    "س": "تمايز البنية",
 }
 
 
 def _label_reason(r: str) -> str:
     """يستبدل حرف الفئة (أ، ب، …) بتسمية عربية مفهومة في العرض فقط."""
     import re as _re
-    m = _re.match(r"^(هـ|ز2|[أبجدوزحط])\s*:?\s+(.*)$", r, _re.S)
+    m = _re.match(r"^(هـ|ز2|[أبجدوزحطس])\s*:?\s+(.*)$", r, _re.S)
     if m and m.group(1) in _CAT_LABELS:
         return f"{_CAT_LABELS[m.group(1)]}: {m.group(2)}"
     return r
