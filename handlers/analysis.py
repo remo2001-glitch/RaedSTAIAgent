@@ -3045,6 +3045,20 @@ def _build_professional_block(
                            f" — انتظر تأكيد 2/4 مؤشرات (الحالي {_flags_found}/4)"))
     else:
         _rr_line = "• R/R: يحتاج تحديد Entry/SL/TP"
+    # batch60 (#742، قرار رحال: الحكم كما هو): حين R/R دون 1:1 يُذكر أقرب مستوى Fib يحقق 1:1 — للمراقبة فقط
+    try:
+        if "لا حافة إحصائية" in _rr_line and entry_agg > 0 and 0 < pro_sl < entry_agg:
+            _risk60 = entry_agg - pro_sl
+            _lv60 = sorted(float(v) for v in ((fib or {}).get("levels") or {}).values()
+                           if float(v or 0) > entry_agg and (float(v) - entry_agg) >= _risk60)
+            if _lv60:
+                _rr60 = (_lv60[0] - entry_agg) / _risk60
+                _rr_line += (f"\n• 📍 للمراقبة: أقرب مستوى يحقق R/R ≥ 1:1 هو {_fmt_price(_lv60[0])} "
+                             f"(1:{_rr60:.1f}) — ليس هدفاً مُفعَّلاً؛ الحكم يبقى «لا حافة»")
+            else:
+                _rr_line += "\n• 📍 لا مستوى Fib ضمن المدى يحقق R/R ≥ 1:1 من هذا الدخول"
+    except Exception:
+        pass
     # pos_size_atr_fix: عرض حجم المركز من ATR بجانب النسبة
     _atr_position_note = ""
     if pro_entry > 0 and pro_sl > 0 and atr_pct > 0:

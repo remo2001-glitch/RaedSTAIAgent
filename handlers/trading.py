@@ -3470,7 +3470,9 @@ async def _open_virtual_futures_b58(user_id, symbol, side, price, amount, levera
     _loss = abs(ep - sl) * qty + _fees
     _lp = _loss / margin * 100 if margin > 0 else 0
     _side_ar = "📈 Long (شراء)" if is_long else "📉 Short (بيع على المكشوف)"
-    _liq_txt = ("لا تصفية عملياً (رافعة 1x)" if lev == 1 else f"≈ {_fmt_price(round(float(pos['liq_price']), 0) if pos['liq_price'] >= 100 else pos['liq_price'])}")
+    _lq60 = float(pos['liq_price'])   # batch60 (#740): «≈ $3,654» بلا .00 بعد التقريب
+    _liq_txt = ("لا تصفية عملياً (رافعة 1x)" if lev == 1 else
+                (f"≈ ${round(_lq60):,}" if _lq60 >= 100 else f"≈ {_fmt_price(_lq60)}"))
     lines = [
         "✅ تم فتح مركز Futures افتراضي", "",
         f"🏦 {sym_u} | {_side_ar} | رافعة {lev}x (هامش معزول)",
@@ -3528,7 +3530,8 @@ async def cmd_vfutures(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"• *{s_}* {'Long' if p_['side'] == 'long' else 'Short'} {lev_}x — هامش ${float(p_['margin']):,.2f} | اسمية ${float(p_['notional']):,.2f}",
             f"  الدخول {_fmt_price(p_['entry'])} | الحالي {_fmt_price(px)}",
             f"  الوقف {_fmt_price(p_['stop_loss']) if p_.get('stop_loss') else '—'} | الهدف {_fmt_price(p_['take_profit']) if p_.get('take_profit') else '—'}"
-            + ("" if lev_ == 1 else f" | التصفية ≈ {_fmt_price(p_['liq_price'])}"),
+            + ("" if lev_ == 1 else (f" | التصفية ≈ ${round(float(p_['liq_price'])):,}" if float(p_['liq_price']) >= 100
+                                     else f" | التصفية ≈ {_fmt_price(p_['liq_price'])}")),
             f"  {'📈' if net >= 0 else '📉'} الصافي لو أُغلق الآن: {'+' if net >= 0 else '-'}${abs(net):,.2f} ({pct:+.1f}% من الهامش، بعد رسوم الفتح والإغلاق)",
             "",
         ]

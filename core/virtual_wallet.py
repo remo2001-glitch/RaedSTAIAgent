@@ -21,6 +21,33 @@ def _fp(p) -> str:
         return str(p)
 
 
+def _count_ar_b60(n: int, one: str, two: str, few: str, many: str) -> str:
+    """batch60 (#738): تمييز العدد العربي — 1 مفرد، 2 مثنى، 3–10 جمع، 11+ مفرد."""
+    n = int(n)
+    if n == 1:
+        return one
+    if n == 2:
+        return two
+    if 3 <= n % 100 <= 10:
+        return f"{n} {few}"
+    return f"{n} {many}"
+
+
+def _dur_ar_b60(hours: float) -> str:
+    h = float(hours or 0)
+    if h < 1:
+        return _count_ar_b60(max(1, round(h * 60)), "دقيقة واحدة", "دقيقتان", "دقائق", "دقيقة")
+    if h < 48:
+        return _count_ar_b60(round(h), "ساعة واحدة", "ساعتان", "ساعات", "ساعة")
+    return _count_ar_b60(round(h / 24), "يوم واحد", "يومان", "أيام", "يوماً")
+
+
+def _pct_b60(p: float) -> str:
+    """batch60 (#739): نسبة صغيرة (<0.1%) بمنزلتين كي لا تظهر +0.0% مع ربح فعلي."""
+    p = float(p or 0)
+    return f"{p:+.2f}%" if abs(p) < 0.1 else f"{p:+.1f}%"
+
+
 HISTORY_CAP = 2000  # قيود شراء/بيع (≈1000 صفقة مغلقة)
 
 
@@ -404,7 +431,7 @@ class VirtualWallet:
             if _op.tzinfo is None:
                 _op = _op.replace(tzinfo=timezone.utc)
             _h = (datetime.now(timezone.utc) - _op).total_seconds() / 3600.0
-            _dur = f"{_h * 60:.0f} دقيقة" if _h < 1 else (f"{_h:.1f} ساعة" if _h < 48 else f"{_h / 24:.1f} يوم")
+            _dur = _dur_ar_b60(_h)
         except Exception:
             pass
         _usd = (lambda v: f"{'+' if v >= 0 else '-'}${abs(v):,.2f}")
@@ -413,7 +440,7 @@ class VirtualWallet:
             f"• الجهة: {'Long' if pos['side'] == 'long' else 'Short'} | رافعة {pos['leverage']}x\n"
             f"• السبب: {_r_ar}" + (f" | المدة: {_dur}" if _dur else "") + "\n"
             f"• الدخول: {_fp(pos['entry'])} → الخروج: {_fp(exit_px)}\n"
-            f"• الربح/الخسارة الصافي: {_usd(pnl)} ({pnl_pct:+.1f}% من الهامش) — بعد رسوم ${trade['fees']:,.2f}\n"
+            f"• الربح/الخسارة الصافي: {_usd(pnl)} ({_pct_b60(pnl_pct)} من الهامش) — بعد رسوم ${trade['fees']:,.2f}\n"
             f"💰 الرصيد الجديد: ${self.balance:,.2f}\n\n"
             f"{E['virtual']} صفقة تدريبية — لا أموال حقيقية\n"
             f"📋 /vfutures المراكز | /stats الأداء")}

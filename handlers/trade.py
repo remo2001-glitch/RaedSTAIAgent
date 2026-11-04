@@ -205,12 +205,17 @@ def _signal_gate_b58(rec: dict, base: str, price: float, now: float = None) -> s
         return f"⌛ آخر قرار /signal لـ {base} أقدم من 30 دقيقة — أعد /signal {base} ثم /trade {base}"
     if str(rec.get("mkt", "spot")) != "spot":
         return f"ℹ️ قرار /signal الأخير لـ {base} كان Futures — /trade حقيقي Spot فقط. أعد /signal {base} واختر Spot"
+    # batch60 (#741): سطر واحد بالسبب + عمر القرار + الخطوة التالية
+    _age60 = max(0, int((now - float(rec.get("ts") or 0)) / 60))
+    from core.virtual_wallet import _count_ar_b60 as _ca60
+    _age_txt60 = "أقل من دقيقة" if _age60 < 1 else _ca60(_age60, "دقيقة واحدة", "دقيقتين", "دقائق", "دقيقة")
+    _next60 = (f"\n🔁 قرار /signal قبل {_age_txt60} — /trade ينفّذ فقط حين يعطي /signal قرار دخول "
+               f"(R/R ≥ 1:1 وحجم > 0%). أعد /signal {base} لاحقاً")
     if str(rec.get("verdict", "")).upper() == "AUTO-FAIL":
-        return (f"⛔ *{base}* — لا تنفيذ: تقييم /signal AUTO-FAIL\n"
-                f"{str(rec.get('verdict_reason', '')).replace('*', '').strip()}")
+        _why60 = str(rec.get('verdict_reason', '')).replace('*', '').replace("❌", "").replace("AUTO-FAIL |", "").strip()
+        return f"⛔ *{base}* — لا تنفيذ (AUTO-FAIL): {_why60 or 'تقييم /signal مرفوض'}" + _next60
     if rec.get("wait") or float(rec.get("size_pct") or 0) <= 0:
-        return (f"⏳ *{base}* — لا تنفيذ: قرار /signal «انتظار»\n"
-                f"• الحجم في /signal: {rec.get('size_rule') or '0%'}")
+        return (f"⏳ *{base}* — لا تنفيذ: قرار /signal «انتظار» (الحجم {rec.get('size_rule') or '0%'})" + _next60)
     if str(rec.get("direction", "")).lower() not in ("bullish", "long", "buy"):
         return f"⏳ *{base}* — لا تنفيذ: /signal لا يعطي اتجاه شراء ({rec.get('direction') or 'غير مؤكد'})"
     sl, tp1 = float(rec.get("sl") or 0), float(rec.get("tp1") or 0)
@@ -221,6 +226,15 @@ def _signal_gate_b58(rec: dict, base: str, price: float, now: float = None) -> s
     if price >= tp1:
         return f"⛔ *{base}* — السعر الحالي تجاوز الهدف الأول {_fmt_price(tp1)} — لا تنفيذ بهذه البنية"
     return ""
+
+
+def _age_ar_b60(m) -> str:
+    try:
+        from core.virtual_wallet import _count_ar_b60 as _ca
+        m = int(m or 0)
+        return "أقل من دقيقة" if m < 1 else _ca(m, "دقيقة واحدة", "دقيقتين", "دقائق", "دقيقة")
+    except Exception:
+        return f"{m} دقيقة"
 
 
 def _qb58(q) -> str:
@@ -393,7 +407,7 @@ def _proposal_text(p: dict) -> str:
         f"• هدف 2 (مرجعي): {_fmt_price(p['tp2'])} (+{p['tp2_pct']:.1f}%)\n"
         f"• R/R عند السعر الحالي: 1:{p.get('rr', 0):.2f}\n"
         f"• SL/TP يوضعان على المنصة نفسها متى دعمت ذلك\n\n"
-        f"📡 المصدر: قرار /signal قبل {p.get('sig_age_min', 0)} دقيقة"
+        f"📡 المصدر: قرار /signal قبل {_age_ar_b60(p.get('sig_age_min', 0))}"
         + (f" — {p['sig_label']}" if p.get("sig_label") else "") + "\n"
         f"🛑 الوقف ≥ 1.5×ATR من سعر التنفيذ، والحجم ضمن حد /signal ومخاطرة الباقة\n\n"
         f"⚠️ التحليل استرشادي — القرار للمستخدم"
