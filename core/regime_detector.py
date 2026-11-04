@@ -105,6 +105,28 @@ class RegimeDetector:
     لتحديد حالة السوق الفعلية.
     """
 
+    _adx_state_b56: Dict[str, bool] = {}
+
+    @classmethod
+    def _adx_strong_b56(cls, symbol: str, adx: float) -> bool:
+        """batch56 (بند 3): ADX قوي = فوق 33 دخولاً، ويبقى قوياً حتى ينزل تحت 27. بلا رمز: الحد 30 كما كان."""
+        try:
+            adx = float(adx or 0)
+            key = str(symbol or "").upper()
+            if not key:
+                return adx > 30
+            prev = cls._adx_state_b56.get(key)
+            if prev is None:
+                strong = adx > 30
+            elif prev:
+                strong = adx >= 27
+            else:
+                strong = adx > 33
+            cls._adx_state_b56[key] = strong
+            return strong
+        except Exception:
+            return float(adx or 0) > 30
+
     def detect(self, candles: List[Dict],
                btc_dominance: float = 50.0,
                fear_greed: int = 50,
@@ -200,10 +222,15 @@ class RegimeDetector:
             action = "reduce_size"
         elif regime == Regime.BEAR_TREND:
             # إصلاح AA3 (#1480): BEAR_TREND → دائماً احترس بغض النظر عن ADX
-            if fear_greed < 20 or adx > 30:
+            # batch56 (قرار رحال 2026-11-03 بند 3): hysteresis — «اتجاه هابط قوي» يبدأ فوق 33 ولا ينتهي إلا تحت 27
+            # (كان الحد 30 الصارم يقلب الإجراء بين استدعاءين متقاربين حين يتذبذب ADX حول 30)
+            _adx_strong = self._adx_strong_b56(symbol, adx)
+            if fear_greed < 20 or _adx_strong:
                 action = "avoid"
                 # CC1 (#1685/#1699): نص دقيق يُوضّح الشرط الفعلي المُفعَّل
-                if fear_greed < 20 and adx > 30:
+                if _adx_strong and adx <= 30:
+                    _action_basis = f" (السبب: سوق هابط وADX={adx:.0f} — ما زال قوياً فوق 27 بعد تجاوز 33)"
+                elif fear_greed < 20 and adx > 30:
                     _action_basis = f" (السبب: سوق هابط وADX={_fmt_rsi_threshold(adx, 30)}>30 وFear={fear_greed}<20)"
                 elif adx > 30:
                     # adx_threshold_text_fix: الشرط الفعلي adx > 30 (صارم) لكن النص كان "≥30"،
@@ -574,9 +601,14 @@ class RegimeDetector:
         بدل عرض تناقض صامت (مثال ETH: اتجاه صاعد قوي بينما -DI > +DI)."""
         try:
             dp, dm = m.get("di_plus"), m.get("di_minus")
-            if dp is None or dm is None or abs(dp - dm) < 3:
+            if dp is None or dm is None:
                 return ""
             d = result.description_ar or ""
+            if abs(dp - dm) < 3:
+                # batch56 (#598/#615): «اتجاه هابط/صاعد» مع ADX قوي و+DI≈-DI — الجهة غير محسومة من DI
+                if ("صاعد" in d or "هابط" in d) and float(m.get("adx", 0) or 0) >= 25:
+                    return "  ⚠️ تصنيف السوق من المتوسطات؛ +DI و-DI متعادلان (فرق <3) — قوة ADX بلا جهة محسومة حالياً\n"
+                return ""
             if "صاعد" in d and dm > dp:
                 return "  ⚠️ يعارض تصنيف السوق: ضغط البيع (-DI) أقوى حالياً من الشراء — الاتجاه الصاعد أقل موثوقية\n"
             if "هابط" in d and dp > dm:
@@ -599,7 +631,7 @@ class RegimeDetector:
             f"📊 *حالة السوق الحالية*\n"
             f"━━━━━━━━━━━━━━━━━━\n"
             f"{result.description_ar}\n"
-            + (f"📊 Market Phase: {_mp_ar(getattr(result, 'market_phase', ''))}\n"
+            + (f"📊 مرحلة السوق: {_mp_ar(getattr(result, 'market_phase', ''))}\n"
                if getattr(result, 'market_phase', '') else "")
             + "\n"
             f"📈 *المؤشرات*\n"

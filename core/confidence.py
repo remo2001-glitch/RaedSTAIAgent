@@ -8,7 +8,7 @@ core/confidence.py — مصدر واحد لحساب "رفع الثقة بالت�
 
 التأكيدات الأربعة المعلنة: حجم + CVD + هيكل/مشتقات + RSI، وتُحسب كأعلام:
   Funding سالب (< -0.01%)      OI انخفض (< -5%)
-  Whale Ratio >= 1.3           Volume >= 1.5x
+  (Whale خرج في الدفعة 56)    Volume >= 1.5x
   RSI < 30 (ذروة بيع)          CVD شراء >= +20%
   BB < 0.15 (تحت الحد السفلي)
 """
@@ -43,8 +43,8 @@ def collect_confirmation_flags(
             flags.append("Funding Rate سالب (فرصة Longs) ✓")
         if oi_chg < -5:
             flags.append("OI انخفض (تصفية Shorts) ✓")
-        if whale_ratio and whale_ratio >= 1.3:
-            flags.append(f"Whale Ratio {whale_ratio:.2f} — أغلبية Long ✓")
+        # batch56 (قرار رحال 2026-11-03 بند 2أ): Whale خرج من الثقة والتأكيدات — /whaletest: 93% من القراءات >1.2
+        # ولا فرق في العوائد بعدها، فكان يرفع الثقة دون قدرة تنبؤية. يبقى للعرض فقط.
         if vol_ratio >= 1.5:
             from core.indicators import fmt_vol_ratio as _fvr
             flags.append(f"Volume Spike {_fvr(vol_ratio)} ✓")

@@ -43,6 +43,9 @@ class LiquidityProfile:
     warnings:                List[str]    = field(default_factory=list)
     source:                  str          = "unknown"
     book_slip:               Optional[Dict] = None   # batch49: انزلاق شراء فعلي من عمق الدفتر {حجم$: % أو None إن تجاوز العمق}
+    depth_low:               float = 0.0   # batch56 (#629): أدنى سعر شراء ضمن أول 20 مستوى
+    depth_high:              float = 0.0   # batch56 (#629): أعلى سعر بيع ضمن أول 20 مستوى
+    snapshot_ts:             float = 0.0   # batch56 (#631): وقت لقطة الدفتر
 
 
 @dataclass
@@ -53,6 +56,21 @@ class OrderFlowSignal:
     net_pressure:    float
     support_level:   float
     resistance_level: float
+
+
+def _stamp_depth_b56(prof, bids, asks):
+    """batch56: نطاق أول 20 مستوى ووقت اللقطة على ملف السيولة (عرض فقط)."""
+    try:
+        import time as _t
+        if prof is not None:
+            if bids:
+                prof.depth_low = float(bids[min(len(bids), 20) - 1][0])
+            if asks:
+                prof.depth_high = float(asks[min(len(asks), 20) - 1][0])
+            prof.snapshot_ts = _t.time()
+    except Exception:
+        pass
+    return prof
 
 
 class MicrostructureLayer:
@@ -437,7 +455,7 @@ class MicrostructureLayer:
         elif spread < 0.5:  liq_score = 0.55
         else:               liq_score = 0.35
 
-        return LiquidityProfile(
+        return _stamp_depth_b56(LiquidityProfile(
             symbol=symbol,
             bid_price=round(best_bid, 6),
             ask_price=round(best_ask, 6),
@@ -452,7 +470,7 @@ class MicrostructureLayer:
             is_tradeable=liq_score >= 0.4,
             warnings=[],
             source="binance",
-        )
+        ), bids, asks)
 
     # ═══════════════════════════════════════════════════════════
     # 4. تعديل الحجم بناءً على السيولة
@@ -503,20 +521,33 @@ class MicrostructureLayer:
              else f"الحكم: {'⚠️ بيانات غير موثوقة' if any('تقديرية' in w for w in profile.warnings) else '⛔ غير موصى بالتداول'}"),
             "",
             "📊 *Order Book*",
-            f"• Spread: {profile.spread_pct:.5f}%",
+            # batch56 (#627): أفضل سعري الشراء/البيع بجانب الـSpread كي لا يُقارَن بأسعار «الجدران» القريبة
+            f"• Spread: {profile.spread_pct:.5f}%"
+            + (f" (أفضل شراء ${profile.bid_price:,.2f} / أفضل بيع ${profile.ask_price:,.2f})"
+               if profile.bid_price and profile.ask_price else ""),
         ]
 
         if profile.bid_depth_usd > 0:
             lines += [
-                f"• عمق الشراء (أول 20 مستوى): ${profile.bid_depth_usd:,.0f}",
-                f"• عمق البيع (أول 20 مستوى):  ${profile.ask_depth_usd:,.0f}",
+                # batch56 (#629): النطاق السعري الذي تغطيه أول 20 مستوى (قد يكون دولارات قليلة في BTC)
+                f"• عمق الشراء (أول 20 مستوى): ${profile.bid_depth_usd:,.0f}"
+                + (f" — حتى ${profile.depth_low:,.2f} (−{(profile.mid_price - profile.depth_low) / profile.mid_price * 100:.3f}%)"
+                   if getattr(profile, "depth_low", 0) and profile.mid_price else ""),
+                f"• عمق البيع (أول 20 مستوى):  ${profile.ask_depth_usd:,.0f}"
+                + (f" — حتى ${profile.depth_high:,.2f} (+{(profile.depth_high - profile.mid_price) / profile.mid_price * 100:.3f}%)"
+                   if getattr(profile, "depth_high", 0) and profile.mid_price else ""),
                 # imbalance_label_fix: "الاختلال 43%" كان يوحي أن الرقم نسبة اختلال بينما
                 # هو حصة الشراء من إجمالي العمق (50% = متوازن) — نوضحه صراحةً.
                 f"• حصة الشراء من العمق: {profile.imbalance:.0%} "
                 f"({_imbalance_label(profile.imbalance)})",
             ]
 
-        lines.append(f"• Slippage متوقع: {profile.estimated_slippage_pct:.3f}%")
+        # batch56 (#628): رقم الأعلى كان من صيغة الـSpread ويناقض جدول الدفتر الفعلي أسفل التقرير (0.005% مقابل 0.0000%)
+        _bk56 = getattr(profile, "book_slip", None)
+        if isinstance(_bk56, dict) and _bk56.get(10000) is not None:
+            lines.append(f"• Slippage متوقع (شراء $10K من الدفتر): {float(_bk56[10000]):.4f}%")
+        else:
+            lines.append(f"• Slippage متوقع (تقدير من الـSpread): {profile.estimated_slippage_pct:.3f}%")
 
         # أكبر أوامر الشراء والبيع (من walls إذا متاحة)
         if walls is not None and not isinstance(walls, Exception) and not isinstance(walls, bool):
@@ -530,7 +561,7 @@ class MicrostructureLayer:
                 _bp0 = getattr(profile, "bid_price", 0) or 0
                 _bt_touch = _bp0 > 0 and abs(top_bid["price"] - _bp0) / _bp0 * 100 <= 0.02
                 lines.append(f"• أعلى أمر شراء (Bid): ${top_bid['price']:,.2f} — ${top_bid['value_usd']/1e6:.2f}M | {bid_count} أمر"
-                             + (" (عند أفضل سعر — ليس جداراً بعيداً)" if _bt_touch else ""))
+                             + (" (عند/قرب أفضل سعر ≤0.02% — ليس جداراً بعيداً)" if _bt_touch else ""))
                 _bid_d = getattr(profile, "bid_depth_usd", 0) or 0
                 if _bid_d > 0 and top_bid["value_usd"] / _bid_d >= 0.4:
                     lines.append(f"  ⚠️ هذا الأمر وحده {top_bid['value_usd']/_bid_d:.0%} من عمق الشراء — الضغط هش (قد يُسحب)")
@@ -551,7 +582,7 @@ class MicrostructureLayer:
                 _ap0 = getattr(profile, "ask_price", 0) or 0
                 _at_touch = _ap0 > 0 and abs(top_ask["price"] - _ap0) / _ap0 * 100 <= 0.02
                 lines.append(f"• أدنى أمر بيع (Ask):  ${top_ask['price']:,.2f} — ${top_ask['value_usd']/1e6:.2f}M | {ask_count} أمر"
-                             + (" (عند أفضل سعر — ليس جداراً بعيداً)" if _at_touch else ""))
+                             + (" (عند/قرب أفضل سعر ≤0.02% — ليس جداراً بعيداً)" if _at_touch else ""))
                 # أمر واحد يمثّل حصة كبيرة من عمق جهته: الضغط يعتمد عليه وحده
                 _ask_d = getattr(profile, "ask_depth_usd", 0) or 0
                 if _ask_d > 0 and top_ask["value_usd"] / _ask_d >= 0.4:
@@ -703,7 +734,7 @@ class MicrostructureLayer:
             warnings_  = []
             if spread > 0.5:
                 warnings_.append(f"spread مرتفع: {spread:.2f}%")
-            return LiquidityProfile(
+            return _stamp_depth_b56(LiquidityProfile(
                 symbol=symbol,
                 bid_price=best_bid, ask_price=best_ask, mid_price=mid_price,
                 spread_pct=round(spread, 6),
@@ -720,7 +751,7 @@ class MicrostructureLayer:
                 warnings=warnings_,
                 source="exchange",
                 book_slip=self._walk_book_slip(asks),
-            )
+            ), bids, asks)
         except Exception as e:
             logger.warning(f"_build_profile_from_walls ({symbol}): {e}")
             return self._fallback_profile(symbol)

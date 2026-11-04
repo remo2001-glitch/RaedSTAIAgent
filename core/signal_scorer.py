@@ -74,6 +74,10 @@ class SignalInput:
     decision_wait:                 bool = False   # القرار الفعلي WAIT / الحجم 0% (اتجاه محايد)
     entry_threshold_pct:           float = 55.0
 
+    # batch56 (قرار رحال 2026-11-03 بند 1أ): عوامل التمايز — None = لا بيانات (درجة كاملة كي لا يتغير الحكم بلا أساس)
+    stop_pct:           Optional[float] = None   # مسافة الوقف % من الدخول
+    support_gap_pct:    Optional[float] = None   # بُعد الدخول عن أقرب دعم معروض %
+
     # معلومات إضافية
     symbol:                        str  = ""
     rsi:            Optional[float]     = None
@@ -84,6 +88,42 @@ class SignalInput:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # دوال مساعدة
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# batch56 (بند 1أ): مُعطَّل حتى يوافق رحال على جدول «قبل/بعد» — ثم يُفعَّل بتغيير هذه القيمة فقط (أو SETUP_QUALITY_V2=1)
+import os as _os_sq
+SETUP_QUALITY_V2 = _os_sq.getenv("SETUP_QUALITY_V2", "0") == "1"
+
+
+def _differentiation_b56(s: "SignalInput", reasons: list) -> int:
+    """batch56 (1أ): الـ20 نقطة الحرة (بعد خروج EV والتأكيدات من الدرجة) تُوزَّع على 3 عوامل بنية:
+    R/R ممتد (0–8: 0 عند 1:1، 8 عند 1:3)، مسافة الوقف (0–6: ≤8% كاملة، ≤15% نصف، أبعد 0)،
+    قرب الدخول من دعم (0–6: ≤1% كاملة، ≤3% نصف، أبعد 0). الحدود 75/55/35 لا تتغير."""
+    pts = 0
+    if s.rr_ratio is not None:
+        r = int(round(max(0.0, min(8.0, 8.0 * (float(s.rr_ratio) - 1.0) / 2.0))))
+        pts += r
+        if r < 8:
+            reasons.append(f"ح: R/R ممتد 1:{float(s.rr_ratio):.1f} دون 1:3 (-{8 - r})")
+    else:
+        pts += 8
+    if s.stop_pct is not None and s.stop_pct > 0:
+        sp = float(s.stop_pct)
+        st = 6 if sp <= 8 else 3 if sp <= 15 else 0
+        pts += st
+        if st < 6:
+            reasons.append(f"ح: مسافة الوقف {sp:.1f}% واسعة — مخاطرة أعلى لكل وحدة (-{6 - st})")
+    else:
+        pts += 6
+    if s.support_gap_pct is not None:
+        g = abs(float(s.support_gap_pct))
+        su = 6 if g <= 1 else 3 if g <= 3 else 0
+        pts += su
+        if su < 6:
+            reasons.append(f"ح: الدخول يبعد {g:.1f}% عن أقرب دعم (-{6 - su})")
+    else:
+        pts += 6
+    return pts
+
+
 def break_even_win_rate(rr: float) -> float:
     """win rate المطلوب للتعادل = 100 / (1 + rr)"""
     if rr <= 0:
@@ -322,7 +362,8 @@ def evaluate_signal(s: SignalInput) -> dict:
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     # بنية الصفقة فقط (80 نقطة): بند EV وبند التأكيدات (20 نقطة سابقاً) خرجا من الدرجة، فتبقى القاعدة
     # «الدرجة = 100 − مجموع الخصومات المعروضة» صحيحة (لا خصم مخفي ولا معايرة تُربك مجموع الملاحظات).
-    total = 20 + score_a + score_b + score_c + score_d + score_e + score_f
+    _base20 = _differentiation_b56(s, reasons) if SETUP_QUALITY_V2 else 20
+    total = _base20 + score_a + score_b + score_c + score_d + score_e + score_f
     total = int(round(max(0, min(100, total))))
     verdict = _verdict_label(total)
 
@@ -485,6 +526,7 @@ def build_signal_input(
     entry_threshold_pct: float = 55.0,
     decision_wait: bool = False,
     tp2_pct: float = 0.0,
+    support_gap_pct: Optional[float] = None,
 ) -> SignalInput:
     """بناء SignalInput من المتغيرات الموجودة في analysis.py"""
 
@@ -528,6 +570,8 @@ def build_signal_input(
         data_unreliable              = data_unreliable,
         entry_threshold_pct          = entry_threshold_pct,
         decision_wait                = decision_wait,
+        stop_pct                     = (float(sl_pct) if sl_pct and sl_pct > 0 else None),
+        support_gap_pct              = support_gap_pct,
         rsi                          = rsi,
         is_overbought                = rsi >= 70 if rsi else False,
         is_oversold                  = rsi <= 30 if rsi else False,

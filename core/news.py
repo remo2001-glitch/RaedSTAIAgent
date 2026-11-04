@@ -635,6 +635,7 @@ class NewsEngine:
   إذا لم يكن له اسم عربي شائع ومعروف (مثال: "شركة Strategy (MicroStrategy)"
   وليس "ميتاستراتجى" أو أي تحويل صوتي مُخترَع) — لا تخترع نقحرة عربية لاسم
   علم؛ استخدم الاسم الإنجليزي كما هو عند الشك
+- batch56: لا تصف طبيعة منصة أو شركة (أمنية/مالية/إدارة مفاتيح…) إلا إذا ذكرها العنوان؛ ولا ترفع خبراً جانبياً إلى «مخاطر» عامة بلا صلة مباشرة بالعملة
 - batch54: لا تنسب حدثاً أو رقماً لجهة (FBI، SEC، شركة…) إلا إذا ورد في العنوان صراحةً أنها هي من قالته أو فعلته؛ ولا تدمج خبرين مختلفين في جملة واحدة. شركة Strategy تُكتب «Strategy (MicroStrategy سابقاً)» في كل المواضع، ولا تكتب «الاستراتيجية» وحدها
 - crypto_ticker_transliteration_fix: نفس قاعدة company_name_fix أعلاه تنطبق
   على رموز العملات الرقمية (tickers) أيضاً — اكتب الرمز بحروفه اللاتينية
@@ -1160,7 +1161,9 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
         _neg_partial_news = ("sanction","exploit","hack","breach",
                               "حظر","عقوبة","اختراق","انهيار","احتيال","مصادرة","غرامة","عقوبات",
                               "استغلال","اختراق","سرقة","هجوم","احتيال",
-                              "خارجة","تدفقات خروج","تدفق خروج","نزوح","تراجع حاد","هبوط حاد","تصفية")
+                              "خارجة","تدفقات خروج","تدفق خروج","نزوح","تراجع حاد","هبوط حاد","تصفية",
+                              # batch56 (#622): تباين/فجوة الاحتياطيات مسألة شفافية ضاغطة لا خبر محايد
+                              "تباين","فجوة","يتجاوز ما يظهر","discrepanc","mismatch")
         _neg_sue_news    = r"\bsues?\b"
         _pos_exact_news  = r"\b(approve|approved|launch|partner|etf|adopt|record|high|charter|trust|license|grant|bullish|surge|rally|inflows?|buys|bought|accumulat\w*)\b"
         _pos_ar_news     = ("موافقة","إطلاق","شراكة","قياسي","تبنّي","ترخيص","تدفقات داخلة","تدفقات دخول",
@@ -1282,12 +1285,19 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
                 return bool(_re_news.fullmatch(r"\d+\.\d+", _w)
                             or (_re_news.search(r"\d", _w) and _re_news.search(r"[a-z]", _w) and len(_w) >= 3))
             _shown_tok_sets = [_dist_tokens(e) for e in (events if events else [])]
+            # batch56 (#617): اسم علم لاتيني بقي داخل حدث عربي (GitBook) دليل قوي على نفس الخبر بعد الترجمة («جيت بوك»)
+            _ent_tok = set()
+            for _e56 in (events or []):
+                if any('\u0600' <= ch <= '\u06FF' for ch in str(_e56)):
+                    _ent_tok |= {w for w in _dist_tokens(_e56) if len(w) >= 5 and not w.isdigit()}
             _kept_extra = []
             # batch48 (ملاحظة 174): المقارنة بالعنوان الإنجليزي الأصلي للخبر الإضافي (الترجمة العربية بلا رموز لاتينية فلا تُطابَق)
             _raw_for_extra = list(_extra_raw) if len(_extra_raw) == len(extra) else list(extra)
             for _t, _t_raw_cmp in zip(extra, _raw_for_extra):
                 _tt = _dist_tokens(_t) | _dist_tokens(_t_raw_cmp)
                 if any((len(_tt & _st) >= 2 or any(_strong_tok(_w) for _w in (_tt & _st))) for _st in _shown_tok_sets):
+                    continue
+                if _tt & _ent_tok:
                     continue
                 _kept_extra.append(_t)
                 _shown_tok_sets.append(_tt)
@@ -1318,6 +1328,16 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
                 _prefix = _news_impact(title)[1] + " "
                 lines.append(f"{_prefix}{title}")
 
+        # batch56 (#618): «الأخبار: 6» بينما المعروض أقل — يُذكر عدد المعروض فعلاً
+        try:
+            _shown_n = len([e for e in (events or []) if e]) + len(extra or [])
+            if isinstance(_n_sources, int) and 0 < _shown_n < _n_sources:
+                for _i, _ln in enumerate(lines):
+                    if _ln.startswith("ثقة التحليل"):
+                        lines[_i] = _ln + f" — عُرض {_shown_n} (الباقي مكرر أو خارج الكريبتو)"
+                        break
+        except Exception:
+            pass
         # T19_fix: إضافة سيناريوهات سعرية
         lines += ["", "📊 *السيناريوهات السعرية*"]
         lines += _scenarios
@@ -1608,7 +1628,7 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
 
     async def _gemini_vision_b52(self, images, system_text: str, user_text: str,
                                  max_tokens: int = 3500, thinking: int = 0,
-                                 timeout: int = 60, thinking_level: str = ""):
+                                 timeout: int = 60, thinking_level: str = "", budget: float = 0.0):
         """يعيد (نص|None، حالة). الحالة: ok / nokey / rate / auth / error.
         لا يرفع استثناءً؛ أي فشل يُترجَم لحالة فيُجرَّب Groq."""
         import os, base64, ssl, urllib.request, urllib.error
@@ -1622,31 +1642,40 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
         ctx = ssl.create_default_context()
         loop = asyncio.get_event_loop()
         async def _call_b52(rq):
-            # أخطاء الخادم المؤقتة (500/502/503/504 «ضغط عالٍ») تُعاد مرتين بتأخير قصير قبل ترك النموذج
+            # أخطاء الخادم المؤقتة تُعاد بتأخير قصير قبل ترك النموذج.
+            # batch56 (#554): 503 «ضغط عالٍ» يُعاد مرة واحدة فقط (كان مرتين لكل نموذج × 4 نماذج ≈ 84ث قبل Groq)
             for _i in range(3):
                 try:
                     return await loop.run_in_executor(
                         None, lambda r=rq: urllib.request.urlopen(r, context=ctx, timeout=timeout).read().decode())
                 except urllib.error.HTTPError as _he:
-                    if _he.code in (500, 502, 503, 504) and _i < 2:
+                    _max_re = 1 if _he.code == 503 else 2
+                    if _he.code in (500, 502, 503, 504) and _i < _max_re and not _over_budget():
                         logger.warning(f"Gemini Vision: HTTP {_he.code} مؤقت — إعادة محاولة {_i + 1}")
                         await asyncio.sleep(1.5 * (_i + 1))
                         continue
                     raise
 
         import time as _tm54, re as _re54
+        _t0_b56 = _tm54.time()
+        def _over_budget(extra: float = 0.0) -> bool:
+            # batch56 (#554/#556): سقف زمني كلي لمحاولات Gemini ثم الانتقال لـGroq
+            return bool(budget) and (_tm54.time() - _t0_b56 + extra) > budget
         status = "error"
         tried = set()
         retried_429 = set()
         discovered = False
         queue = list(self._gemini_models_cache_b52 or models)
         while queue:
+            if _over_budget():
+                logger.warning(f"Gemini Vision: تجاوز السقف الزمني {budget:.0f}ث — الانتقال للبديل")
+                break
             model = queue.pop(0)
             if model in tried:
                 continue
             _cd = NewsEngine._gemini_cooldown_b54.get(model, 0)
             if _cd > _tm54.time():
-                logger.info(f"Gemini Vision ({model}): في تبريد 429 ({int(_cd - _tm54.time())}ث) — تخطٍّ")
+                logger.info(f"Gemini Vision ({model}): في تبريد ({int(_cd - _tm54.time())}ث) — تخطٍّ")
                 status = "rate"
                 tried.add(model)
                 continue
@@ -1697,13 +1726,18 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
                         err = e.read().decode()[:3000]
                     except Exception:
                         pass
-                    logger.error(f"Gemini Vision ({model}) HTTP {e.code}: {err[:200]}")
+                    if e.code in (500, 502, 503, 504):
+                        # batch56 (#558): الخطأ المؤقت سطر WARNING واحد بلا جسم JSON؛ (#555) تبريد 60ث للنموذج المرهَق
+                        logger.warning(f"Gemini Vision ({model}) HTTP {e.code} مؤقت (ضغط عالٍ) — تبريد 60ث والانتقال للتالي")
+                        NewsEngine._gemini_cooldown_b54[model] = _tm54.time() + 60.0
+                    else:
+                        logger.error(f"Gemini Vision ({model}) HTTP {e.code}: {err[:200]}")
                     if e.code == 429:
                         status = "rate"
                         # batch54: retryDelay قصير ← انتظار وإعادة مرة واحدة؛ وإلا تبريد النموذج فلا نكرر طلباً مرفوضاً
                         _dm = _re54.search(r'"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"', err)
                         _delay = float(_dm.group(1)) if _dm else 0.0
-                        if 0 < _delay <= 20 and model not in retried_429:
+                        if 0 < _delay <= 20 and model not in retried_429 and not _over_budget(_delay):
                             retried_429.add(model)
                             logger.info(f"Gemini Vision ({model}): 429 — انتظار {_delay:.0f}ث وإعادة مرة واحدة")
                             await asyncio.sleep(_delay + 0.5)
@@ -1724,7 +1758,7 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
                     status = "error"
                     break
             # كل النماذج المعروفة فشلت بـ404/خطأ → اكتشاف أحدث نموذج flash متاح لمرة واحدة
-            if not queue and not discovered and status == "error":
+            if not queue and not discovered and status == "error" and not _over_budget():
                 discovered = True
                 try:
                     lreq = urllib.request.Request(
@@ -1760,7 +1794,7 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
             _sys_lg = "أنت أداة نسخ دقيقة للأرقام. أجب بالأسطر المطلوبة فقط بلا تفكير ولا شرح."
             txt, st = await self._gemini_vision_b52(
                 crops, _sys_lg, _cv.legend_prompt(), max_tokens=2500, thinking=0, timeout=30,
-                thinking_level="minimal")
+                thinking_level="minimal", budget=30.0)
             if not txt:
                 logger.info(f"chart legend: Gemini {st} — يُكمَل بالقراءة الحرة")
                 return {}
@@ -1916,7 +1950,7 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
             if self._gemini_key_b52():
                 _gtxt, _gem_status = await self._gemini_vision_b52(
                     [image_data], _sys_txt, prompt_text, max_tokens=4000, thinking=1024, timeout=70,
-                    thinking_level="low")
+                    thinking_level="low", budget=35.0)
                 if _gtxt:
                     _gtxt = _strip_markdown_headers(_gtxt)
                     if len(_gtxt) >= 20:

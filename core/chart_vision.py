@@ -37,7 +37,8 @@ def crop_legend_images(image_bytes: bytes) -> List[bytes]:
         if w < 300 or h < 600:
             return []
         out = []
-        for a, b in ((0.0, 0.40), (0.55, 0.92)):
+        # batch56 (#568/#582): القمة المكتوبة على الشارت (0.0014722 / 87,399) تقع عند ≈41–42% من الارتفاع فكانت خارج القصّ الأول
+        for a, b in ((0.0, 0.48), (0.55, 0.92)):
             part = im.crop((0, int(h * a), w, int(h * b)))
             scale = 1.6 if w < 1300 else 1.0
             if scale != 1.0:
@@ -450,8 +451,18 @@ def build_levels_item(leg: Dict[str, object], price: float, quote_unit: str = ""
         role = ""
         if k in ("SUPERTREND_RED", "SAR", "SUPERTREND_GREEN"):
             role = " — مقاومة متحركة" if v > price else " — دعم متحرك"
-        out.append(f"   • {lab}: {rs}{unit} ({side} بنحو {abs(d):.1f}%){role}")
+        out.append(f"   • {lab}: {fmt_usd_raw(rs, v) if not unit else rs + unit} ({side} بنحو {abs(d):.1f}%){role}")
     return out
+
+
+def fmt_usd_raw(rs: str, v: float) -> str:
+    """batch56 (#579): سعر بالدولار برمز $ وفواصل آلاف مع الإبقاء على منازل الرقم المنسوخ (84312.5 → $84,312.5)."""
+    try:
+        r = str(rs or "").replace(",", "").strip()
+        dec = len(r.split(".", 1)[1]) if "." in r else 0
+        return f"${float(v):,.{dec}f}"
+    except Exception:
+        return str(rs)
 
 
 def build_rsi_item(leg: Dict[str, object]) -> List[str]:

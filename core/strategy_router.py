@@ -34,10 +34,15 @@ def _neutral_dir_b53(s) -> str:
             avg = sum(srcs) / len(srcs)
             # batch54 (#452/#460/#469): أساس الميل يُذكر (متوسط مصادر الإشارة وعددها) كي لا يُقرأ كحكم على السعر اللحظي
             _basis = f" (متوسط مصادر الإشارة {avg:.0%} من {len(srcs)} مصادر)"
-            if avg <= 0.45:
+            # batch56 (#601): نفس عتبات شرح المصادر (≤40% هبوطي، ≥60% صعودي)؛ بينهما «مائل» لا «هابط/صاعد»
+            if avg <= 0.40:
                 lean = " — الميل: 🔴 هابط" + _basis
-            elif avg >= 0.55:
+            elif avg <= 0.45:
+                lean = " — الميل: 🟠 مائل للهبوط" + _basis
+            elif avg >= 0.60:
                 lean = " — الميل: 🟢 صاعد" + _basis
+            elif avg >= 0.55:
+                lean = " — الميل: 🟢 مائل للصعود" + _basis
             else:
                 lean = " — الميل: بلا ميل واضح" + _basis
         return f"⚪ غير مؤكد (ثقة {s.confidence:.0%} < {_DMC:.0%}){lean}"
@@ -576,13 +581,11 @@ class SignalLayer:
         score = 0.5
         has_real_data = False
 
+        # batch56 (قرار رحال 2026-11-03 بند 2أ): Whale لا يدخل في درجة On-Chain (كان −0.10 لكل أصل تقريباً لأن 93%
+        # من القراءات >1.2 فيظهر On-Chain «40% هبوطي» بسبب Whale وحده). وجوده يبقى «بيانات حقيقية» كي لا نرجع لـTVL العالمي.
         whale_ratio = data.get("whale_ratio")
         if whale_ratio is not None and whale_ratio > 0:
             has_real_data = True
-            if whale_ratio < 0.8:      # أغلبية Short → تحيُّز عكسي صعودي محتمل
-                score += 0.15
-            elif whale_ratio > 1.2:    # أغلبية Long مزدحم → خطر تصحيح
-                score -= 0.10
 
         funding_pct = data.get("funding_rate_pct")
         if funding_pct is not None and funding_pct != 0:
@@ -697,7 +700,7 @@ class SignalLayer:
             f"ℹ️ النسبة = ميل المصدر (60% فأكثر صعودي، 40% فأقل هبوطي) — لا تعني جودة الإشارة\n"
             f"{_pts_note}\n"
             f"RSI 1D: {rsi_val:.0f} | "
-            f"EMA: {'✅ ترتيب صاعد (سعر>EMA20>EMA50)' if s.technicals.get('ema_align') else ('🔴 ترتيب هابط (سعر<EMA20<EMA50)' if s.technicals.get('ema_bear') else '⚪ ليس بترتيب صاعد (سعر>EMA20>EMA50)')} | "
+            f"EMA: {'✅ ترتيب صاعد (سعر>EMA20>EMA50)' if s.technicals.get('ema_align') else ('🔴 ترتيب هابط (سعر<EMA20<EMA50)' if s.technicals.get('ema_bear') else '⚪ ترتيب مختلط (ليس صاعداً ولا هابطاً)')} | "
             f"حجم: {_fvr(vol_r)}"
         )
         if warnings:
@@ -865,7 +868,7 @@ class PortfolioEngine:
         if sig.signal_sources.get("technical", 0) > 0.7:
             parts.append("إشارة تقنية قوية")
         if sig.signal_sources.get("onchain", 0) > 0.7:
-            parts.append("دعم On-Chain (Whale/Funding)")
+            parts.append("دعم On-Chain (Funding)")
         return " · ".join(parts)
 
     def format_ar(self, allocations: List[AllocationResult],

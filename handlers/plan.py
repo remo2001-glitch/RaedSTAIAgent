@@ -737,18 +737,18 @@ def _format_forecast_ar(symbol: str, price: float, fc: dict, days: int = 30) -> 
                 f"  🎯 هدف 1 (1.272): {p_fmt(fc.get('fib_t1',0))}{_far_note(fc.get('fib_t1',0), bull)}",
                 f"  🎯 هدف 2 (1.618): {p_fmt(fc.get('fib_t2',0))}{_far_note(fc.get('fib_t2',0), bull)}",
                 # إصلاح #1076: لا نُظهر الدعم إذا كان أعلى من السعر الحالي
-                *(([f"  🛡️ دعم 1 (0.382): {p_fmt(fc.get('fib_s1',0))}"]
+                *(([f"  🛡️ دعم 1 (0.382 من مدى 30 يوماً): {p_fmt(fc.get('fib_s1',0))}"]
                    if fc.get('fib_s1',0) < price else []) +
-                  ([f"  🛡️ دعم 2 (0.618): {p_fmt(fc.get('fib_s2',0))}"]
+                  ([f"  🛡️ دعم 2 (0.618 من مدى 30 يوماً — يختلف عن جدول Fib في /signal): {p_fmt(fc.get('fib_s2',0))}"]
                    if fc.get('fib_s2',0) < price else [])),
             ] if fc.get('trend_dir') not in ('down', 'bearish')
             else [
                 f"📐 *مستويات الدعم الرئيسية:*",
                 # إصلاح #1076: لا نُظهر الدعم إذا كان أعلى من السعر الحالي
                 # batch44: كان القسم يظهر فارغاً حين يكون السعر دون مستويي الدعم (هبوط) — نذكر قاع النطاق بدل الفراغ
-                *((([f"  🛡️ دعم 1 (0.382): {p_fmt(fc.get('fib_s1',0))}"]
+                *((([f"  🛡️ دعم 1 (0.382 من مدى 30 يوماً): {p_fmt(fc.get('fib_s1',0))}"]
                     if fc.get('fib_s1',0) < price else []) +
-                   ([f"  🛡️ دعم 2 (0.618): {p_fmt(fc.get('fib_s2',0))}"]
+                   ([f"  🛡️ دعم 2 (0.618 من مدى 30 يوماً — يختلف عن جدول Fib في /signal): {p_fmt(fc.get('fib_s2',0))}"]
                     if fc.get('fib_s2',0) < price else []))
                   or ([f"  ⚠️ السعر دون مستويي دعم فيبوناتشي (0.382/0.618) — أقرب قاع في آخر 30 يوم: {p_fmt(fc.get('recent_low',0))}"]
                       if fc.get('recent_low', 0) else
@@ -2490,7 +2490,8 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         _tp2_pct = min(0.09, atr_v * _tp_m * 1.4)  # max 9%
                         tp1   = price * (1 + _tp1_pct)
                         tp2   = price * (1 + _tp2_pct)
-                        sl    = entry * (1 - min(atr_v * _sl_m, 0.07))
+                        # batch56 (قرار 5ب + قاعدة 2026-10-23): الوقف ≥1.5×ATR بلا سقف 7% — نفس قاعدة /signal
+                        sl    = entry * (1 - max(atr_v * _sl_m, atr_v * 1.5))
                         _risk = max(price - sl, 1e-9)
                         _rew  = max(tp1 - price, 1e-9)
                         rr    = min(_rew / _risk, 4.0)
@@ -2518,7 +2519,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     # الإصلاح: نفس _disp_support المعروضة فعلياً، لا fib_382.
                     pro_entry_w = max(price * 0.99, _disp_support * 1.001) if 0 < _disp_support < price else price * 0.99
                     pro_tp_w    = price * 1.05
-                    pro_sl_w    = price * 0.93
+                    pro_sl_w    = pro_entry_w * (1 - max(0.07, atr_v * 1.5))  # batch56 (5ب): كان 7% ثابتاً
                     rr_w        = 1.5
                     # إصلاح #11: fallback موحَّد لأي حالة بدون entry_lines
                     # (ثقة < 40% أو R/R < 1.2) — يضمن أن كل عملة تُعرض ببيانات كاملة
@@ -2526,7 +2527,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         rsi_t = 35 if "هابط" in regime.description_ar else 45
                         pro_entry_w = max(_disp_support, price * (1 - atr_v * 0.5)) if _disp_support < price else price * (1 - atr_v * 0.4)
                         pro_tp_w    = price * (1 + atr_v * 1.8)
-                        pro_sl_w    = pro_entry_w * (1 - atr_v * 1.2)
+                        pro_sl_w    = pro_entry_w * (1 - atr_v * 1.5)  # batch56: نفس قاعدة 1.5×ATR في /signal
                         rr_w        = abs(pro_tp_w - pro_entry_w) / max(abs(pro_sl_w - pro_entry_w), 1e-9)
                         # EMA50_leak_fix: _rsi_cond و_ema_cond مُحسَّبان أعلاه
                         # نُعيَّن rsi_t للاتساق مع _rsi_cond أعلاه
@@ -2543,7 +2544,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                              f"  • ❌ الثقة ≥ {_t_entry_plan}% (حالياً {signal.confidence:.0%}) — غير مُستوفى"),
                             (f"  • ✅ اتجاه الإشارة شراء — مُستوفى"
                              if locals().get("_dir_ok_w", False) else
-                             f"  • ❌ اتجاه الإشارة شراء (حالياً {'بيع' if signal.direction == 'short' else 'محايد'}) — غير مُستوفى"
+                             f"  • ❌ اتجاه الإشارة شراء (حالياً {'بيع' if signal.direction == 'short' else 'غير مؤكد'}) — غير مُستوفى"
                              + (" (الجهة تتطلب ثقة 65%)" if (signal.direction not in ('long', 'short') and signal.confidence < SIGNAL_DIRECTION_MIN_CONF) else "")),
                             # plan_pro_fix: label واضح حسب حالة الإشارة
                             # pro_option_technical_gate_fix: يتطلب الآن
@@ -2924,10 +2925,19 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 _c51 = locals().get("_pw_asset_ctx")
                 if len(symbols) == 1 and _c51 and _c51.get("support") and _c51.get("resistance"):
-                    _wk3_extra = (f" (الوقف المرجعي تحت الدعم {_fmt_price(_c51['support'])}؛ "
-                                  f"ثبات فوقه يدعم الاستمرار)")
+                    # batch56 (#612): الوقف المرجعي بقاعدة /signal (≥1.5×ATR من الدخول) لا «تحت الدعم» الملاصق للسعر
+                    _wk3_extra = (f" (الوقف بقاعدة /signal: ≥1.5×ATR تحت الدخول — راجعه هناك؛ ثبات فوق الدعم "
+                                  f"{_fmt_price(_c51['support'])} يدعم الاستمرار)")
+                    # batch56 (#613): Fear & Greed مرجع للسوق الرقمي فقط — للذهب يُستبدل بـADX
+                    _gold_b56 = False
+                    try:
+                        from core.thresholds import is_commodity_token as _ict56
+                        _gold_b56 = bool(_ict56(_c51.get("sym", "")))
+                    except Exception:
+                        pass
                     _wk4_extra = (f" — المرجع: دعم {_fmt_price(_c51['support'])} | مقاومة {_fmt_price(_c51['resistance'])}"
-                                  + (f" | Fear الآن {fear_val}" if fear_val is not None else ""))
+                                  + ((f" | ADX الآن {_c51.get('adx', 0):.0f}" if _c51.get("adx") else "") if _gold_b56
+                                     else (f" | Fear الآن {fear_val}" if fear_val is not None else "")))
             except Exception:
                 _wk3_extra = _wk4_extra = ""
             week_lines = [
