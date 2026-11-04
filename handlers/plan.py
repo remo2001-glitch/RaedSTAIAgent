@@ -51,7 +51,7 @@ from core.symbol_classify import is_tokenized_x_ticker
 def _non_crypto_sym(sym: str) -> bool:
     """batch34: أصل غير كريبتو تقليدي (سهم مُرمَّز أو رمز مدعوم بالذهب) — تُستبعد عنه أحداث الكريبتو الخاصة (خيارات BTC)."""
     s = str(sym or "").upper()
-    return bool(is_tokenized_x_ticker(s)) or s in ("XAUT", "PAXG")
+    return bool(is_tokenized_x_ticker(s)) or s in ("XAUT", "PAXG", "XAG")   # batch59: XAG = الفضة
 
 from telegram.ext import ContextTypes, CommandHandler, MessageHandler, filters, CallbackQueryHandler
 from telegram.constants import ParseMode
@@ -666,6 +666,7 @@ def _calc_price_forecast(candles: list, days: int = 30,
             "btc_dom":      btc_dominance,
             "vol_ratio":    round(vol_ratio, 2),
             "vol_candle":   (lambda: __import__("core.indicators", fromlist=["volume_candle_date"]).volume_candle_date(candles))(),
+            "vol_candle_h": (lambda: __import__("core.indicators", fromlist=["volume_candle_open_hour"]).volume_candle_open_hour(candles))(),
             "wyckoff":      wyckoff_confirm,
             "bull_case":    round(bull_case, 8),
             "base_case":    round(base_case, 8),
@@ -826,6 +827,50 @@ async def _get_open_position_symbols(engine, user_id: int) -> set:
     except Exception as e:
         logger.debug(f"_get_open_position_symbols (real): {e}")
     return excluded
+
+
+async def _open_position_lines_b59(engine, user_id: int, syms) -> list:
+    """batch59 (#730–#732): تفاصيل المركز المفتوح على كل رمز مستبعد — النوع والحجم والدخول والحالي والوقف/الهدف والمدة."""
+    out = []
+    try:
+        from core.state_manager import state_manager as _sm_o
+        from core.virtual_wallet import VirtualWallet as _VW_o
+        vw = _VW_o(_sm_o.get_virtual_wallet(user_id) or {})
+    except Exception:
+        vw = None
+    for sym in sorted(set(str(x).upper() for x in (syms or []))):
+        px = 0.0
+        try:
+            _pd = await engine.data_layer.get_price(sym)
+            px = float((_pd or {}).get("price", 0) or 0)
+        except Exception:
+            pass
+        if vw:
+            p_ = (vw.positions or {}).get(sym) or (vw.positions or {}).get(sym + "USDT")
+            if p_:
+                ent = float(p_.get("avg_price", 0) or 0)
+                pnl = (px - ent) * float(p_.get("quantity", 0) or 0) if px and ent else 0.0
+                rem = vw.hold_remaining_hours(sym if sym in vw.positions else sym + "USDT")
+                out.append(f"• {sym} — 🎮 Spot افتراضي ${float(p_.get('cost', 0)):,.2f} | دخول {_fmt_price(ent)}"
+                           + (f" | الحالي {_fmt_price(px)} ({'+' if pnl >= 0 else '-'}${abs(pnl):,.2f})" if px else "")
+                           + f" | وقف {_fmt_price(float(p_.get('stop_loss', 0) or 0))} | هدف {_fmt_price(float(p_.get('take_profit', 0) or 0))}"
+                           + (f" | متبقٍ {rem:.0f} ساعة" if rem is not None and rem > 0 else ""))
+            f_ = (getattr(vw, "futures", {}) or {}).get(sym)
+            if f_:
+                net = vw.futures_pnl(sym, px) if px else 0.0
+                out.append(f"• {sym} — ⚡ Futures افتراضي {'Long' if f_['side'] == 'long' else 'Short'} {f_['leverage']}x "
+                           f"(اسمية ${float(f_['notional']):,.2f}) | دخول {_fmt_price(f_['entry'])}"
+                           + (f" | ({'+' if net >= 0 else '-'}${abs(net):,.2f})" if px else ""))
+        try:
+            if engine.user_has_live_trading(user_id):
+                om = engine.get_user_order_manager(user_id)
+                for t in (om.get_open_trades(user_id) if om else []):
+                    if str(getattr(t, "symbol", "")).upper().replace("USDT", "") == sym:
+                        out.append(f"• {sym} — 💱 حقيقي ${float(t.size_usd or 0):,.2f} | دخول {_fmt_price(t.entry_price)} | "
+                                   f"وقف {_fmt_price(t.stop_loss)} | هدف {_fmt_price(t.take_profit)} — /trades")
+        except Exception:
+            pass
+    return out
 
 
 def _exclude_open_position_symbols(symbols: list, excluded: set) -> tuple:
@@ -1441,6 +1486,12 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lines.append(
                 f"⏸️ مُستبعَد (مركز مفتوح بالفعل): {', '.join(sorted(set(_excluded_syms_pm)))}"
             )
+            try:   # batch59 (#732): نوع المركز وحجمه
+                _opl59m = await _open_position_lines_b59(engine, update.effective_user.id, _excluded_syms_pm)
+                if _opl59m:
+                    lines += ["📌 *المراكز المفتوحة:*"] + _opl59m
+            except Exception as _opem:
+                logger.debug(f"planmonth open positions: {_opem}")
         from core.thresholds import fear_greed_zone as _fgz_pm
         # batch38: حدود النطاق (أعلى/أدنى 20 يوماً لـ BTC) كي يعرف القارئ ما «النطاق» المطلوب الخروج منه
         _pm_range_txt = ""
@@ -1840,7 +1891,7 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         pass
                     lines.append(f"  📍 الآن ({_sym_now}): RSI = {float(_now_fc.get('rsi', 0)):.0f} | "
                                  f"حجم = {_fvr_pm(float(_now_fc.get('vol_ratio', 0)))}"
-                                 + (f" (شمعة {__import__('core.indicators', fromlist=['volume_candle_label_ar']).volume_candle_label_ar(_now_fc.get('vol_candle')) or _now_fc.get('vol_candle')})" if _now_fc.get('vol_candle') else "")
+                                 + (f" (شمعة {__import__('core.indicators', fromlist=['volume_candle_label_ar']).volume_candle_label_ar(_now_fc.get('vol_candle'), _now_fc.get('vol_candle_h', 16)) or _now_fc.get('vol_candle')})" if _now_fc.get('vol_candle') else "")
                                  + f"{_now_extra}")
                     # batch31: حكم صريح — شرطا RSI/الحجم في المصفوفة قد يتحققان بينما الثقة دون حد الدخول (BTC: 46% < 55%)
                     # فكان المستخدم يقرأ «🟢 دخول 50%» ثم «الآن RSI 47 حجم 1.04x» دون حكم. وروابط الوقف/الأهداف في /signal.
@@ -2241,6 +2292,13 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lines.append(
                 f"⏸️ مُستبعَد (مركز مفتوح بالفعل): {', '.join(sorted(set(_excluded_syms_pw)))}"
             )
+            try:   # batch59 (#731/#732): إدارة المركز المفتوح بدل الاختفاء
+                _opl59 = await _open_position_lines_b59(engine, update.effective_user.id, _excluded_syms_pw)
+                if _opl59:
+                    lines += ["📌 *المراكز المفتوحة (إدارة لا دخول جديد):*"] + _opl59 + [
+                        "  ↳ هذا الأسبوع: أبقِ الوقف كما هو؛ لا تعزيز قبل استيفاء شروط /signal؛ الخروج عند الوقف/الهدف أو انتهاء المدة"]
+            except Exception as _ope:
+                logger.debug(f"planweek open positions: {_ope}")
             lines.append("")
         # weekly_decision_qualified_check_fix: كان "القرار الأسبوعي" يُحسَب
         # هنا (قبل حلقة تحليل العملات) اعتماداً فقط على Fear&Greed والـRegime
@@ -2857,13 +2915,18 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         lines[_mk_i] = "السوق: يختلف حسب الأصل (انظر كل أصل أدناه)"
         except Exception:
             pass
-        if _pw_qualified_count == 0:
+        if _pw_qualified_count == 0 and not symbols and locals().get("_excluded_syms_pw"):
+            # batch59 (#730): لم يُحلَّل أي أصل (كلها مستبعدة لمراكز مفتوحة) — لا «لا عملة تستوفي الشروط»
+            _pw_decision = (f"⏸️ *لا أصل للتحليل* — {', '.join(sorted(set(_excluded_syms_pw)))} مستبعد لوجود مركز مفتوح "
+                            f"(انظر إدارة المراكز أعلاه)")
+        elif _pw_qualified_count == 0:
             if fear_val <= 20 and "هابط" in _regime_ar:
                 _pw_decision = "🚨 *لا دخول* — خوف شديد + سوق هابط"
             elif fear_val <= 30 and "هابط" in _regime_ar:
                 _pw_decision = "⚠️ *تقليل التعرض* — سوق هابط + خوف"
             else:
                 _btc_only_pw = (len(symbols) == 1 and str(symbols[0]).upper() == "BTC")
+                # batch59 (#733): خطة BTC وحده أو أصول مستبعدة إلى BTC — لا «السوق المرجعي BTC» مكرراً
                 _pw_decision = (("⚪ *انتظار* — الأصل لا يستوفي شروط الدخول بعد" if _btc_only_pw
                                  else f"⚪ *انتظار* — الأصل لا يستوفي شروط الدخول بعد ({_pw_ref_lbl}: {_regime_ar})")
                                 if len(symbols) == 1 else
@@ -3014,7 +3077,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines, _closed_pw = _collapse_closed_notes(lines)
         if _closed_pw:
             lines += [_CLOSED_GLOBAL_NOTE, ""]
-        lines += ["ℹ️ «خيار المحترف» = تنفيذ بمستويات دخول/وقف/هدف عبر زر ⚡؛ يُفعَّل فقط عند اتجاه شراء واضح + الثقة ≥ حد الدخول + تحقق شرطي الاستراتيجية (اتباع الاتجاه: RSI فوق 45 وفوق EMA50؛ الارتداد للمتوسط: RSI ≤ 35 ودون EMA50)."]
+        if symbols: lines += ["ℹ️ «خيار المحترف» = تنفيذ بمستويات دخول/وقف/هدف عبر زر ⚡؛ يُفعَّل فقط عند اتجاه شراء واضح + الثقة ≥ حد الدخول + تحقق شرطي الاستراتيجية (اتباع الاتجاه: RSI فوق 45 وفوق EMA50؛ الارتداد للمتوسط: RSI ≤ 35 ودون EMA50)."]
         # batch34: ربط الأحداث الكبرى بأسابيع الجدول كما في /planmonth (كان الوسم غائباً هنا)
         try:
             import time as _t_pwk
@@ -3030,7 +3093,8 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                             else f" ℹ️ (تأثير متوسط: {_e.name_ar})")
         except Exception as _pwk_e:
             logger.debug(f"planweek event-week link: {_pwk_e}")
-        lines += ["", "📅 *خطة الأسابيع الأربعة القادمة (تبدأ من هذا الأسبوع)*"] + week_lines + [""]
+        if symbols:   # batch59 (#731): لا خطة دخول عامة حين لا أصل محلَّل
+            lines += ["", "📅 *خطة الأسابيع الأربعة القادمة (تبدأ من هذا الأسبوع)*"] + week_lines + [""]
 
         lines += ["📅 *أحداث الأسبوع*"]
         # نُزيل العنوان المكرر من format_upcoming_ar
@@ -3245,7 +3309,21 @@ async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         _live_pnl_p += (float(_pd_p["price"]) - _pos_p["avg_price"]) * _pos_p["quantity"]
                 except Exception:
                     pass
-        _dd_p = max(0, (portfolio_val - _vw_total) / portfolio_val * 100)
+        # batch59 (#704/#706): مراكز Futures الافتراضية ضمن العدد والربح الحي، وDrawdown من رصيد البداية (كان دائماً 0%)
+        _open_fut_p = len(getattr(_vw_p, "futures", {}) or {}) if _vw_p else 0
+        if _vw_p and _open_fut_p:
+            for _sym_f, _pos_f in _vw_p.futures.items():
+                try:
+                    _pd_f = await engine.data_layer.get_price(_sym_f)
+                    if _pd_f and _pd_f.get("price"):
+                        _live_pnl_p += _vw_p.futures_pnl(_sym_f, float(_pd_f["price"]))
+                except Exception:
+                    pass
+        try:
+            from core.config import VIRTUAL_WALLET_START as _VWS_p
+        except Exception:
+            _VWS_p = 10000.0
+        _dd_p = max(0.0, (_VWS_p - (_vw_total + _live_pnl_p)) / _VWS_p * 100) if _VWS_p else 0.0
 
         # #757: تحديث إجمالي المحفظة ليشمل PnL الحي
         _real_total = _vw_total + _live_pnl_p
@@ -3256,12 +3334,37 @@ async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"إجمالي المحفظة:  ${portfolio_val:,.0f}",
             f"إجمالي المحفظة:  ${_real_total:,.0f}"
         )
+        # batch59 (#703): الأصول المحلَّلة وثقتها ومسافتها عن حد التوزيع — كان «أعلى ثقة 41%» بلا أسماء
+        try:
+            _thr_p = float(getattr(engine.capital_engine, "ALLOC_MIN_CONFIDENCE", 0.65) or 0.65)
+            _cl_p = sorted(((str(c.get("symbol", "?")).upper(), float(c.get("confidence", 0) or 0)) for c in (candidates or [])),
+                           key=lambda x: -x[1])
+            if _cl_p:
+                text += (f"\n\n📋 *الأصول المحلَّلة* (حد التوزيع {_thr_p:.0%}):\n"
+                         + " · ".join(f"{s_} {c_:.0%}" + ("" if c_ >= _thr_p else f" (−{(_thr_p - c_) * 100:.0f})")
+                                      for s_, c_ in _cl_p[:10]))
+        except Exception as _cle:
+            logger.debug(f"portfolio candidates list: {_cle}")
         text += (
-            f"\n\n⚖️ *حالة المخاطر*\n"
-            f"• Drawdown: {_dd_p:.1f}%\n"
-            f"• PnL الحي: ${_live_pnl_p:+,.2f}\n"
-            f"• صفقات مفتوحة: {_open_p}"
+            f"\n\n⚖️ *حالة المخاطر — المحفظة الافتراضية 🎮*\n"
+            f"• Drawdown من رصيد البداية: {_dd_p:.1f}%\n"
+            f"• PnL الحي (المراكز المفتوحة): {'+' if _live_pnl_p >= 0 else '-'}${abs(_live_pnl_p):,.2f}\n"
+            f"• صفقات مفتوحة: {_open_p} Spot" + (f" + {_open_fut_p} Futures" if _open_fut_p else "")
         )
+        # batch59 (#704): الحساب الحقيقي منفصل وموسوم
+        try:
+            _eng_rp = context.bot_data.get("raed_engine")
+            _om_rp = _eng_rp.get_user_order_manager(_uid_p) if (_eng_rp and _eng_rp.user_has_live_trading(_uid_p)) else None
+            if _om_rp:
+                import time as _t_rp
+                _op_rp = len(_om_rp.get_open_trades(_uid_p) or [])
+                _day_rp = sum(float(t.pnl_usd or 0) for t in (_om_rp.get_all_trades(_uid_p) or [])
+                              if t.status == "CLOSED" and (t.closed_at or 0) >= _t_rp.time() - 86400)
+                from core.order_manager import _usd_b58 as _u_rp
+                text += (f"\n\n💱 *الحساب الحقيقي*\n• صفقات مفتوحة: {_op_rp}\n"
+                         f"• صافي المغلق (24 ساعة، بعد الرسوم): {_u_rp(_day_rp)}")
+        except Exception as _rpe:
+            logger.debug(f"portfolio real section: {_rpe}")
         # #759: أزرار التنقل
         _uid_port = update.effective_user.id
         _has_live_port = False
@@ -3273,7 +3376,7 @@ async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         _port_btns = [[InlineKeyboardButton("🎮 الصفقات الافتراضية", callback_data="goto_vtrades")]]
         if _has_live_port:
-            _port_btns[0].append(InlineKeyboardButton("💱 الصفقات الحقيقية", callback_data="goto_real_trades"))
+            _port_btns[0].append(InlineKeyboardButton("💱 الصفقات الحقيقية", callback_data="goto_trades"))   # batch59 (#705): كان goto_real_trades بلا معالج — الزر صامت
         await _send_long_plan(msg, update, context, text,
                               parse_mode=ParseMode.MARKDOWN,
                               reply_markup=InlineKeyboardMarkup(_port_btns))

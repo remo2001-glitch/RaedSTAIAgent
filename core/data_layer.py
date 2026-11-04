@@ -32,8 +32,11 @@ logger = logging.getLogger(__name__)
 # قاموس الأسهم المُرمَّزة: رمز المستخدم → {okx_spot, okx_futures, yahoo, base}
 # T13_fix: رموز السلع على OKX — Futures فقط
 _COMMODITY_SYMBOLS = {
-    "CL", "NL", "GC", "SI", "HG", "NG", "WTI", "BRENT",
+    "CL", "NL", "GC", "SI", "HG", "NG", "WTI", "BRENT", "XAG",
 }
+# batch59 (#692/#699): سلع لا سوق Spot لها على OKX بهذا الرمز (XAG-USDT Spot = سهم AG المُرمَّز) —
+# السعر والشموع من العقد الدائم دائماً مهما كان نوع السوق المطلوب.
+_PERP_ONLY_COMMODITY = {"XAG"}
 
 _TOKENIZED_STOCK_MAP = {
     # الأسهم الأمريكية الكبرى
@@ -770,6 +773,18 @@ class DataLayer:
         """إصلاح #258: mkttype يُميِّز كاش Spot عن Futures لنفس الرمز."""
         symbol = _clean_symbol(symbol)   # BTCUSDT → BTC (نظام-واسع)
         quote  = quote.upper()
+        if symbol.upper() in _PERP_ONLY_COMMODITY and quote == "USDT":
+            # batch59: XAG = الفضة — العقد الدائم فقط (لا سهم AG المُرمَّز من Spot)
+            _pk = f"price:{symbol.upper()}:USDT:perp_commodity"
+            if cached := _cached(_pk, "price"):
+                return cached
+            _pp = await self._price_okx_perp(symbol)
+            if _pp and float(_pp.get("price", 0) or 0) > 0:
+                _pp = dict(_pp); _pp["mkt_note"] = "perp_only"
+                _store(_pk, _pp)
+                return _pp
+            logger.warning(f"get_price: لا سعر للعقد الدائم {symbol}-USDT-SWAP")
+            return None
         key = f"price:{symbol.upper()}:{quote}:{mkttype}"
         if cached := _cached(key, "price"):
             return cached
@@ -1119,6 +1134,8 @@ class DataLayer:
         _orig_symbol = (_cache_hint or symbol).upper()  # T10_fix: XSPCX وليس SPCX
         symbol = _clean_symbol(symbol)   # BTCUSDT → BTC (نظام-واسع)
         quote  = quote.upper()
+        if symbol.upper() in _PERP_ONLY_COMMODITY:
+            mkttype = "futures"   # batch59: XAG = الفضة من العقد الدائم دائماً
         # T10_fix: key يميز XSPCX عن SPCX وXSPY
         key = f"ohlcv:{_orig_symbol}:{quote}:{interval}:{limit}:{mkttype}"
         if cached := _cached(key, "ohlcv"):

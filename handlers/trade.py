@@ -179,9 +179,25 @@ def _signal_decision(user_id: int, base: str) -> dict:
         return {}
 
 
+def _perp_only_msg_b59(base: str) -> str:
+    """batch59 (#691/#692): أصل بلا Spot حقيقي بهذا الرمز (XAG = الفضة كعقد دائم؛ XAG-USDT Spot = سهم مُرمَّز آخر)."""
+    try:
+        from core.data_layer import _PERP_ONLY_COMMODITY
+        if str(base).upper() in _PERP_ONLY_COMMODITY:
+            return (f"ℹ️ {str(base).upper()} = الفضة — متاحة على OKX كعقد دائم (Futures) فقط.\n"
+                    f"التنفيذ الحقيقي في رائد Spot فقط، فلا تنفيذ. للتحليل: /signal {str(base).upper()}؛ "
+                    f"للتدريب: /execute {str(base).upper()} buy 100 ← Futures ← 🎮 افتراضي")
+    except Exception:
+        pass
+    return ""
+
+
 def _signal_gate_b58(rec: dict, base: str, price: float, now: float = None) -> str:
     """batch58 (#682): يعيد سبب الرفض ('' = مسموح). /trade لا ينفّذ إلا قرار دخول صالح من /signal."""
     now = now or time.time()
+    _po = _perp_only_msg_b59(base)
+    if _po:
+        return _po
     if not rec:
         return (f"ℹ️ /trade ينفّذ قرار /signal نفسه.\n"
                 f"أرسل /signal {base} أولاً (Spot)، ثم /trade {base} خلال 30 دقيقة.")
@@ -269,10 +285,16 @@ async def _build_proposal(engine, user_id: int, base: str):
     يحسب اقتراح الصفقة: السعر، SL/TP، الحجم (Risk Engine + الرصيد).
     يُعيد (proposal | None, رسالة خطأ).
     """
+    _po = _perp_only_msg_b59(base)
+    if _po:
+        return None, _po
     pd = await engine.data_layer.get_price(base, quote="USDT", mkttype="spot")
     price = float((pd or {}).get("price", 0) or 0)
     if price <= 0:
-        return None, f"❌ تعذَّر جلب سعر {base}"
+        # batch59 (#691): السبب المرجّح بدل «تعذّر» المبهم
+        return None, (f"❌ لا سعر Spot لـ {base} مقابل USDT على OKX الآن\n"
+                      f"• قد لا يكون للرمز زوج Spot (بعض الأصول عقود دائمة فقط)، أو تعذّر الجلب مؤقتاً\n"
+                      f"• /trade ينفّذ Spot حقيقياً فقط — للتحليل: /signal {base}")
 
     # batch58 (#682–#684، قرار رحال 2026-11-04): /trade ينفّذ قرار /signal نفسه —
     # لا تنفيذ مع «انتظار» أو AUTO-FAIL، ونفس الوقف/الأهداف/الحجم المعروضة في /signal.

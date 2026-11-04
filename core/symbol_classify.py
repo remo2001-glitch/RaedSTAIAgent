@@ -19,6 +19,9 @@ symbol_classify_fix: كانت القاعدة "الرمز يبدأ بـX وطول
 # عملات رقمية حقيقية تبدأ بـX — ليست أصولاً مُرمَّزة. نفس القائمة التي كانت
 # مُضمَّنة في core/data_layer.py::_cg_id (أصبحت تستورد من هنا).
 REAL_CRYPTO_X_TICKERS = frozenset({"XRP", "XLM", "XMR", "XTZ", "XEM", "XDC", "XAUT"})
+# batch58→59 (#692/#699، قرار رحال 2026-11-04): XAG = الفضة دائماً (عقد OKX الدائم XAG-USDT-SWAP)،
+# لا سهم «AG» المُرمَّز بنمط X (كان Spot يحلّل First Majestic بسعر $14.96 وFutures يحلّل الفضة بـ$51.98).
+COMMODITY_X_TICKERS = frozenset({"XAG"})
 
 _QUOTE_SUFFIXES = ("USDT", "USDC", "BUSD", "USD")
 
@@ -43,4 +46,5 @@ def is_tokenized_x_ticker(sym) -> bool:
     التداول تُزال أولاً (XRPUSDT تُعامَل كـXRP).
     """
     b = base_ticker(sym)
-    return b.startswith("X") and len(b) > 2 and b not in REAL_CRYPTO_X_TICKERS
+    return (b.startswith("X") and len(b) > 2 and b not in REAL_CRYPTO_X_TICKERS
+            and b not in COMMODITY_X_TICKERS)

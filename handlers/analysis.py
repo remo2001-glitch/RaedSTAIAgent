@@ -825,7 +825,10 @@ def _fib_tight_b57(level: float, price: float, atr_pct: float = 0.0) -> str:
     try:
         d = abs(level / price - 1) * 100
         if d < max(0.5, 0.5 * float(atr_pct or 0)):
-            return f" — ملاصق للسعر ({d:.1f}%)، ليس حاجزاً فعلياً"
+            # batch59 (#698): «ملاصق» لما دون 0.5%؛ الأبعد داخل نصف ATR يُسمّى بأساسه
+            if d < 0.5:
+                return f" — ملاصق للسعر ({d:.1f}%)، ليس حاجزاً فعلياً"
+            return f" — ضمن نصف ATR من السعر ({d:.1f}%)، حاجز ضعيف"
     except Exception:
         pass
     return ""
@@ -861,7 +864,12 @@ def _bear_wording_b56(text: str, regime_obj) -> str:
     # batch57 (#646): «الميل: مائل للهبوط» بعد حكم «هابط قائم» أضعف منه ويشوّش عليه
     t = _r.sub(r"(الاتجاه: 🔴 هابط \(ADX \d+\) — لا إشارة شراء \(ثقة الشراء \d+% < \d+%\)) — الميل: [^\n]*", r"\1", t)
     t = t.replace("🎯 الاتجاه: ⚪ غير مؤكد", f"🎯 الاتجاه: 🔴 هابط (ADX {adx:.0f}) — لا شراء")
-    t = t.replace("الاتجاه غير مؤكد: لا جهة واضحة للصفقة", f"اتجاه هابط قائم (ADX {adx:.0f}): لا شراء في Spot")
+    # batch59 (#701، قرار رحال): في Futures لا «في Spot» — والهبوط القائم يُذكر كمجال Short (عرض فقط، بلا مستويات)
+    _fut59 = "📉 Futures" in t[:900] or "· Futures" in t[:900]
+    t = t.replace("الاتجاه غير مؤكد: لا جهة واضحة للصفقة",
+                  (f"اتجاه هابط قائم (ADX {adx:.0f}): لا شراء (Long) — الهبوط القائم مجال Short في Futures "
+                   f"(متاح في المحفظة الافتراضية فقط؛ لا تقييم Short في رائد بعد)") if _fut59
+                  else f"اتجاه هابط قائم (ADX {adx:.0f}): لا شراء في Spot")
     t = t.replace("الحجم: 0% — الاتجاه غير مؤكد، انتظر وضوح الجهة", "الحجم: 0% — اتجاه هابط قائم، لا شراء")
     t = _r.sub(r"• الاتجاه غير مؤكد: لا إشارة شراء/بيع قبل ثقة (\d+)%[^\n]*",
                lambda m: f"• اتجاه هابط قائم والثقة دون حد الإشارة {m.group(1)}% — لا إشارة شراء", t)
@@ -1829,6 +1837,7 @@ def _build_professional_block(
                         or "هابط" in str(getattr(regime, "description_ar", "") or ""))
             _sb58, _sb58_adx = _bear_confirmed_b56(regime)
             if _sb58:
+                _mr_off58 = True   # batch59 (#697): يُزال كل ذكر لمسار الارتداد من بقية الشروط
                 # batch58 (#651، قرار رحال): في الهبوط القائم لا يُوصى بالارتداد للمتوسط — المسار معطّل حتى يضعف الهبوط
                 _mr_first = (f"1. ⛔ مسار الارتداد للمتوسط معطّل: هبوط قائم (ADX {_adx_fmt58(_sb58_adx)}، −DI أعلى) — "
                              f"لا ارتداد ضد الاتجاه؛ يُعاد تفعيله حين يضعف الهبوط (ADX < 25 أو تقارب DI)")
@@ -1903,7 +1912,7 @@ def _build_professional_block(
             _cond3,
         ]
         # batch54 (#484): لا «مسار الارتداد» في الشرط 3 حين لا مسار ارتداد في الشرط 1 (استراتيجية بلا ارتداد)
-        if not _mr_first:
+        if (not _mr_first) or locals().get("_mr_off58"):
             entry_conds[2] = str(entry_conds[2]).replace(" (مسار الارتداد)", "")
         if _alt_breakout:
             entry_conds.append("9. " + _alt_breakout)
@@ -2827,7 +2836,8 @@ def _build_professional_block(
         _vd49 = _vcd49(candles)
         if _vd49:
             from core.indicators import volume_candle_label_ar as _vcl50
-            _vp_txt += f" — شمعة {_vcl50(_vd49) or _vd49}"
+            from core.indicators import volume_candle_open_hour as _vch59
+            _vp_txt += f" — شمعة {_vcl50(_vd49, _vch59(candles)) or _vd49}"
         logger.info(f"vol_ratio: {_vol_ratio:.3f} candle={_vd49} n={len(candles or [])}")
     except Exception:
         pass
@@ -3086,7 +3096,8 @@ def _build_professional_block(
     try:
         # batch35: مقياس Tail Risk ثابت (≈10% من السعر) — نربطه بـATR ليُقرأ على مقياس تقلب الأصل نفسه
         if atr_pct and wc_bd1 and wc_bd2 and price:
-            _wc_atr_x = abs(_px_anchor - wc_bd2) / max(_px_anchor * float(atr_pct) / 100.0, 1e-9)
+            # batch59 (#702): المقام = ATR بالدولار المعروض (ATR% × السعر) لا ATR% × آخر إغلاق
+            _wc_atr_x = abs(_px_anchor - wc_bd2) / max(price * float(atr_pct) / 100.0, 1e-9)
             _wc_ent_txt += f"، ≈ {_wc_atr_x:.1f}× ATR من آخر إغلاق"
             # batch53 (#368/#387): رقم المقياس يُذكر مرة واحدة وبوضوح عند وجود سقف/حد أدنى فقط (كان «3.5×ATR (مقياس 4×ATR…)» يربك)
             _wc_sl_bound = bool(pro_sl) and abs(wc_bd2 - pro_sl * 0.95) <= max(abs(wc_bd2), 1e-9) * 1e-6
@@ -3103,9 +3114,13 @@ def _build_professional_block(
                 _wc_ent_txt += " — المسافة مقيَّدة بسقف 15% (4×ATR أكبر منه)"
             elif 4.0 * float(atr_pct) / 100.0 < 0.05:
                 _wc_ent_txt += " — المسافة مرفوعة للحد الأدنى 5%"
-        # batch54 (#485): آخر إغلاق مكتمل يختلف عن السعر الحالي بأكثر من 3% — يُذكر الأساسان
-        if _px_anchor and price and abs(_px_anchor / price - 1) > 0.03:
-            _wc_ent_txt += f" (آخر إغلاق مكتمل {_fmt_price(_px_anchor)} والسعر الحالي {_fmt_price(price)})"
+    except Exception:
+        pass
+    # batch59 (#695): فجوة آخر إغلاق مكتمل عن السعر الحالي (>3%) سطر مستقل تحت مناطق الدخول بدل قوس داخل Tail Risk
+    try:
+        if _px_anchor and price and abs(price / _px_anchor - 1) > 0.03:   # نفس أساس الفارق المعروض
+            parts.append(f"• ℹ️ آخر إغلاق مكتمل {_fmt_price(_px_anchor)} والسعر الحالي {_fmt_price(price)} "
+                         f"(فارق {(price / _px_anchor - 1) * 100:+.1f}%) — Entry 2 وTail Risk محسوبان من الإغلاق المكتمل")
     except Exception:
         pass
     # 5. إدارة المخاطر + Time Exit + Worst-Case
@@ -3222,7 +3237,7 @@ def _build_professional_block(
                         else "لا يوافق اتجاه الإشارة") + ")")
     if not _conf_flags and not _flags_ignored:
         parts.append("  • لا تأكيدات — انتظر 2/4 مؤشرات ("
-                     + ("حجم + RSI + CVD + BB" if (_gold_fund_ex or _is_x_asset or tech.get("is_perp_asset", False)) else "حجم + RSI + CVD + BB، أو Funding سالب") + ")")
+                     + ("حجم + RSI + CVD + BB" if (_gold_fund_ex or _is_x_asset or tech.get("is_perp_asset", False) or _is_commodity(symbol)) else "حجم + RSI + CVD + BB، أو Funding سالب") + ")")
     elif not _conf_flags:
         pass
     else:
@@ -3248,12 +3263,14 @@ def _build_professional_block(
                         _r4_m = _calc_rsi_from_closes([float(c.get("close", 0)) for c in _c4_m if c.get("close")])
                 except Exception:
                     _r4_m = None
-                _miss.append(f"RSI < 30 كتأكيد تشبع (حالياً {rsi:.0f} يومي؛ مسار الارتداد يكتفي بـ≤35"
+                _miss.append(f"RSI < 30 كتأكيد تشبع (حالياً {rsi:.0f} يومي"
+                             + ("" if locals().get("_mr_off58") else "؛ مسار الارتداد يكتفي بـ≤35")   # batch59 (#697)
                              + (f"؛ 4H = {_r4_m:.0f} دون 30 لكنه لا يُحتسب كتأكيد" if (_r4_m and 0 < _r4_m < 30) else "")
                              + ")")
             if not _cvd_oc_m.get("cvd_signal"):
                 _miss.append("CVD غير متاح الآن (لا يمكن التحقق منه)")
             if (_fund_pct >= -0.01 and not _gold_fund_ex
+                    and not (_is_x_asset or tech.get("is_perp_asset", False) or _is_commodity(symbol))   # batch59 (#696)
                     and (_fund.get("source") not in (None, "unknown", "") or _fund_pct != 0)):
                 _miss.append(f"Funding سالب (حالياً {_fund_pct:+.4f}%)")
             if _miss:
@@ -3321,8 +3338,9 @@ def _build_professional_block(
         _reclaim_line,
         _macd_line_b45,
         _whale_line,
-        (f"ℹ️ Funding Rate {_fund_pct:+.4f}% — للعلم فقط للذهب (لا يدخل في الثقة ولا التأكيدات)"
-         if (_gold_fund_ex and (_fund.get("source") not in (None, "unknown", "") or _fund_pct != 0))
+        (f"ℹ️ Funding Rate {_fund_pct:+.4f}% — للعلم فقط لهذا الأصل (لا يدخل في الثقة ولا التأكيدات)"
+         if ((_gold_fund_ex or _is_x_asset or _is_perp_asset or _is_commodity(symbol))   # batch59 (#696): نفس قاعدة قائمة التأكيدات
+             and (_fund.get("source") not in (None, "unknown", "") or _fund_pct != 0))
          else f"{'☑' if _fund_pct < -0.01 else '□'} Funding ≤ −0.01% (حالياً {_fund_pct:+.4f}%) — سالب = ضغط Shorts داعم للشراء"
          if (_fund.get("source") not in (None, "unknown", "") or _fund_pct != 0)
          else ("⚪ Funding Rate غير متاح لهذا الأصل" if (_is_x_asset or _is_perp_asset or _is_commodity(symbol)) else "⚪ Funding Rate غير متاح الآن")),
@@ -4442,7 +4460,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _is_perp_sig = False
     if tier2 in ("diamond", "admin") and not ((not _use_futures) and is_tokenized_x_ticker(raw_arg)):
         try:
-            _is_perp_sig = await engine.data_layer.is_tokenized_stock(symbol)
+            _is_perp_sig = (await engine.data_layer.is_tokenized_stock(symbol)) and not _is_commodity(symbol)   # batch59: XAG سلعة لا سهم
         except Exception:
             _is_perp_sig = False
     # إذا اكتُشف كأصل مُرمَّز ولم يُحدَّد النوع مسبقاً → Futures تلقائياً
@@ -6312,7 +6330,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _x_spot_an = (not _use_futures_an) and is_tokenized_x_ticker(raw_arg)
     if tier_an in ("diamond", "admin") and not _x_spot_an:
         try:
-            _is_perp_an = await engine.data_layer.is_tokenized_stock(symbol)
+            _is_perp_an = (await engine.data_layer.is_tokenized_stock(symbol)) and not _is_commodity(symbol)   # batch59
         except Exception:
             _is_perp_an = False
 

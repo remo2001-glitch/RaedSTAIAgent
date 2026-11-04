@@ -1405,9 +1405,8 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not has_live and (_fut_side58 in ("flong", "fshort") or _lev58 > 1):
             await msg.edit_text(_clean(await _open_virtual_futures_b58(
                 user_id, symbol, ("long" if (_fut_side58 == "flong" or (not _fut_side58 and is_buy)) else "short"),
-                price, final_size, _lev58, _exec_sl_override or float(risk.stop_loss_pct or 5),
-                _exec_tp_override or float(risk.take_profit_pct or 6), atr_pct,
-                float(getattr(risk, "max_hold_hours", 0) or 0), _size_note)),
+                price, final_size, _lev58, None, None, atr_pct,   # batch59: وقف ATR فقط (قرار رحال)
+                VIRTUAL_TIME_EXIT_H_B59, _size_note)),
                 parse_mode=ParseMode.MARKDOWN)
             return
 
@@ -1554,6 +1553,12 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # يحمل هوية إشارة مُسجَّلة مسبقاً، نربطها بالصفقة هنا لتُستخدَم عند
         # الإغلاق التلقائي لاحقاً (TP/SL) في تحديث سجل أداء الإشارة الأصلي
         _plan_sig_id = context.user_data.pop("_plan_exec_signal_id", None) if context.user_data else None
+        # batch59 (#711، قرار رحال): الوقف الافتراضي اليدوي ≥1.5×ATR للأصل والهدف ≥1.5× الوقف (كان 5%/7.5% ثابتاً)
+        _slp59, _tpp59 = _virtual_levels_b59(None, None, atr_pct,   # batch59: وقف ATR فقط (قرار رحال)
+                                             float(risk.stop_loss_pct or 5), float(risk.take_profit_pct or 7.5))
+        sl_price = ep * (1 - _slp59 / 100)
+        tp_price = ep * (1 + _tpp59 / 100)
+        _expo59 = _exposure_note_b59(_vw_ex, symbol, "long", spot=True)
         _buy_result = _vw_ex.buy(symbol, ep, final_size, signal_id=_plan_sig_id,
                                   setup_type=trade_dir if _plan_sig_id else None)
         if _buy_result.get("ok"):
@@ -1565,12 +1570,8 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # time_exit_enforcement_fix: تخزين المدة المعروضة في البطاقة
                 # على المركز نفسه ليفرضها الإغلاق التلقائي (VirtualWallet.
                 # is_hold_expired) — كانت تُعرَض فقط ولا تُخزَّن ولا تُفرَض.
-                try:
-                    _mh = float(risk.max_hold_hours or 0)
-                    if _mh > 0:
-                        _vw_ex.positions[symbol.upper()]["max_hold_hours"] = _mh
-                except Exception:
-                    pass
+                # batch59 (#709): مدة الاحتفاظ = Time Exit في /signal (5 أيام) بدل 48 ساعة المتناقضة معه
+                _vw_ex.positions[symbol.upper()]["max_hold_hours"] = VIRTUAL_TIME_EXIT_H_B59
             _sm_vex.save_virtual_wallet(user_id, _vw_ex.to_dict())
             # rejected_signal_eval_fix: تمييز هذه الإشارة كـ"نُفِّذت فعلاً"
             # فور نجاح الشراء — يستثنيها هذا من مسار تقييم "الإشارات
@@ -1609,12 +1610,13 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🪙 {symbol} | {'🟢 شراء' if is_buy else '🔴 بيع'}",
             f"💰 الحجم: ${final_size:,.2f}",
             *([_size_note] if _size_note else []),
-            f"📈 سعر الدخول: ${ep:,.4f}",
-            f"🛑 وقف الخسارة: ${sl_price:,.4f} ({risk.stop_loss_pct:.1f}%)",
-            f"🎯 هدف الربح: ${tp_price:,.4f} ({risk.take_profit_pct:.1f}%)",
-            f"⏰ أقصى مدة: {risk.max_hold_hours} ساعة",
-            "",
-            "💡 للتداول الحقيقي: /live connect [منصة] [key] [secret]",
+            f"📈 سعر الدخول: {_fmt_price(ep)}",
+            f"🛑 وقف الخسارة: {_fmt_price(sl_price)} (-{_slp59:.1f}% — ≥1.5×ATR)",
+            f"🎯 هدف الربح: {_fmt_price(tp_price)} (+{_tpp59:.1f}% — R/R 1:{_tpp59 / _slp59:.1f})",
+            f"⏰ أقصى مدة: 5 أيام (نفس Time Exit في /signal)",
+            *([_expo59] if _expo59 else []),
+            *([] if engine.user_has_live_trading(user_id) else
+              ["", "💡 للتداول الحقيقي: /live connect [منصة] [key] [secret]"]),   # batch59 (#710)
         ]
         await msg.edit_text(_clean("\n".join(lines)), parse_mode=ParseMode.MARKDOWN)
 
@@ -2314,15 +2316,15 @@ async def cmd_vtrades(update: Update, context: ContextTypes.DEFAULT_TYPE):
     vw = _VW_vt(vw_data) if vw_data else _VW_vt({})
 
     if not vw.positions:
-        await update.message.reply_text(
-            "📋 *الصفقات الافتراضية*\n\n"
-            "لا توجد صفقات مفتوحة حالياً.\n"
-            "سيتم التنفيذ تلقائياً عند وجود إشارة قوية ≥ 55% ✅",
-            parse_mode=ParseMode.MARKDOWN)
+        # batch59 (#706/#707): مراكز Futures الافتراضية + الحد الفعلي للتنفيذ الآلي وحالته
+        from handlers.trading import vtrades_empty_text_b59 as _vte59
+        await update.message.reply_text(_vte59(user_id, vw), parse_mode=ParseMode.MARKDOWN)
         return
 
     engine = context.bot_data.get("raed_engine")
     lines  = ["📋 *الصفقات الافتراضية المفتوحة*", "━━━━━━━━━━━━━━━━━━", ""]
+    if getattr(vw, "futures", None):   # batch59 (#706)
+        lines[2:2] = [f"⚡ مراكز Futures افتراضية مفتوحة: {len(vw.futures)} — /vfutures", ""]
     buttons_list = []
 
     # إصلاح #663: dedup المراكز (منع التكرار)
@@ -3316,11 +3318,7 @@ async def cb_goto_vtrades(update, context):
         vw_data = _sm_gv.get_virtual_wallet(user_id) or {}
         vw = _VW_gv(vw_data) if vw_data else _VW_gv({})
         if not vw.positions:
-            await query.message.reply_text(
-                "📋 *الصفقات الافتراضية*\n\n"
-                "لا توجد صفقات مفتوحة حالياً.\n"
-                "سيتم التنفيذ تلقائياً عند وجود إشارة قوية ≥ 55% ✅",
-                parse_mode="Markdown")
+            await query.message.reply_text(vtrades_empty_text_b59(user_id, vw), parse_mode="Markdown")   # batch59
             return
         engine = context.bot_data.get("raed_engine")
         lines  = ["📋 *الصفقات الافتراضية المفتوحة*", "━━━━━━━━━━━━━━━━━━", ""]
@@ -3364,38 +3362,134 @@ async def cb_goto_trades(update, context):
     query = update.callback_query
     await query.answer()
     try:
-        await query.message.reply_text(
-            "💱 *الصفقات الحقيقية*\n\n"
-            "استخدم /trades لعرض صفقاتك الحقيقية المفتوحة.",
-            parse_mode="Markdown")
+        # batch59 (#705): يعرض /trades مباشرة (كان يطلب كتابة الأمر)
+        class _UpdShim:
+            effective_user = query.from_user
+            message = query.message
+            effective_message = query.message
+            callback_query = None
+        context.args = []
+        await cmd_trades(_UpdShim(), context)
     except Exception as e:
         logger.error(f"cb_goto_trades: {e}")
+        try:
+            await query.message.reply_text("💱 *الصفقات الحقيقية*\n\nاستخدم /trades لعرض صفقاتك الحقيقية.", parse_mode="Markdown")
+        except Exception:
+            pass
+
+
+def vtrades_empty_text_b59(user_id, vw) -> str:
+    """batch59 (#706/#707): لا مراكز Spot — مع مراكز Futures الافتراضية إن وُجدت، وحدّ التنفيذ الآلي الفعلي وحالته."""
+    try:
+        from core.state_manager import state_manager as _sm_e
+        _auto = int(user_id) in [int(x) for x in (_sm_e.get_autotrade_users() or [])]
+    except Exception:
+        _auto = False
+    try:
+        from core.raed_engine import SCAN_STRONG_CONF_B59 as _thr
+    except Exception:
+        _thr = 0.65
+    _nf = len(getattr(vw, "futures", {}) or {})
+    lines = ["📋 *الصفقات الافتراضية*", "", "لا توجد صفقات Spot مفتوحة حالياً."]
+    if _nf:
+        lines.append(f"⚡ مراكز Futures افتراضية مفتوحة: {_nf} — /vfutures")
+    lines.append(f"🤖 التنفيذ الآلي: {'✅ مُفعَّل' if _auto else '⏸️ غير مُفعَّل (/autotrade on)'} — "
+                 f"يفتح صفقة افتراضية عند إشارة مسح ≥ {_thr:.0%}")
+    return "\n".join(lines)
 
 
 # ════════════════════════════════════════════════════════════════
 # batch58: Futures افتراضية — فتح / عرض / إغلاق
 # ════════════════════════════════════════════════════════════════
-async def _open_virtual_futures_b58(user_id, symbol, side, price, margin, leverage,
+VIRTUAL_TIME_EXIT_H_B59 = 120.0   # batch59 (#709): = «Time Exit: 5 أيام» في /signal
+
+
+def _virtual_levels_b59(sl_override, tp_override, atr_pct, default_sl=5.0, default_tp=7.5) -> tuple:
+    """batch59 (#711/#717/#728، قرار رحال «وقف ATR فقط»): الوقف = 1.5×ATR للأصل (أو وقف الخطة المُمرَّر إن كان أوسع)،
+    والهدف ≥ 1.5× الوقف. بلا ATR: المُمرَّر أو الافتراضي."""
+    try:
+        a = float(atr_pct or 0)
+    except (TypeError, ValueError):
+        a = 0.0
+    ov = float(sl_override or 0)
+    sl = max(1.5 * a, ov) if a > 0 else (ov or float(default_sl or 5))
+    tp = max(float(tp_override or 0), 1.5 * sl) if (tp_override or a > 0) else float(default_tp or 7.5)
+    tp = max(tp, 1.5 * sl)
+    return round(sl, 4), round(tp, 4)
+
+
+def _exposure_note_b59(vw, symbol: str, side: str, spot: bool) -> str:
+    """batch59 (#716/#725): تعرّض قائم على الأصل نفسه في السوق الآخر (Spot ↔ Futures)."""
+    try:
+        sym = str(symbol).upper().replace("USDT", "")
+        if spot:
+            f = (getattr(vw, "futures", {}) or {}).get(sym)
+            if f:
+                same = f["side"] == "long"
+                return (f"⚠️ لديك مركز Futures {'Long' if same else 'Short'} على {sym} (قيمة اسمية ${float(f['notional']):,.0f}) — "
+                        + ("التعرض على الأصل يتضاعف" if same else "المركزان متعاكسان: تحوّط يلغي أثرهما تقريباً"))
+        else:
+            p = (getattr(vw, "positions", {}) or {}).get(sym) or (getattr(vw, "positions", {}) or {}).get(sym + "USDT")
+            if p:
+                same = side == "long"
+                return (f"⚠️ لديك مركز Spot شراء على {sym} (${float(p.get('cost', 0)):,.0f}) — "
+                        + ("التعرض على الأصل يتضاعف" if same else "المركزان متعاكسان: تحوّط يلغي أثرهما تقريباً"))
+    except Exception:
+        pass
+    return ""
+
+
+async def _open_virtual_futures_b58(user_id, symbol, side, price, amount, leverage,
                                     sl_pct, tp_pct, atr_pct, max_hold, size_note="") -> str:
+    """batch59 (#726، قرار رحال): المبلغ المعتمد = القيمة الاسمية؛ الهامش = المبلغ ÷ الرافعة
+    (خسارة الوقف بالدولار ثابتة مهما كانت الرافعة)."""
     from core.state_manager import state_manager as _sm_vf
     from core.virtual_wallet import VirtualWallet as _VW_vf
     is_long = side == "long"
-    ep = price * (1.001 if is_long else 0.999)        # انزلاق افتراضي 0.1% كما في Spot
-    sl_pct = float(sl_pct or 5)
-    if atr_pct and atr_pct > 0:
-        sl_pct = max(sl_pct, 1.5 * float(atr_pct))    # نفس قاعدة الوقف ≥1.5×ATR
-    tp_pct = float(tp_pct or 6)
+    lev = max(1, int(leverage or 1))
+    ep = price * (1.001 if is_long else 0.999)        # انزلاق افتراضي 0.1% (والإغلاق كذلك — #722)
+    sl_pct, tp_pct = _virtual_levels_b59(sl_pct, tp_pct, atr_pct)   # sl_pct/tp_pct هنا = تجاوز الخطة فقط (أو None)
     sl = ep * (1 - sl_pct / 100) if is_long else ep * (1 + sl_pct / 100)
     tp = ep * (1 + tp_pct / 100) if is_long else ep * (1 - tp_pct / 100)
     vw = _VW_vf(_sm_vf.get_virtual_wallet(user_id) or {})
-    res = vw.open_futures(symbol, side, ep, float(margin), int(leverage), sl, tp, max_hold)
+    sym_u = str(symbol).upper().replace("USDT", "")
+    if sym_u in (vw.futures or {}):   # batch59 (#729): المركز القائم بدل رفض مجرد
+        f = vw.futures[sym_u]
+        return (f"⚠️ لديك مركز Futures افتراضي مفتوح على {sym_u}: {'Long' if f['side'] == 'long' else 'Short'} "
+                f"{f['leverage']}x @ {_fmt_price(f['entry'])} (هامش ${float(f['margin']):,.2f})\n"
+                f"أغلقه أولاً من /vfutures")
+    margin = float(amount) / lev
+    _expo = _exposure_note_b59(vw, sym_u, side, spot=False)
+    res = vw.open_futures(symbol, side, ep, margin, lev, sl, tp, max_hold or VIRTUAL_TIME_EXIT_H_B59)
     if not res.get("ok"):
         return res.get("msg", "⚠️ تعذّر فتح المركز")
     _sm_vf.save_virtual_wallet(user_id, vw.to_dict())
-    _risk_usd = abs(ep - sl) * float(res["position"]["qty"])
-    return (res["msg"] + (f"\n{size_note}" if size_note else "")
-            + f"\n\n⚖️ الخسارة عند الوقف ≈ ${_risk_usd:,.2f} ({_risk_usd / float(margin) * 100:.0f}% من الهامش)"
-            + "\n📋 إدارة المراكز: /vfutures")
+    pos = res["position"]
+    qty = float(pos["qty"])
+    _fees = float(pos.get("fee_open", 0) or 0) + qty * sl * vw.FUT_FEE_RATE
+    _loss = abs(ep - sl) * qty + _fees
+    _lp = _loss / margin * 100 if margin > 0 else 0
+    _side_ar = "📈 Long (شراء)" if is_long else "📉 Short (بيع على المكشوف)"
+    _liq_txt = ("لا تصفية عملياً (رافعة 1x)" if lev == 1 else f"≈ {_fmt_price(round(float(pos['liq_price']), 0) if pos['liq_price'] >= 100 else pos['liq_price'])}")
+    lines = [
+        "✅ تم فتح مركز Futures افتراضي", "",
+        f"🏦 {sym_u} | {_side_ar} | رافعة {lev}x (هامش معزول)",
+        f"💲 الدخول: {_fmt_price(ep)}",
+        f"💵 القيمة الاسمية: ${float(pos['notional']):,.2f} | الهامش المحجوز: ${margin:,.2f}",
+        *([size_note] if size_note else []),
+        f"🧾 رسوم الفتح (تقديرية 0.05%): ${float(pos.get('fee_open', 0)):,.2f}",
+        f"🛑 الوقف: {_fmt_price(sl)} ({'-' if is_long else '+'}{sl_pct:.1f}% — ≥1.5×ATR)",
+        f"🎯 الهدف: {_fmt_price(tp)} ({'+' if is_long else '-'}{tp_pct:.1f}% — R/R 1:{tp_pct / sl_pct:.1f})",
+        f"💥 سعر التصفية: {_liq_txt}",
+        f"⚖️ الخسارة عند الوقف ≈ ${_loss:,.2f} شاملة الرسوم ({_lp:.0f}% من الهامش)",
+        *([f"⚠️ الوقف يستهلك {_lp:.0f}% من الهامش — رافعة مرتفعة نسبةً إلى مسافة الوقف"] if _lp >= 30 else []),
+        *([_expo] if _expo else []),
+        f"💰 الرصيد المتبقي: ${vw.balance:,.2f}",
+        "",
+        "🎮 صفقة تدريبية — لا أموال حقيقية؛ الرافعة الحقيقية غير مفعّلة",
+        "📋 إدارة المراكز: /vfutures",
+    ]
+    return "\n".join(lines)
 
 
 async def cmd_vfutures(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3419,11 +3513,25 @@ async def cmd_vfutures(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 prices[sym] = float(pd["price"])
         except Exception:
             pass
-    lines = ["⚡ *مراكز Futures الافتراضية*", "━━━━━━━━━━━━━━━━━━"] + vw.futures_report_lines(prices)
-    lines += ["", "🎮 تدريب فقط — هامش معزول ورسوم تقديرية 0.05%؛ الرافعة الحقيقية غير مفعّلة"]
+    lines = ["⚡ *مراكز Futures الافتراضية*", "━━━━━━━━━━━━━━━━━━"]
+    for s_, p_ in vw.futures.items():   # batch59 (#719/#720): السعر الحالي والوقف/الهدف والصافي بعد الرسوم
+        px = prices.get(s_, float(p_["entry"]))
+        g = vw.futures_pnl(s_, px)
+        net = g - float(p_.get("fee_open", 0) or 0) - float(p_["qty"]) * px * vw.FUT_FEE_RATE
+        pct = net / float(p_["margin"]) * 100 if p_.get("margin") else 0
+        lev_ = int(p_.get("leverage", 1))
+        lines += [
+            f"• *{s_}* {'Long' if p_['side'] == 'long' else 'Short'} {lev_}x — هامش ${float(p_['margin']):,.2f} | اسمية ${float(p_['notional']):,.2f}",
+            f"  الدخول {_fmt_price(p_['entry'])} | الحالي {_fmt_price(px)}",
+            f"  الوقف {_fmt_price(p_['stop_loss']) if p_.get('stop_loss') else '—'} | الهدف {_fmt_price(p_['take_profit']) if p_.get('take_profit') else '—'}"
+            + ("" if lev_ == 1 else f" | التصفية ≈ {_fmt_price(p_['liq_price'])}"),
+            f"  {'📈' if net >= 0 else '📉'} الصافي لو أُغلق الآن: {'+' if net >= 0 else '-'}${abs(net):,.2f} ({pct:+.1f}% من الهامش، بعد رسوم الفتح والإغلاق)",
+            "",
+        ]
+    lines += ["🎮 تدريب فقط — هامش معزول ورسوم تقديرية 0.05%؛ الرافعة الحقيقية غير مفعّلة"]
     kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"🔴 إغلاق {s_}", callback_data=f"vfclose_{s_}")]
                                for s_ in list(vw.futures)[:8]])
-    await update.message.reply_text("\n".join(lines), reply_markup=kb)
+    await update.message.reply_text("\n".join(lines), reply_markup=kb, parse_mode=ParseMode.MARKDOWN)   # batch59 (#718)
 
 
 async def cb_vfclose(update, context):
@@ -3449,7 +3557,9 @@ async def cb_vfclose(update, context):
     except Exception:
         pass
     reason = vw.futures_exit_reason(sym, price)
-    res = vw.close_futures(sym, price, "liquidation" if reason == "liquidation" else "manual")
+    # batch59 (#722): انزلاق 0.1% عكس المركز عند الإغلاق كما عند الفتح
+    _px_close = price * (0.999 if vw.futures[sym]["side"] == "long" else 1.001)
+    res = vw.close_futures(sym, _px_close, "liquidation" if reason == "liquidation" else "manual")
     if res.get("ok"):
         _sm_vf.save_virtual_wallet(user_id, vw.to_dict())
     await query.edit_message_text(res.get("msg", "⚠️ تعذّر الإغلاق"))

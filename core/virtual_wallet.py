@@ -12,6 +12,15 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _fp(p) -> str:
+    """batch59: صيغة أسعار /signal (منزلتان فوق 10$)."""
+    try:
+        p = float(p or 0)
+        return f"${p:,.2f}" if p >= 10 else (f"${p:,.4f}" if p >= 1 else f"${p:.6f}")
+    except Exception:
+        return str(p)
+
+
 HISTORY_CAP = 2000  # قيود شراء/بيع (≈1000 صفقة مغلقة)
 
 
@@ -388,15 +397,26 @@ class VirtualWallet:
         self.history.append(trade)
         _r_ar = {"liquidation": "💥 تصفية", "sl": "🛑 وقف الخسارة", "tp": "🎯 الهدف",
                  "time": "⏰ انتهاء المدة", "manual": "إغلاق يدوي"}.get(reason, reason)
-        sign = "+" if pnl >= 0 else ""
+        # batch59 (#721/#723): إشارة موحّدة (-$0.16)، مدة الاحتفاظ، وروابط المتابعة
+        _dur = ""
+        try:
+            _op = datetime.fromisoformat(str(pos.get("opened_at")))
+            if _op.tzinfo is None:
+                _op = _op.replace(tzinfo=timezone.utc)
+            _h = (datetime.now(timezone.utc) - _op).total_seconds() / 3600.0
+            _dur = f"{_h * 60:.0f} دقيقة" if _h < 1 else (f"{_h:.1f} ساعة" if _h < 48 else f"{_h / 24:.1f} يوم")
+        except Exception:
+            pass
+        _usd = (lambda v: f"{'+' if v >= 0 else '-'}${abs(v):,.2f}")
         return {"ok": True, "trade": trade, "msg": (
             f"{E['ok']} أُغلق مركز Futures افتراضي — {symbol}\n\n"
             f"• الجهة: {'Long' if pos['side'] == 'long' else 'Short'} | رافعة {pos['leverage']}x\n"
-            f"• السبب: {_r_ar}\n"
-            f"• الدخول: ${pos['entry']:,.4f} → الخروج: ${exit_px:,.4f}\n"
-            f"• الربح/الخسارة الصافي: {sign}${pnl:,.2f} ({sign}{pnl_pct:.1f}% من الهامش) — بعد رسوم ${trade['fees']:,.2f}\n"
+            f"• السبب: {_r_ar}" + (f" | المدة: {_dur}" if _dur else "") + "\n"
+            f"• الدخول: {_fp(pos['entry'])} → الخروج: {_fp(exit_px)}\n"
+            f"• الربح/الخسارة الصافي: {_usd(pnl)} ({pnl_pct:+.1f}% من الهامش) — بعد رسوم ${trade['fees']:,.2f}\n"
             f"💰 الرصيد الجديد: ${self.balance:,.2f}\n\n"
-            f"{E['virtual']} صفقة تدريبية — لا أموال حقيقية")}
+            f"{E['virtual']} صفقة تدريبية — لا أموال حقيقية\n"
+            f"📋 /vfutures المراكز | /stats الأداء")}
 
     def futures_report_lines(self, current_prices: dict | None = None) -> list:
         out = []

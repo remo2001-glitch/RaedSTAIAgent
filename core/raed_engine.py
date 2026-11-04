@@ -47,6 +47,9 @@ def _format_auto_close_notice(sym: str, reason: str, entry: float, exit_px: floa
         f"🎮 /vtrades للتفاصيل"
     )
 
+SCAN_STRONG_CONF_B59 = 0.65   # batch59 (#707): حدّ إشارة المسح القوية — يقرؤه /vtrades بدل 55%/80% المكتوبين يدوياً
+
+
 class RaedEngine:
     """
     المحرك المركزي — Singleton يُهيَّأ مرة واحدة عند بدء البوت.
@@ -912,7 +915,7 @@ class RaedEngine:
 
             strong_signals = []
             all_signals    = []
-            _SCAN_STRONG_CONF = 0.65   # batch30: الحد معروض الآن في رسالة المسح
+            _SCAN_STRONG_CONF = SCAN_STRONG_CONF_B59   # batch30: الحد معروض الآن في رسالة المسح (batch59: ثابت موحّد للعرض)
 
             _scan_list = top_coins[:5]   # النطاق 5 عملات (قرار رحال 2026-10-28)
             try:

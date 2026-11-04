@@ -290,11 +290,9 @@ async def cmd_vtrades(update: Update, context: ContextTypes.DEFAULT_TYPE):
     vw = _VW_vt(vw_data) if vw_data else _VW_vt({})
 
     if not vw.positions:
-        await update.message.reply_text(
-            "📋 *الصفقات الافتراضية*\n\n"
-            "لا توجد صفقات مفتوحة حالياً.\n"
-            "سيتم التنفيذ تلقائياً عند وجود إشارة قوية ≥ 80% ✅",
-            parse_mode=ParseMode.MARKDOWN)
+        # batch59 (#706/#707): مراكز Futures الافتراضية + الحد الفعلي للتنفيذ الآلي وحالته
+        from handlers.trading import vtrades_empty_text_b59 as _vte59
+        await update.message.reply_text(_vte59(user_id, vw), parse_mode=ParseMode.MARKDOWN)
         return
 
     engine = context.bot_data.get("raed_engine")

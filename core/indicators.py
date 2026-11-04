@@ -180,12 +180,27 @@ _AR_MONTHS_B50 = ["يناير", "فبراير", "مارس", "أبريل", "ما�
                   "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر"]
 
 
-def volume_candle_label_ar(date_str: str) -> str:
+def volume_candle_open_hour(candles: list, now: Optional[float] = None):
+    """batch59 (#694): ساعة افتتاح (UTC) آخر شمعة مكتملة — OKX اليومية 16:00؛ الأسهم المُرمَّزة/غيرها قد تختلف."""
+    try:
+        cs = list(candles or [])
+        if last_candle_is_forming(cs, now) and len(cs) >= 3:
+            cs = cs[:-1]
+        sec = _candle_ts_seconds(cs[-1]) if cs else None
+        return int(time.gmtime(sec).tm_hour) if sec else None
+    except Exception:
+        return None
+
+
+def volume_candle_label_ar(date_str: str, open_hour_utc=16) -> str:
     """batch50: وصف مقروء لشمعة الحجم: «29→30 أكتوبر» (شمعة OKX اليومية تفتح 16:00 UTC وتغلق 16:00 اليوم التالي)،
     فلا يلتبس التاريخ المعروض بيوم الإغلاق. '' إن كان التاريخ غير صالح."""
     try:
         import datetime as _dt
         d0 = _dt.datetime.strptime(str(date_str)[:10], "%Y-%m-%d").date()
+        if open_hour_utc is not None and int(open_hour_utc) != 16:
+            # batch59 (#694): شمعة لا تفتح 16:00 UTC (جلسة سوق/يوم UTC) — تاريخ يوم واحد بلا «→»
+            return f"{d0.day} {_AR_MONTHS_B50[d0.month - 1]}"
         d1 = d0 + _dt.timedelta(days=1)
         if d0.month == d1.month:
             return f"{d0.day}→{d1.day} {_AR_MONTHS_B50[d0.month - 1]}"
@@ -250,6 +265,8 @@ def candles_diag(candles: list) -> str:
         t = _candle_ts_seconds(c) if isinstance(c, dict) else None
         return time.strftime("%Y-%m-%d %H:%MZ", time.gmtime(t)) if t else "?"
     src = candles[-1].get("source", "?") if isinstance(candles[-1], dict) else "?"
+    if src in ("?", None, ""):   # batch59 (#693): آخر شمعة بلا وسم مصدر — أقرب شمعة موسومة، وإلا «غير محدد»
+        src = next((c.get("source") for c in reversed(candles[-10:]) if isinstance(c, dict) and c.get("source")), "غير محدد")
     # الشرطة السفلية تكسر Markdown v1 في تيليجرام (okx_perp) → نستبدلها
     src = str(src).replace("_", "-")
     forming = "جارية" if last_candle_is_forming(candles) else "مكتملة"
