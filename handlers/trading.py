@@ -3483,6 +3483,10 @@ async def _open_virtual_futures_b58(user_id, symbol, side, price, amount, levera
         f"💥 سعر التصفية: {_liq_txt}",
         f"⚖️ الخسارة عند الوقف ≈ ${_loss:,.2f} شاملة الرسوم ({_lp:.0f}% من الهامش)",
         *([f"⚠️ الوقف يستهلك {_lp:.0f}% من الهامش — رافعة مرتفعة نسبةً إلى مسافة الوقف"] if _lp >= 30 else []),
+        # batch59b (#735): الوقف قريب من التصفية (< نصف ATR) — الانزلاق عند الكسر قد يبلغ التصفية قبل تنفيذ الوقف
+        *([f"⚠️ الوقف يبعد {abs(sl - float(pos['liq_price'])) / ep * 100:.1f}% فقط عن سعر التصفية (أقل من نصف ATR) — "
+           f"الانزلاق قد يصل للتصفية قبل الوقف؛ خفّض الرافعة"]
+          if (lev > 1 and atr_pct and abs(sl - float(pos['liq_price'])) < 0.5 * float(atr_pct) / 100 * ep) else []),
         *([_expo] if _expo else []),
         f"💰 الرصيد المتبقي: ${vw.balance:,.2f}",
         "",

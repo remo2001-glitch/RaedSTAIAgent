@@ -8,7 +8,10 @@ CoinGecko · Binance · DeFiLlama · CryptoPanic
 """
 
 import asyncio
-from core.symbol_classify import REAL_CRYPTO_X_TICKERS  # symbol_classify_fix: مصدر واحد للاستثناء
+from core.symbol_classify import REAL_CRYPTO_X_TICKERS as _RCX_B59, COMMODITY_X_TICKERS as _CXT_B59  # symbol_classify_fix: مصدر واحد للاستثناء
+# batch59b (#734): رموز تبدأ بـX وليست أسهماً مُرمَّزة = العملات الحقيقية + السلع (XAG = الفضة). كان XAG يُعامل كسهم
+# فتُتخطّى شموع العقد الدائم وتُجلب شموع سهم AG من Yahoo مُعايَرة على سعر الفضة (ATR 5.3% بدل 3.4%).
+REAL_CRYPTO_X_TICKERS = frozenset(_RCX_B59 | _CXT_B59)
 import json
 import time
 import re
@@ -568,6 +571,17 @@ _OKX_SPOT_ALIASES: dict = {
     "XAUT":   "XAUt",    # Tether Gold — OKX يستخدم t صغير
     "XPCY":   "xPCY",    # Pacer ETF — OKX يستخدم lowercase x
 }
+
+
+def _lbl_src_b59(candles, src: str):
+    """batch59b (#736): وسم مصدر الشموع الاحتياطية (Yahoo/CoinGecko) — كان سطر الشموع يعرض «غير محدد»."""
+    try:
+        for c in candles or []:
+            if isinstance(c, dict) and not c.get("source"):
+                c["source"] = src
+    except Exception:
+        pass
+    return candles
 
 
 def _clean_symbol(symbol: str) -> str:
@@ -1214,6 +1228,7 @@ class DataLayer:
         cg_days    = min(limit, 2000)
         cg_candles = await self._ohlcv_coingecko(symbol, cg_days)
         if len(cg_candles) >= 10:
+            cg_candles = _lbl_src_b59(cg_candles, "coingecko")
             _store(key, cg_candles, "ohlcv")
             return cg_candles
 
@@ -1225,6 +1240,7 @@ class DataLayer:
 
         # إذا CoinGecko أعطى بيانات قليلة — نُعيدها على أي حال
         if cg_candles:
+            cg_candles = _lbl_src_b59(cg_candles, "coingecko")
             _store(key, cg_candles, "ohlcv")
             return cg_candles
 
@@ -1239,6 +1255,7 @@ class DataLayer:
                 yahoo_candles = await self._ohlcv_yahoo(_yahoo_sym, days=max(limit, 90))
                 if yahoo_candles and len(yahoo_candles) >= 10:
                     logger.info(f"DL1b: {symbol} ← Yahoo({_yahoo_sym}) {len(yahoo_candles)} شمعة")
+                    yahoo_candles = _lbl_src_b59(yahoo_candles, "yahoo")   # batch59b (#736)
                     _store(key, yahoo_candles, "ohlcv")
                     return yahoo_candles
         elif _stock_info.get("is_stock") and symbol.upper().startswith("X"):
@@ -1282,6 +1299,7 @@ class DataLayer:
                             logger.info(f"T10b_scaling: {symbol} ← Yahoo({_yahoo_sym}) scaled×{_scale:.4f} {len(yahoo_candles)} شمعة")
                     except Exception as _e_sc:
                         logger.debug(f"T10b_scaling error: {_e_sc}")
+                    yahoo_candles = _lbl_src_b59(yahoo_candles, "yahoo")   # batch59b (#736)
                     _store(key, yahoo_candles, "ohlcv")
                     return yahoo_candles
 

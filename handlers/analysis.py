@@ -2895,13 +2895,16 @@ def _build_professional_block(
         if _whale_ratio > 0:
             # batch49 (قرار 11): المصدر نسبة حسابات Long/Short على OKX (ليست محافظ حيتان) — يُوضَّح للأصول المُرمَّزة/الذهب
             _whale_src_b49 = " — مصدر: نسبة حسابات Long/Short في OKX (ليست محافظ حيتان)" if (_is_x_asset or _is_commodity(symbol)) else ""
-            deriv_lines.append(f"• Whale Ratio{_wr_txt}: {_whale_sig}{_whale_note_pro}{_whale_src_b49} — للعرض فقط (لا يدخل في الثقة)")
+            # batch59b (#737): نسبة متطرفة (>3 أو <0.33) تُوسم — عيّنة حسابات لا حجم مراكز
+            _whale_ext_b59 = (" — قراءة متطرفة: عيّنة حسابات OKX فقط، لا تعكس حجم المراكز"
+                              if (_whale_ratio > 3.0 or 0 < _whale_ratio < 0.33) else "")
+            deriv_lines.append(f"• Whale Ratio{_wr_txt}: {_whale_sig}{_whale_note_pro}{_whale_src_b49}{_whale_ext_b59} — للعرض فقط (لا يدخل في الثقة)")
         else:
             deriv_lines.append("• Whale Ratio: ⚪ غير متاح (لا بيانات لهذا الأصل)")
     # TVL من On-chain data
     _onchain = tech.get("onchain_data", {}) or {}
     _tvl = float(_onchain.get("tvl") or 0)
-    if _tvl > 0 and not _is_perp_asset:
+    if _tvl > 0 and not _is_perp_asset and not _is_commodity(symbol):   # batch59b: TVL لا يخص السلع (الذهب/الفضة)
         _tvl_chg = float(_onchain.get("tvl_change_1d", 0) or 0)
         # tvl_synthetic_fix: TVL العام غير ذي صلة للأصول المُرمَّزة
         # batch54 (#468): صياغة واحدة للـTVL لكل الأصول
