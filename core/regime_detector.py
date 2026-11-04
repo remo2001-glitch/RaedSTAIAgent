@@ -99,6 +99,20 @@ class RegimeResult:
     market_phase:   str = "unknown" # "Accumulation" | "Distribution" | "Markup" | "Markdown"
 
 
+def _strong_bear_b58(result) -> bool:
+    """batch58 (#651): هبوط قائم — نفس قاعدة /signal (هابط أو السعر ≤ −3% عن EMA50، ADX ≥ 25، −DI أعلى بـ3)."""
+    try:
+        m = getattr(result, "metrics", None) or {}
+        reg = str(getattr(getattr(result, "regime", ""), "value", getattr(result, "regime", "")) or "").upper()
+        desc = str(getattr(result, "description_ar", "") or "")
+        pve = m.get("price_vs_ema50")
+        below = pve is not None and float(pve) <= -3.0
+        return (("BEAR" in reg or "هابط" in desc or below) and float(m.get("adx", 0) or 0) >= 25
+                and float(m.get("di_minus", 0) or 0) - float(m.get("di_plus", 0) or 0) >= 3)
+    except Exception:
+        return False
+
+
 def _adx_fmt_b57(adx) -> str:
     """batch57 (#660): عند حد 20/25 يُعرض بمنزلة عشرية (19.8 لا «20») كي لا يتناقض التصنيف مع الرقم المعروض."""
     try:
@@ -635,7 +649,14 @@ class RegimeDetector:
             "arbitrage": "تداول داخل النطاق", "volatility_expansion": "توسّع التقلب",
             "reduce_size": "تقليل الحجم", "on_chain_accumulation": "تجميع على السلسلة",
         }
-        strategies_txt = " · ".join(_STRAT_AR.get(s, s.replace("_", " ")) for s in result.strategies)
+        _strats = list(result.strategies or [])
+        if _strong_bear_b58(result) and "mean_reversion" in _strats:
+            # batch58 (#651، قرار رحال): لا «ارتداد للمتوسط» ضمن الموصى به في هبوط قائم (عرض؛ منطق الإشارة كما هو)
+            _strats = [x for x in _strats if x != "mean_reversion"] or ["reduce_exposure"]
+            _strats_note = " (الارتداد للمتوسط معطّل في الهبوط القائم)"
+        else:
+            _strats_note = ""
+        strategies_txt = " · ".join(_STRAT_AR.get(s, s.replace("_", " ")) for s in _strats) + _strats_note
         return (
             f"📊 *حالة السوق الحالية*\n"
             f"━━━━━━━━━━━━━━━━━━\n"

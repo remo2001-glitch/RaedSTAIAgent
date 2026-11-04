@@ -27,6 +27,9 @@ class VirtualWallet:
         self.profit    = wallet_data.get("profit",    0.0)
         self.positions = wallet_data.get("positions", {})
         self.history   = wallet_data.get("history",   [])
+        # batch58 (البند 7ب، قرار رحال 2026-11-04): مراكز Futures افتراضية منفصلة عن Spot
+        # (حتى لا تعاملها مسارات Spot — الوقف/الهدف لـLong فقط — كمراكز شراء)
+        self.futures   = wallet_data.get("futures",   {}) or {}
 
     def to_dict(self) -> dict:
         return {
@@ -34,12 +37,20 @@ class VirtualWallet:
             "invested":  round(self.invested, 2),
             "profit":    round(self.profit, 2),
             "positions": self.positions,
+            "futures":   self.futures,
             "history":   self.history[-HISTORY_CAP:],  # batch55 (#552): كان 50 قيداً (≈25 صفقة شراء+بيع) فتسقط الصفقات من /stats والتقارير
         }
 
     @property
+    def futures_margin(self) -> float:
+        try:
+            return round(sum(float(p.get("margin", 0) or 0) for p in self.futures.values()), 2)
+        except Exception:
+            return 0.0
+
+    @property
     def total_value(self) -> float:
-        return round(self.balance + self.invested, 2)
+        return round(self.balance + self.invested + self.futures_margin, 2)
 
     @property
     def total_return_pct(self) -> float:
@@ -246,6 +257,159 @@ class VirtualWallet:
             "trade": trade,
         }
 
+    # ── Futures افتراضية (batch58 — البند 7ب) ──────────────────────────────
+    # تدريب فقط: هامش معزول، رسوم Taker تقديرية، تصفية مبسّطة. لا أي أمر حقيقي.
+    FUT_MAX_LEVERAGE = 10      # سقف افتراضي محافظ (الحقيقي مؤجل حتى نجاح تجربة الدفعة 43)
+    FUT_FEE_RATE     = 0.0005  # 0.05% من القيمة الاسمية لكل جهة
+    FUT_MMR          = 0.005   # هامش الصيانة 0.5%
+
+    @classmethod
+    def futures_liq_price(cls, side: str, entry: float, leverage: int) -> float:
+        lev = max(1, int(leverage or 1))
+        if str(side).lower() in ("long", "buy"):
+            return max(entry * (1 - 1.0 / lev + cls.FUT_MMR), 0.0)
+        return entry * (1 + 1.0 / lev - cls.FUT_MMR)
+
+    def open_futures(self, symbol: str, side: str, price: float, margin_usd: float,
+                     leverage: int = 1, stop_loss: float = 0.0, take_profit: float = 0.0,
+                     max_hold_hours: float = 0.0) -> dict:
+        """يفتح مركز Futures افتراضياً (Long/Short) بهامش معزول. margin_usd = الهامش المحجوز من الرصيد."""
+        symbol = symbol.upper().replace("USDT", "") or symbol.upper()
+        side = "long" if str(side).lower() in ("long", "buy", "flong") else "short"
+        lev = int(leverage or 1)
+        if lev < 1 or lev > self.FUT_MAX_LEVERAGE:
+            return {"ok": False, "msg": f"⚠️ الرافعة الافتراضية بين 1x و{self.FUT_MAX_LEVERAGE}x فقط"}
+        if symbol in self.futures:
+            return {"ok": False, "msg": f"⚠️ لديك مركز Futures افتراضي مفتوح على {symbol} — أغلقه أولاً"}
+        if price <= 0 or margin_usd <= 0:
+            return {"ok": False, "msg": f"{E['error']} سعر أو هامش غير صالح"}
+        notional = margin_usd * lev
+        fee = notional * self.FUT_FEE_RATE
+        if margin_usd + fee > self.balance:
+            return {"ok": False, "msg": f"{E['error']} رصيدك غير كافٍ للهامش والرسوم. المتاح: ${self.balance:,.2f}"}
+        max_allowed = self.total_value * (RISK["max_position_pct"] / 100)
+        if margin_usd > max_allowed:
+            return {"ok": False, "msg": (f"{E['warn']} الحد الأقصى لهامش صفقة واحدة {RISK['max_position_pct']}% "
+                                         f"من محفظتك (${max_allowed:,.2f})")}
+        liq = self.futures_liq_price(side, price, lev)
+        is_long = side == "long"
+        if stop_loss and stop_loss > 0:
+            if (is_long and stop_loss >= price) or ((not is_long) and stop_loss <= price):
+                return {"ok": False, "msg": "⚠️ وقف الخسارة في الجهة الخاطئة من سعر الدخول"}
+            if lev > 1 and ((is_long and stop_loss <= liq) or ((not is_long) and stop_loss >= liq)):
+                return {"ok": False, "msg": (f"⛔ الوقف ${stop_loss:,.4f} أبعد من سعر التصفية ${liq:,.4f} — "
+                                             f"خفّض الرافعة أو قرّب الوقف (الوقف يجب أن يُضرب قبل التصفية)")}
+        qty = notional / price
+        self.balance -= (margin_usd + fee)
+        self.futures[symbol] = {
+            "symbol": symbol, "side": side, "leverage": lev,
+            "entry": round(price, 8), "qty": round(qty, 10),
+            "margin": round(margin_usd, 2), "notional": round(notional, 2),
+            "fee_open": round(fee, 4), "liq_price": round(liq, 8),
+            "stop_loss": round(float(stop_loss or 0), 8), "take_profit": round(float(take_profit or 0), 8),
+            "opened_at": _now(), "max_hold_hours": float(max_hold_hours or 0),
+        }
+        self.history.append({"type": "fut_open", "symbol": symbol, "side": side, "leverage": lev,
+                             "price": price, "margin": round(margin_usd, 2), "notional": round(notional, 2),
+                             "fee": round(fee, 4), "time": _now()})
+        _side_ar = "📈 Long (شراء)" if is_long else "📉 Short (بيع على المكشوف)"
+        return {"ok": True, "position": self.futures[symbol], "msg": (
+            f"{E['ok']} تم فتح مركز Futures افتراضي\n\n"
+            f"{E['bank']} {symbol} | {_side_ar} | رافعة {lev}x (هامش معزول)\n"
+            f"💲 الدخول: ${price:,.4f}\n"
+            f"💵 الهامش: ${margin_usd:,.2f} | القيمة الاسمية: ${notional:,.2f}\n"
+            f"🧾 رسوم الفتح (تقديرية 0.05%): ${fee:,.2f}\n"
+            + (f"🛑 الوقف: ${stop_loss:,.4f}\n" if stop_loss else "")
+            + (f"🎯 الهدف: ${take_profit:,.4f}\n" if take_profit else "")
+            + f"💥 سعر التصفية التقريبي: ${liq:,.4f}\n"
+            f"💰 الرصيد المتبقي: ${self.balance:,.2f}\n\n"
+            f"{E['virtual']} صفقة تدريبية — لا أموال حقيقية؛ الرافعة الحقيقية غير مفعّلة")}
+
+    def futures_pnl(self, symbol: str, price: float) -> float:
+        pos = self.futures.get(symbol.upper())
+        if not pos:
+            return 0.0
+        d = (price - pos["entry"]) if pos["side"] == "long" else (pos["entry"] - price)
+        return d * float(pos["qty"])
+
+    def futures_exit_reason(self, symbol: str, price: float) -> str:
+        """liquidation | sl | tp | time | '' — التصفية أولاً ثم الوقف ثم الهدف ثم المدة."""
+        pos = self.futures.get(symbol.upper())
+        if not pos or price <= 0:
+            return ""
+        long_ = pos["side"] == "long"
+        liq, sl, tp = float(pos.get("liq_price") or 0), float(pos.get("stop_loss") or 0), float(pos.get("take_profit") or 0)
+        if int(pos.get("leverage", 1)) > 1 and liq > 0 and ((long_ and price <= liq) or ((not long_) and price >= liq)):
+            return "liquidation"
+        if sl > 0 and ((long_ and price <= sl) or ((not long_) and price >= sl)):
+            return "sl"
+        if tp > 0 and ((long_ and price >= tp) or ((not long_) and price <= tp)):
+            return "tp"
+        try:
+            mh = float(pos.get("max_hold_hours") or 0) or self.LEGACY_MAX_HOLD_HOURS
+            opened = datetime.fromisoformat(str(pos.get("opened_at")))
+            if opened.tzinfo is None:
+                opened = opened.replace(tzinfo=timezone.utc)
+            if (datetime.now(timezone.utc) - opened).total_seconds() / 3600.0 >= mh:
+                return "time"
+        except Exception:
+            pass
+        return ""
+
+    def close_futures(self, symbol: str, price: float, reason: str = "manual") -> dict:
+        symbol = symbol.upper().replace("USDT", "") or symbol.upper()
+        pos = self.futures.get(symbol)
+        if not pos:
+            return {"ok": False, "msg": f"{E['error']} لا يوجد مركز Futures افتراضي على {symbol}"}
+        if price <= 0:
+            return {"ok": False, "msg": f"{E['error']} سعر غير صالح"}
+        margin = float(pos["margin"])
+        if reason == "liquidation":
+            exit_px = float(pos.get("liq_price") or price)
+            gross, fee_close = -margin, 0.0          # التصفية تستهلك الهامش كاملاً
+        else:
+            exit_px = price
+            gross = self.futures_pnl(symbol, price)
+            fee_close = float(pos["qty"]) * price * self.FUT_FEE_RATE
+            gross = max(gross, -margin)              # الهامش المعزول حدّ الخسارة الأقصى
+        pnl = gross - float(pos.get("fee_open", 0) or 0) - fee_close
+        self.balance += max(margin + gross - fee_close, 0.0)
+        self.profit += pnl
+        pnl_pct = pnl / margin * 100 if margin > 0 else 0.0
+        del self.futures[symbol]
+        trade = {
+            "type": "sell", "futures": True, "symbol": symbol, "side": pos["side"],
+            "leverage": pos["leverage"], "price": exit_px, "entry": pos["entry"],
+            "quantity": pos["qty"], "amount": round(float(pos["qty"]) * exit_px, 2),
+            "pnl": round(pnl, 2), "pnl_pct": round(pnl_pct, 2),
+            "fees": round(float(pos.get("fee_open", 0) or 0) + fee_close, 4),
+            "reason": reason, "time": _now(),
+        }
+        self.history.append(trade)
+        _r_ar = {"liquidation": "💥 تصفية", "sl": "🛑 وقف الخسارة", "tp": "🎯 الهدف",
+                 "time": "⏰ انتهاء المدة", "manual": "إغلاق يدوي"}.get(reason, reason)
+        sign = "+" if pnl >= 0 else ""
+        return {"ok": True, "trade": trade, "msg": (
+            f"{E['ok']} أُغلق مركز Futures افتراضي — {symbol}\n\n"
+            f"• الجهة: {'Long' if pos['side'] == 'long' else 'Short'} | رافعة {pos['leverage']}x\n"
+            f"• السبب: {_r_ar}\n"
+            f"• الدخول: ${pos['entry']:,.4f} → الخروج: ${exit_px:,.4f}\n"
+            f"• الربح/الخسارة الصافي: {sign}${pnl:,.2f} ({sign}{pnl_pct:.1f}% من الهامش) — بعد رسوم ${trade['fees']:,.2f}\n"
+            f"💰 الرصيد الجديد: ${self.balance:,.2f}\n\n"
+            f"{E['virtual']} صفقة تدريبية — لا أموال حقيقية")}
+
+    def futures_report_lines(self, current_prices: dict | None = None) -> list:
+        out = []
+        for sym, pos in self.futures.items():
+            px = (current_prices or {}).get(sym, pos["entry"])
+            pnl = self.futures_pnl(sym, px)
+            pct = pnl / pos["margin"] * 100 if pos.get("margin") else 0
+            sign = "+" if pnl >= 0 else ""
+            out.append(f"  • {sym} {'Long' if pos['side'] == 'long' else 'Short'} {pos['leverage']}x @ ${pos['entry']:,.4f}"
+                       f" | هامش ${pos['margin']:,.2f} | تصفية ≈ ${pos['liq_price']:,.4f}\n"
+                       f"    {E['up'] if pnl >= 0 else E['down']} {sign}${pnl:,.2f} ({sign}{pct:.1f}% من الهامش)")
+        return out
+
     # ── تقرير المحفظة ───────────────────────────────────────────────────────
 
     def report(self, current_prices: dict | None = None) -> str:
@@ -268,7 +432,10 @@ class VirtualWallet:
                 f"    {emoji} {sign}${pos_pnl:,.2f} ({sign}{pos_pnl_p:.1f}%)"
             )
 
-        total = self.balance + positions_value
+        _fut_lines = self.futures_report_lines(current_prices)
+        _fut_val = sum(float(p["margin"]) + self.futures_pnl(s_, (current_prices or {}).get(s_, p["entry"]))
+                       for s_, p in self.futures.items())
+        total = self.balance + positions_value + _fut_val
         total_pnl = total - VIRTUAL_WALLET_START
         total_pnl_pct = (total_pnl / VIRTUAL_WALLET_START * 100) if VIRTUAL_WALLET_START > 0 else 0
         emoji_total = E["up"] if total_pnl >= 0 else E["down"]
@@ -294,6 +461,10 @@ class VirtualWallet:
             lines.append(f"📋 المراكز المفتوحة ({len(self.positions)}):")
             lines.extend(positions_lines)
             lines.append("")
+        if _fut_lines:
+            lines.append(f"⚡ مراكز Futures الافتراضية ({len(self.futures)}):")
+            lines.extend(_fut_lines)
+            lines.append("")
 
         lines += [
             f"📈 إجمالي الصفقات: {len(sells)}",
@@ -313,6 +484,7 @@ class VirtualWallet:
         self.invested  = 0.0
         self.profit    = 0.0
         self.positions = {}
+        self.futures   = {}
         self.history   = []
         return (
             f"{E['ok']} تمت إعادة ضبط المحفظة الافتراضية!\n"

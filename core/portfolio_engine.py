@@ -343,10 +343,12 @@ class CapitalAllocationEngine:
                 except Exception:
                     _all_tok_pe = False
                 _multi_noun_pe = "الأصول" if _all_tok_pe else "العملات"
+                # batch58 (#678): خطة BTC وحده — «السوق المرجعي» يكرر سطر السوق أعلى الرسالة
+                _btc_only_b58 = _single_pe and str((candidates or [{}])[0].get("symbol", "")).upper() in ("BTC", "BTC/USDT", "BTC-USDT")
                 cause = (f"{'ثقة الأصل' if _single_pe else 'أعلى ثقة بين ' + _multi_noun_pe + ' المحلَّلة'} {_top:.0%} — دون حد التوزيع "
                          f"على المحفظة ({self.ALLOC_MIN_CONFIDENCE:.0%}؛ وهو أعلى من "
                          f"حد الإشارة الفردية 55%) "
-                         + ("" if _all_tok_pe else f"— السوق المرجعي: {regime.description_ar}"))   # batch57 (#673): لا مرجع BTC لخطة أصول مُرمَّزة
+                         + ("" if (_all_tok_pe or _btc_only_b58) else f"— السوق المرجعي: {regime.description_ar}"))   # batch57 (#673): لا مرجع BTC لخطة أصول مُرمَّزة
             return (
                 f"⚠️ {'لا يوجد أصل مؤهل للتوزيع حالياً' if len(candidates or []) == 1 else 'لا توجد أصول مؤهلة للتوزيع حالياً'}\n"
                 f"السبب: {cause}"

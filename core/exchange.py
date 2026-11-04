@@ -40,6 +40,7 @@ class OrderResult:
     fee:          float = 0.0
     error:        str   = ""
     exchange:     str   = ""
+    fee_ccy:      str   = ""      # batch58 (#689): عملة الرسوم (BTC في شراء OKX، USDT في البيع)
 
 
 @dataclass
@@ -917,8 +918,9 @@ class OKXExchange(BaseExchange):
             success=True, order_id=d.get("ordId",""),
             symbol=symbol.upper(), side=d.get("side",""),
             qty=float(d.get("sz",0)), price=float(d.get("px",0) or 0),
-            status=d.get("state",""), filled_qty=float(d.get("fillSz",0) or 0),
-            avg_price=float(d.get("avgPx",0) or 0), exchange="okx")
+            status=d.get("state",""), filled_qty=float(d.get("accFillSz", d.get("fillSz",0)) or 0),
+            avg_price=float(d.get("avgPx",0) or 0), exchange="okx",
+            fee=abs(float(d.get("fee", 0) or 0)), fee_ccy=str(d.get("feeCcy", "") or "").upper())
 
     SUPPORTS_PROTECTION = True
 

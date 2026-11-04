@@ -812,6 +812,14 @@ def _llm_facts_ctx(sig) -> str:
         return ""
 
 
+def _adx_fmt58(adx) -> str:
+    try:
+        from core.regime_detector import _adx_fmt_b57
+        return _adx_fmt_b57(adx)
+    except Exception:
+        return f"{float(adx or 0):.0f}"
+
+
 def _fib_tight_b57(level: float, price: float, atr_pct: float = 0.0) -> str:
     """batch57 (#664): مستوى ضمن max(0.5%، نصف ATR) من السعر ليس حاجزاً فعلياً — يُوسَم بدل حذفه (لا يغيّر الدخول)."""
     try:
@@ -1141,6 +1149,38 @@ def _is_us_listed_symbol(sym: str) -> bool:
     except Exception:
         pass
     return False
+
+
+SIGNAL_DECISION_TTL_B58 = 1800   # /trade يقبل قرار /signal خلال 30 دقيقة فقط
+
+
+def _save_signal_decision_b58(user_id, symbol, mkttype, meta: dict, score: dict) -> dict:
+    """batch58 (#682–#684): يحفظ قرار /signal المعروض للمستخدم (الحكم، الحجم، الدخول/الوقف/الأهداف)
+    ليستخدمه /trade كما هو. عرض/تخزين فقط — لا يغيّر /signal."""
+    import json as _js58, time as _tm58, re as _re58
+    meta = meta or {}
+    _psr = str(meta.get("pos_size_rule", "") or "")
+    _m = _re58.match(r"\s*(\d+(?:\.\d+)?)\s*%", _psr)
+    rec = {
+        "symbol": str(symbol).upper(), "mkt": mkttype or "spot", "ts": _tm58.time(),
+        "verdict": str((score or {}).get("verdict", "")),
+        "verdict_reason": str((score or {}).get("header", ""))[:160],
+        "wait": bool(_meta_decision_wait(meta)),
+        "direction": str(meta.get("direction", "")),
+        "size_pct": float(_m.group(1)) if _m else 0.0,
+        "size_rule": _psr[:120],
+        "decision_label": str(meta.get("decision_label", ""))[:120],
+        "entry": float(meta.get("pro_entry") or 0), "sl": float(meta.get("pro_sl") or 0),
+        "tp1": float(meta.get("tp1_v") or meta.get("pro_tp") or 0), "tp2": float(meta.get("tp2_v") or 0),
+        "atr_pct": float(meta.get("atr_pct") or 0),
+        "confidence": float(meta.get("confidence_pct") or 0) / 100.0,
+        "rr": float(meta.get("rr_real") or 0),
+    }
+    try:
+        _sm.kv_set(f"sigdec:{int(user_id)}:{rec['symbol']}", _js58.dumps(rec))
+    except Exception:
+        pass
+    return rec
 
 
 def _meta_decision_wait(meta: dict) -> bool:
@@ -1525,7 +1565,7 @@ def _calc_fibonacci(candles: list, lookback: int = 60, price_cap_mult: float = 3
         return {}
 
 
-def _fmt_fib_lines(fib: dict, price: float) -> list:
+def _fmt_fib_lines(fib: dict, price: float, atr_pct: float = 0.0) -> list:
     """يُعيد قائمة سطور Fibonacci للدمج مع التقرير."""
     if not fib or not fib.get("levels"):
         return []
@@ -1553,8 +1593,8 @@ def _fmt_fib_lines(fib: dict, price: float) -> list:
         lines.append(f"  {icon} {label:>5} — {_fmt_price(val)}{mark}")
     ns = fib.get("nearest_support", 0)
     nr = fib.get("nearest_resistance", 0)
-    if ns > 0: lines.append(f"• أقرب دعم فيبو:    {_fmt_price(ns)} (Fib — يحتاج تأكيد سعري){_fib_tight_b57(ns, price)}")
-    if nr > 0: lines.append(f"• أقرب مقاومة فيبو: {_fmt_price(nr)} (Fib — يحتاج تأكيد سعري){_fib_tight_b57(nr, price)}")
+    if ns > 0: lines.append(f"• أقرب دعم فيبو:    {_fmt_price(ns)} (Fib — يحتاج تأكيد سعري){_fib_tight_b57(ns, price, atr_pct)}")
+    if nr > 0: lines.append(f"• أقرب مقاومة فيبو: {_fmt_price(nr)} (Fib — يحتاج تأكيد سعري){_fib_tight_b57(nr, price, atr_pct)}")
     return lines
 
 
@@ -1787,7 +1827,12 @@ def _build_professional_block(
                 _adx_mr = float(((getattr(regime, "metrics", None) or {}).get("adx")) or 0)
             _bear_mr = ("BEAR" in str(getattr(getattr(regime, "regime", ""), "value", getattr(regime, "regime", ""))).upper()
                         or "هابط" in str(getattr(regime, "description_ar", "") or ""))
-            if rsi <= 35 and _below50 and _bear_mr and _adx_mr > 30:
+            _sb58, _sb58_adx = _bear_confirmed_b56(regime)
+            if _sb58:
+                # batch58 (#651، قرار رحال): في الهبوط القائم لا يُوصى بالارتداد للمتوسط — المسار معطّل حتى يضعف الهبوط
+                _mr_first = (f"1. ⛔ مسار الارتداد للمتوسط معطّل: هبوط قائم (ADX {_adx_fmt58(_sb58_adx)}، −DI أعلى) — "
+                             f"لا ارتداد ضد الاتجاه؛ يُعاد تفعيله حين يضعف الهبوط (ADX < 25 أو تقارب DI)")
+            elif rsi <= 35 and _below50 and _bear_mr and _adx_mr > 30:
                 # batch56 (#586): ارتداد ضد هبوط قائم (ADX>30) ليس «شبه جاهز» — يُعرض كمخاطرة لا كشرط متحقق
                 _mr_first = (f"1. ⚠️ شرط الارتداد متحقق شكلياً (RSI 1D = {rsi:.0f} ≤ 35 ودون EMA50) لكن الهبوط قائم وقوي "
                              f"(ADX {_adx_mr:.0f}) — الارتداد ضد الاتجاه عالي المخاطر؛ المطلوب شمعة رفض واضحة وتحسّن الثقة")
@@ -2540,18 +2585,19 @@ def _build_professional_block(
     # كان وقف TRX 1.35×ATR من الدخول المعروض رغم قاعدة 1.5×ATR (الأساسان مختلفان).
     try:
         if pro_dir != "Short" and entry_agg > 0 and 0 < pro_sl < price and _eff_atr > 0:
-            _min_sl_b40 = entry_agg * (1 - 1.5 * _eff_atr)
+            # batch58 (#681، قرار رحال): 1.5×ATR بالدولار بدقة — ATR% محسوبة من السعر الحي، فتطبيقها كنسبة
+            # على دخول أدنى كان يعطي 1.48×ATR. المسافة الآن = 1.5 × ATR$ مهما كان موضع الدخول.
+            _atr_usd_b58 = _eff_atr * max(price, entry_agg)
+            _min_sl_b40 = entry_agg - 1.5 * _atr_usd_b58
             # batch41: وقف مبني على ATR فقط (لا مستوى Fibonacci) يُشتق من الدخول المعروض مباشرة؛ كان يُشتق من نقطة داخلية
             # تتبع السعر الحي فيتحرك الوقف والأهداف مع كل استدعاء رغم ثبات Entry 1 (BTC: 76,094 ثم 76,006 خلال 10 دقائق).
             if (not _sl_from_fib_b41) and pro_sl < _min_sl_b40:
-                _cap_b41 = 1 - max(0.07 if _is_x_asset else 0.10, 1.5 * _eff_atr)  # batch56 (5ب)
-                # batch49 (قرار 1): سقف الوقف يُحسب من الدخول المعروض لا من السعر الحي
-                # (XKORU: الدخول أدنى من السعر بـ6% فكان الوقف −1.4% من الدخول وR/R 9.7–11.8)
-                pro_sl = max(_min_sl_b40, entry_agg * _cap_b41)
+                # batch49 (قرار 1): الوقف من الدخول المعروض لا من السعر الحي؛ batch56 (5ب): لا سقف يضيّقه دون 1.5×ATR
+                # batch58: = 1.5×ATR$ بالضبط (كان max(سقف، 1.5×ATR%) على الدخول = نفس النتيجة لكن بنسبة السعر)
+                pro_sl = _min_sl_b40
                 sl_pct = abs(_sl_base_price - pro_sl) / max(_sl_base_price, 1e-9) * 100
             elif pro_sl > _min_sl_b40:
-                _cap_b40 = 1 - max(0.07 if _is_x_asset else 0.10, 1.5 * _eff_atr)  # batch56 (5ب)
-                pro_sl = max(_min_sl_b40, entry_agg * _cap_b40)
+                pro_sl = _min_sl_b40   # batch58: الوقف الأضيق من 1.5×ATR$ يُوسَّع إليه بالضبط
                 sl_pct = abs(_sl_base_price - pro_sl) / max(_sl_base_price, 1e-9) * 100
     except Exception:
         pass
@@ -2802,7 +2848,7 @@ def _build_professional_block(
             _dp15, _dm15 = _m15.get("di_plus"), _m15.get("di_minus")
             if _dp15 is not None and _dm15 is not None:
                 smc_lines.append(
-                    f"• ADX: {float(_m15.get('adx', 0) or 0):.0f} "
+                    f"• ADX: {_adx_fmt58(_m15.get('adx', 0))} "   # batch58 (#679): نفس عرض المؤشرات (19.9 لا 20)
                     f"(+DI: {float(_dp15):.0f} / -DI: {float(_dm15):.0f}) — "
                     f"{_RD15._di_dir_label(_dp15, _dm15, _m15.get('adx'))}")
                 _note15 = _RD15._di_conflict_note(regime, _m15).strip("\n")
@@ -3309,6 +3355,7 @@ def _build_professional_block(
         "rsi": rsi, "direction": direction, "is_x_asset": _is_x_asset,
         "confirmed": _confirmed, "rr_real": rr_real if "rr_real" in dir() else None,
         "decision_label": locals().get("_decision_label", ""),
+        "pos_size_rule": locals().get("_pos_size_rule", ""),   # batch58: لقرار /trade
         "price": price,
         "fear_greed": (getattr(regime, "metrics", None) or {}).get("fear_greed") if regime is not None else None,
         "cvd_available": bool(_cvd_oc_f.get("cvd_signal")) if isinstance(_cvd_oc_f, dict) else None,
@@ -4767,7 +4814,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             tier=tier2,
             is_stock=_is_perp_sig,
             mtf_status=_mtf_confirm if "_mtf_confirm" in dir() else "")
-        fib_lines  = _fmt_fib_lines(fib, price)
+        fib_lines  = _fmt_fib_lines(fib, price, atr_pct)   # batch58 (#680): حد «ملاصق» = max(0.5%، ½ATR)
 
         # confidence_header_sync_fix: رأس الرسالة (engine.signal_layer.
         # format_ar لاحقاً) يعرض signal.confidence — القيمة الأصلية وقت
@@ -5014,6 +5061,11 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except (TypeError, ValueError):
                     pass
                 _score_result = evaluate_signal(_si)
+                # batch58 (#682): سجل قرار /signal المعروض — /trade ينفّذ هذا القرار نفسه لا منطقاً مستقلاً
+                try:
+                    _save_signal_decision_b58(user_id, symbol, _mkt_arg_sig, _sm_sig, _score_result)
+                except Exception as _sd58:
+                    logger.debug(f"signal decision save: {_sd58}")
                 _scorer_header = f"\n{_score_result['header']}\n"
                 _scorer_footer = f"\n\n{_score_result['footer']}"
             except Exception as _sc_e:
@@ -6731,7 +6783,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"build_professional_block CRASH [{type(_pb_err).__name__}]: {_pb_err}", exc_info=True)
             pro_block_a = f"⚠️ تعذّر بناء التحليل التفصيلي: {type(_pb_err).__name__}: {str(_pb_err)[:80]}"
             _sig_meta_an = {}
-        fib_lines_a = _fmt_fib_lines(fib_a, price)
+        fib_lines_a = _fmt_fib_lines(fib_a, price, locals().get("_atr_a") or 0.0)
 
         # NYSE_hours_fix: تنبيه ساعات السوق في cmd_analyze
         # نستخدم _display_symbol_an (XSPY) وليس symbol (SPY)

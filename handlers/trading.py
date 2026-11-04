@@ -884,6 +884,7 @@ async def callback_execmode(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Futures/رافعة: التنفيذ الحقيقي يدعم Spot فقط حالياً — نمنع التنفيذ الصامت كـ Spot
     _fut_sel = context.user_data.pop("_exec_fut", "")
+    context.user_data["_exec_fut_side"] = _fut_sel   # batch58: Futures افتراضية تحتاج الجهة
     if mode == "real" and (_fut_sel in ("flong", "fshort") or leverage_cb > 1):
         await query.edit_message_text(
             "⚠️ *التنفيذ الحقيقي على Futures/الرافعة غير مدعوم حالياً*\n\n"
@@ -1344,6 +1345,19 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 engine.risk_engine.format_assessment_ar(risk, symbol),
                 parse_mode=ParseMode.MARKDOWN); return
 
+        # batch58 (#682): الشراء الحقيقي يتبع قرار /signal — لا تنفيذ مع «انتظار»/AUTO-FAIL (البيع/الإغلاق مسموح)
+        if has_live and trade_dir == "long":
+            try:
+                from handlers.trade import _signal_decision as _sd58, _signal_gate_b58 as _sg58
+                _gate58 = _sg58(_sd58(user_id, symbol), symbol, price)
+            except Exception as _ge58:
+                logger.warning(f"execute signal gate: {_ge58}")
+                _gate58 = "⚠️ تعذّر التحقق من قرار /signal — لا تنفيذ حقيقي"
+            if _gate58:
+                await msg.edit_text(_gate58 + "\n\nℹ️ الشراء الحقيقي يتبع قرار /signal (الوضع الافتراضي غير متأثر)",
+                                    parse_mode=ParseMode.MARKDOWN)
+                return
+
         # M#89: احترام حجم المستخدم بالضبط
         # risk_engine قد يُصغِّر الحجم للحماية — لكن لا يُكبِّره أبداً
         final_size = min(float(risk.approved_size or size_usd),
@@ -1381,6 +1395,21 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # استرجاع sl/tp المحفوظة من execmode callback
         _exec_sl_override = context.user_data.pop("_exec_sl", None)
         _exec_tp_override = context.user_data.pop("_exec_tp", None)
+
+        # batch58 (البند 7ب، قرار رحال 2026-11-04): Futures افتراضية (Long/Short برافعة) — المحفظة الافتراضية فقط
+        _fut_side58 = (context.user_data.pop("_exec_fut_side", "") if context.user_data else "") or ""
+        try:
+            _lev58 = int((context.user_data.pop("_exec_leverage", 1) if context.user_data else 1) or 1)
+        except (TypeError, ValueError):
+            _lev58 = 1
+        if not has_live and (_fut_side58 in ("flong", "fshort") or _lev58 > 1):
+            await msg.edit_text(_clean(await _open_virtual_futures_b58(
+                user_id, symbol, ("long" if (_fut_side58 == "flong" or (not _fut_side58 and is_buy)) else "short"),
+                price, final_size, _lev58, _exec_sl_override or float(risk.stop_loss_pct or 5),
+                _exec_tp_override or float(risk.take_profit_pct or 6), atr_pct,
+                float(getattr(risk, "max_hold_hours", 0) or 0), _size_note)),
+                parse_mode=ParseMode.MARKDOWN)
+            return
 
         # اختيار أفضل منصة إذا live
         best_ex = None
@@ -1664,7 +1693,8 @@ async def cmd_trades(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lines.append("")
         total = sum(t.pnl_usd for t in trades if t.status == "CLOSED")
         lines += ["━━━━━━━━━━━━━━━━━━",
-                   f"💹 PnL المغلق ({_period_label}): ${total:+,.2f}"]
+                   f"💹 PnL المغلق الصافي ({_period_label}): "
+                   + (f"{'+' if total >= 0 else '-'}${abs(total):,.4f}" if abs(total) < 0.1 else f"${total:+,.2f}")]
         _close_rows = [[InlineKeyboardButton(f"🔴 إغلاق {t.symbol}",
                                               callback_data=f"rclose_{t.symbol}")]
                        for t in trades if t.status == "OPEN"][:8]
@@ -3342,6 +3372,89 @@ async def cb_goto_trades(update, context):
         logger.error(f"cb_goto_trades: {e}")
 
 
+# ════════════════════════════════════════════════════════════════
+# batch58: Futures افتراضية — فتح / عرض / إغلاق
+# ════════════════════════════════════════════════════════════════
+async def _open_virtual_futures_b58(user_id, symbol, side, price, margin, leverage,
+                                    sl_pct, tp_pct, atr_pct, max_hold, size_note="") -> str:
+    from core.state_manager import state_manager as _sm_vf
+    from core.virtual_wallet import VirtualWallet as _VW_vf
+    is_long = side == "long"
+    ep = price * (1.001 if is_long else 0.999)        # انزلاق افتراضي 0.1% كما في Spot
+    sl_pct = float(sl_pct or 5)
+    if atr_pct and atr_pct > 0:
+        sl_pct = max(sl_pct, 1.5 * float(atr_pct))    # نفس قاعدة الوقف ≥1.5×ATR
+    tp_pct = float(tp_pct or 6)
+    sl = ep * (1 - sl_pct / 100) if is_long else ep * (1 + sl_pct / 100)
+    tp = ep * (1 + tp_pct / 100) if is_long else ep * (1 - tp_pct / 100)
+    vw = _VW_vf(_sm_vf.get_virtual_wallet(user_id) or {})
+    res = vw.open_futures(symbol, side, ep, float(margin), int(leverage), sl, tp, max_hold)
+    if not res.get("ok"):
+        return res.get("msg", "⚠️ تعذّر فتح المركز")
+    _sm_vf.save_virtual_wallet(user_id, vw.to_dict())
+    _risk_usd = abs(ep - sl) * float(res["position"]["qty"])
+    return (res["msg"] + (f"\n{size_note}" if size_note else "")
+            + f"\n\n⚖️ الخسارة عند الوقف ≈ ${_risk_usd:,.2f} ({_risk_usd / float(margin) * 100:.0f}% من الهامش)"
+            + "\n📋 إدارة المراكز: /vfutures")
+
+
+async def cmd_vfutures(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """batch58: مراكز Futures الافتراضية مع الربح/الخسارة الحي وأزرار الإغلاق."""
+    from core.state_manager import state_manager as _sm_vf
+    from core.virtual_wallet import VirtualWallet as _VW_vf
+    user_id = update.effective_user.id
+    vw = _VW_vf(_sm_vf.get_virtual_wallet(user_id) or {})
+    if not vw.futures:
+        await update.message.reply_text(
+            "⚡ لا توجد مراكز Futures افتراضية مفتوحة.\n"
+            "للفتح: `/execute BTC buy 100` ثم اختر Futures Long/Short والرافعة ثم 🎮 افتراضي",
+            parse_mode="Markdown")
+        return
+    engine = _eng(context)
+    prices = {}
+    for sym in vw.futures:
+        try:
+            pd = await engine.data_layer.get_price(sym) if engine else None
+            if pd and float(pd.get("price", 0) or 0) > 0:
+                prices[sym] = float(pd["price"])
+        except Exception:
+            pass
+    lines = ["⚡ *مراكز Futures الافتراضية*", "━━━━━━━━━━━━━━━━━━"] + vw.futures_report_lines(prices)
+    lines += ["", "🎮 تدريب فقط — هامش معزول ورسوم تقديرية 0.05%؛ الرافعة الحقيقية غير مفعّلة"]
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"🔴 إغلاق {s_}", callback_data=f"vfclose_{s_}")]
+                               for s_ in list(vw.futures)[:8]])
+    await update.message.reply_text("\n".join(lines), reply_markup=kb)
+
+
+async def cb_vfclose(update, context):
+    query = update.callback_query
+    try:
+        await query.answer()
+    except Exception:
+        pass
+    from core.state_manager import state_manager as _sm_vf
+    from core.virtual_wallet import VirtualWallet as _VW_vf
+    user_id = query.from_user.id
+    sym = query.data[len("vfclose_"):].upper()
+    vw = _VW_vf(_sm_vf.get_virtual_wallet(user_id) or {})
+    if sym not in vw.futures:
+        await query.edit_message_text(f"❌ لا يوجد مركز Futures افتراضي على {sym}")
+        return
+    price = float(vw.futures[sym]["entry"])
+    engine = context.bot_data.get("raed_engine")
+    try:
+        pd = await engine.data_layer.get_price(sym) if engine else None
+        if pd and float(pd.get("price", 0) or 0) > 0:
+            price = float(pd["price"])
+    except Exception:
+        pass
+    reason = vw.futures_exit_reason(sym, price)
+    res = vw.close_futures(sym, price, "liquidation" if reason == "liquidation" else "manual")
+    if res.get("ok"):
+        _sm_vf.save_virtual_wallet(user_id, vw.to_dict())
+    await query.edit_message_text(res.get("msg", "⚠️ تعذّر الإغلاق"))
+
+
 def register(app):
     app.add_handler(CommandHandler("autotrade",     cmd_autotrade))
     app.add_handler(CommandHandler("execute",       cmd_execute))
@@ -3386,6 +3499,8 @@ def register(app):
     app.add_handler(CallbackQueryHandler(cb_profile_violations, pattern=r"^profile_violations$"))
     # vtrades callbacks
     app.add_handler(CallbackQueryHandler(cb_vclose,       pattern=r"^vclose_"))
+    app.add_handler(CallbackQueryHandler(cb_vfclose,      pattern=r"^vfclose_"))   # batch58
+    app.add_handler(CommandHandler("vfutures",      cmd_vfutures))                  # batch58
     app.add_handler(CallbackQueryHandler(cb_rclose,       pattern=r"^rclose_"))
     app.add_handler(CallbackQueryHandler(cb_goto_vtrades, pattern=r"^goto_vtrades$"))
     app.add_handler(CallbackQueryHandler(cb_goto_trades,  pattern=r"^goto_trades$"))

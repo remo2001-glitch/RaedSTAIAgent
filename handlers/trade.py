@@ -167,6 +167,54 @@ def _fmt_price(p: float) -> str:
     return f"${p:.6f}"
 
 
+SIGNAL_DECISION_TTL = 1800
+
+
+def _signal_decision(user_id: int, base: str) -> dict:
+    """batch58: آخر قرار /signal للمستخدم على هذا الأصل (يحفظه /signal)."""
+    try:
+        raw = _sm().kv_get(f"sigdec:{int(user_id)}:{str(base).upper()}", "") or ""
+        return json.loads(raw) if raw else {}
+    except Exception:
+        return {}
+
+
+def _signal_gate_b58(rec: dict, base: str, price: float, now: float = None) -> str:
+    """batch58 (#682): يعيد سبب الرفض ('' = مسموح). /trade لا ينفّذ إلا قرار دخول صالح من /signal."""
+    now = now or time.time()
+    if not rec:
+        return (f"ℹ️ /trade ينفّذ قرار /signal نفسه.\n"
+                f"أرسل /signal {base} أولاً (Spot)، ثم /trade {base} خلال 30 دقيقة.")
+    if now - float(rec.get("ts") or 0) > SIGNAL_DECISION_TTL:
+        return f"⌛ آخر قرار /signal لـ {base} أقدم من 30 دقيقة — أعد /signal {base} ثم /trade {base}"
+    if str(rec.get("mkt", "spot")) != "spot":
+        return f"ℹ️ قرار /signal الأخير لـ {base} كان Futures — /trade حقيقي Spot فقط. أعد /signal {base} واختر Spot"
+    if str(rec.get("verdict", "")).upper() == "AUTO-FAIL":
+        return (f"⛔ *{base}* — لا تنفيذ: تقييم /signal AUTO-FAIL\n"
+                f"{str(rec.get('verdict_reason', '')).replace('*', '').strip()}")
+    if rec.get("wait") or float(rec.get("size_pct") or 0) <= 0:
+        return (f"⏳ *{base}* — لا تنفيذ: قرار /signal «انتظار»\n"
+                f"• الحجم في /signal: {rec.get('size_rule') or '0%'}")
+    if str(rec.get("direction", "")).lower() not in ("bullish", "long", "buy"):
+        return f"⏳ *{base}* — لا تنفيذ: /signal لا يعطي اتجاه شراء ({rec.get('direction') or 'غير مؤكد'})"
+    sl, tp1 = float(rec.get("sl") or 0), float(rec.get("tp1") or 0)
+    if sl <= 0 or tp1 <= 0:
+        return f"⚠️ *{base}* — قرار /signal بلا وقف/هدف صالح — لا تنفيذ"
+    if price <= sl:
+        return f"⛔ *{base}* — السعر الحالي {_fmt_price(price)} عند/دون وقف /signal {_fmt_price(sl)} — لا تنفيذ"
+    if price >= tp1:
+        return f"⛔ *{base}* — السعر الحالي تجاوز الهدف الأول {_fmt_price(tp1)} — لا تنفيذ بهذه البنية"
+    return ""
+
+
+def _qb58(q) -> str:
+    """batch58 (#688): كمية بلا صيغة علمية (8.781e-05 → 0.00008781)."""
+    try:
+        return f"{float(q):.8f}".rstrip("0").rstrip(".")
+    except Exception:
+        return str(q)
+
+
 # ── أعلام حالة المستخدم (Redis عبر state_manager.kv_*) ──────
 def _flag_get(user_id: int, name: str) -> bool:
     try:
@@ -226,29 +274,28 @@ async def _build_proposal(engine, user_id: int, base: str):
     if price <= 0:
         return None, f"❌ تعذَّر جلب سعر {base}"
 
-    candles = await engine.data_layer.get_ohlcv(base, "1d", 100) or []
-    rsi, atr_pct = 50.0, 2.0
-    try:
-        closes = [float(c.get("close", 0)) for c in candles if c.get("close")]
-        if len(closes) >= 15:
-            from core.indicators import wilder_rsi, wilder_atr_from_candles
-            rsi = float(wilder_rsi(closes, 14))
-            atr = float(wilder_atr_from_candles(candles, 14))
-            if atr > 0:
-                atr_pct = atr / price * 100
-    except Exception as e:
-        logger.debug(f"trade indicators: {e}")
-
-    if rsi > 70:
-        return None, (
-            f"⚠️ *{base}* — RSI={rsi:.0f} ذروة شراء\n\n"
-            f"🔍 مراقبة فقط — لا دخول حتى تصحيح RSI تحت 60\n"
-            f"الحجم الآن: *0%*\n\n"
-            f"⚠️ التحليل استرشادي — القرار للمستخدم")
-
-    sl_pct = min(max(atr_pct * 1.5, 2.0), 7.0 if _is_tokenized(base) else 10.0)
-    tp1_pct = sl_pct * 1.5
-    tp2_pct = sl_pct * 2.5
+    # batch58 (#682–#684، قرار رحال 2026-11-04): /trade ينفّذ قرار /signal نفسه —
+    # لا تنفيذ مع «انتظار» أو AUTO-FAIL، ونفس الوقف/الأهداف/الحجم المعروضة في /signal.
+    rec = _signal_decision(user_id, base)
+    gate = _signal_gate_b58(rec, base, price)
+    if gate:
+        return None, gate
+    atr_pct = float(rec.get("atr_pct") or 0) or 2.0
+    rsi = 50.0
+    sl_price = float(rec["sl"])
+    sl_pct = (price - sl_price) / price * 100
+    _min_sl = 1.5 * atr_pct                      # #681: ≥1.5×ATR بدقة من سعر التنفيذ
+    if sl_pct < _min_sl:
+        sl_pct = _min_sl
+        sl_price = price * (1 - sl_pct / 100)
+    tp1_price, tp2_price = float(rec["tp1"]), float(rec.get("tp2") or 0)
+    tp1_pct = (tp1_price / price - 1) * 100
+    tp2_pct = (tp2_price / price - 1) * 100 if tp2_price > price else tp1_pct
+    rr_now = tp1_pct / sl_pct if sl_pct > 0 else 0
+    if rr_now < 1.0:
+        return None, (f"⛔ *{base}* — لا حافة إحصائية عند السعر الحالي {_fmt_price(price)}\n"
+                      f"R/R الآن 1:{rr_now:.2f} (الهدف {_fmt_price(tp1_price)} +{tp1_pct:.1f}% مقابل وقف −{sl_pct:.1f}%)\n"
+                      f"لا تنفيذ — راجع /signal {base}")
 
     # الحجم: Risk Engine على إجمالي محفظة المستخدم الفعلية، ومحدود برصيد USDT المتاح
     ex = _get_exchange(engine, user_id)
@@ -271,10 +318,11 @@ async def _build_proposal(engine, user_id: int, base: str):
         pass
     from core.risk_engine import RiskDecision
     risk = engine.risk_engine.assess(
-        symbol=base, direction="long", confidence=0.70, price=price,
+        symbol=base, direction="long", confidence=float(rec.get("confidence") or 0.55), price=price,
         atr_pct=atr_pct, regime=regime_val,
         portfolio_value=equity if equity > 0 else None,
-        user_id=user_id, open_positions=open_map)
+        user_id=user_id, open_positions=open_map,
+        stop_pct=sl_pct / 100, target_pct=tp1_pct / 100)
     if risk.decision == RiskDecision.REJECT:
         return None, ("❌ *مرفوض من Risk Engine*\n\n"
                       + engine.risk_engine.format_assessment_ar(risk, base))
@@ -285,6 +333,10 @@ async def _build_proposal(engine, user_id: int, base: str):
     if ev_mult == 0:
         return None, f"⛔ مرفوض — حدث ماكرو حرج\n{ev_reason or ''}"
     size = min(float(risk.approved_size or 0) * float(ev_mult or 1.0), free * 0.95)
+    # batch58: لا يتجاوز نسبة الحجم التي عرضها /signal من المحفظة
+    _cap_sig = (equity if equity > 0 else total) * float(rec.get("size_pct") or 0) / 100
+    if _cap_sig > 0:
+        size = min(size, _cap_sig)
     try:
         min_ord = await ex.get_min_order_size(base)
     except Exception:
@@ -299,6 +351,8 @@ async def _build_proposal(engine, user_id: int, base: str):
         "tp1": price * (1 + tp1_pct / 100),
         "tp2": price * (1 + tp2_pct / 100),
         "size": round(size, 2), "rsi": rsi, "atr_pct": atr_pct,
+        "rr": rr_now, "sig_age_min": max(0, int((time.time() - float(rec.get("ts") or 0)) / 60)),
+        "sig_label": str(rec.get("decision_label") or ""), "sig_size": str(rec.get("size_rule") or ""),
         "created": time.time(),
     }, ""
 
@@ -315,7 +369,11 @@ def _proposal_text(p: dict) -> str:
         f"• وقف الخسارة: {_fmt_price(p['sl'])} (-{p['sl_pct']:.1f}%)\n"
         f"• الهدف: {_fmt_price(p['tp1'])} (+{p['tp1_pct']:.1f}%)\n"
         f"• هدف 2 (مرجعي): {_fmt_price(p['tp2'])} (+{p['tp2_pct']:.1f}%)\n"
+        f"• R/R عند السعر الحالي: 1:{p.get('rr', 0):.2f}\n"
         f"• SL/TP يوضعان على المنصة نفسها متى دعمت ذلك\n\n"
+        f"📡 المصدر: قرار /signal قبل {p.get('sig_age_min', 0)} دقيقة"
+        + (f" — {p['sig_label']}" if p.get("sig_label") else "") + "\n"
+        f"🛑 الوقف ≥ 1.5×ATR من سعر التنفيذ، والحجم ضمن حد /signal ومخاطرة الباقة\n\n"
         f"⚠️ التحليل استرشادي — القرار للمستخدم"
     )
 
@@ -503,7 +561,9 @@ async def _execute_trade(engine, user_id: int, p: dict, context,
         f"📊 المصدر: {source}\n"
         f"💰 سعر التنفيذ: {_fmt_price(trade.entry_price)}"
         + (" _(تقديري)_" if trade.fill_unconfirmed else "") + "\n"
-        f"📦 الكمية: {trade.qty:.6g} (${trade.size_usd:,.2f})\n"
+        f"📦 الكمية: {_qb58(getattr(trade, 'qty_gross', 0) or trade.qty)} (${trade.size_usd:,.2f})"
+        + (f" — المتاح بعد رسوم المنصة: {_qb58(trade.qty)}"
+           if (getattr(trade, 'qty_gross', 0) or 0) - trade.qty > 1e-12 else "") + "\n"
         f"🛑 وقف الخسارة: {_fmt_price(trade.stop_loss)}\n"
         f"🎯 الهدف: {_fmt_price(trade.take_profit)}\n"
         f"{trade.prot_note}\n"

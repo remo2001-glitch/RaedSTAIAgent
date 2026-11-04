@@ -312,6 +312,46 @@ class RaedEngine:
             )
         return best_info
 
+    async def _check_virtual_futures_b58(self) -> int:
+        """batch58 (البند 7ب): تصفية/وقف/هدف/مدة لمراكز Futures الافتراضية — لكل من لديه محفظة (لا مستخدمي التداول الآلي فقط)."""
+        from core.virtual_wallet import VirtualWallet as _VW_f
+        from core.state_manager import state_manager as _sm_f
+        closed = 0
+        try:
+            uids = _sm_f.list_wallet_user_ids() or []
+        except Exception:
+            uids = []
+        _px_cache = {}
+        for _uid in uids:
+            try:
+                _wd = _sm_f.get_virtual_wallet(_uid) or {}
+                if not _wd.get("futures"):
+                    continue
+                _vw = _VW_f(_wd)
+                _notes = []
+                for sym in list(_vw.futures):
+                    if sym not in _px_cache:
+                        pd = await self.data_layer.get_price(sym)
+                        _px_cache[sym] = float((pd or {}).get("price") or 0)
+                    px = _px_cache[sym]
+                    why = _vw.futures_exit_reason(sym, px)
+                    if why:
+                        r = _vw.close_futures(sym, px, why)
+                        if r.get("ok"):
+                            closed += 1
+                            _notes.append(r["msg"])
+                if _notes:
+                    _sm_f.save_virtual_wallet(_uid, _vw.to_dict())
+                    for n in _notes:
+                        try:
+                            if getattr(self, "_send_fn", None):
+                                await self._send_fn(n, user_id=_uid)
+                        except Exception:
+                            pass
+            except Exception as _e:
+                logger.debug(f"virtual futures check {_uid}: {_e}")
+        return closed
+
     async def _check_virtual_positions(self, regime) -> None:
         """
         يفحص المراكز المفتوحة في virtual wallet ويُغلقها إذا:
@@ -921,6 +961,10 @@ class RaedEngine:
 
             # 3.5 فحص وإغلاق المراكز التي بلغت TP أو SL
             await self._check_virtual_positions(regime)
+            try:
+                await self._check_virtual_futures_b58()
+            except Exception as _vf58:
+                logger.debug(f"virtual futures: {_vf58}")
 
             # 3.6 rejected_signal_eval_fix: تقييم افتراضي للإشارات
             # المرفوضة (نفس دورة الفحص كل 4 ساعات، لا جدولة منفصلة جديدة)

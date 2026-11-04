@@ -172,6 +172,14 @@ class RiskEngine:
         win_rate   = confidence
         stop_cfg   = max(self.cfg["default_stop_pct"], 0.001)   # لا قسمة على صفر
         target_cfg = max(self.cfg["default_target_pct"], 0.001)
+        # batch58 (#684): وقف/هدف الصفقة الفعليان (نسبة عشرية) إن مُرِّرا — المخاطرة بالدولار تتبع الوقف الحقيقي
+        try:
+            if kwargs and float(kwargs.get("stop_pct") or 0) > 0:
+                stop_cfg = max(float(kwargs["stop_pct"]), 0.001)
+            if kwargs and float(kwargs.get("target_pct") or 0) > 0:
+                target_cfg = max(float(kwargs["target_pct"]), 0.001)
+        except (TypeError, ValueError):
+            pass
         rr         = target_cfg / stop_cfg
         kelly_f    = (win_rate - (1 - win_rate) / max(rr, 0.001))
         kelly_f    = max(0, min(kelly_f, 0.25))   # Half-Kelly cap

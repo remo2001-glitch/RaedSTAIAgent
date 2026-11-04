@@ -539,6 +539,11 @@ async def safety_monitor_job(context: ContextTypes.DEFAULT_TYPE):
     try:
         was_active = engine.kill_switch.is_active
         await engine.run_safety_checks()
+        # batch58: مراكز Futures الافتراضية (تصفية/وقف/هدف) كل 5 دقائق — دورة الـ4 ساعات أبطأ من الرافعة
+        try:
+            await engine._check_virtual_futures_b58()
+        except Exception as _vf58:
+            logger.debug(f"virtual futures monitor: {_vf58}")
         # إذا فُعِّل Kill Switch الآن → أرسل تنبيهاً للمالك
         if engine.kill_switch.is_active and not was_active:
             owner_id_str = BOT_CONFIG.get("OWNER_CHAT_ID", "")

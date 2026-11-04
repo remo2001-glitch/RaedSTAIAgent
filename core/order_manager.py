@@ -82,9 +82,53 @@ class LiveTrade:
     ex_pending:        bool  = False  # أمر Limit قائم على المنصة نفسها
     close_failures:    int   = 0
     om_scope:          str   = ""     # لمن تتبع هذه الصفقة (user:<id> | global)
+    # ── الدفعة 58 (#685/#689): الكمية الفعلية والرسوم ───────────────
+    qty_gross:         float = 0.0    # الكمية المنفَّذة قبل خصم الرسوم (qty = المتاح فعلاً بعدها)
+    fee_open_usd:      float = 0.0    # رسوم الشراء بالدولار
+    fee_close_usd:     float = 0.0    # رسوم البيع بالدولار
+    fee_estimated:     bool  = False  # الرسوم مقدَّرة (المنصة لم تُعِدها)
+    dust_note:         str   = ""     # بقايا لا تُباع (أقل من الحد الأدنى)
 
 
 _LT_FIELDS = {f.name for f in fields(LiveTrade)}
+
+
+def _usd_b58(v: float) -> str:
+    """batch58: مبلغ صغير بالسنت (و4 منازل دون 0.10$) كي لا يظهر $+0.00 أو $+0.02 لربح صافٍ 0.0026."""
+    a = abs(float(v or 0))
+    s = f"{a:,.4f}" if a < 0.1 else f"{a:,.2f}"
+    return f"{'+' if v >= 0 else '-'}${s}"
+
+
+def _px_b58(p: float) -> str:
+    """batch58 (#688): نفس قاعدة أسعار /signal (منزلتان فوق 10$، 4 بين 1–10، أكثر للأصغر)."""
+    try:
+        p = float(p or 0)
+        if p <= 0:
+            return "$0"
+        if p >= 10:
+            return f"${p:,.2f}"
+        if p >= 1:
+            return f"${p:,.4f}"
+        return f"${p:.8f}".rstrip("0").rstrip(".")
+    except Exception:
+        return str(p)
+
+
+def _qty_b58(q: float) -> str:
+    try:
+        return f"{float(q):.8f}".rstrip("0").rstrip(".")
+    except Exception:
+        return str(q)
+
+
+def _prot_reason_b58(err: str) -> str:
+    e = str(err or "").lower()
+    if "insufficient" in e or "51008" in e:
+        return "الرصيد المتاح أقل من الكمية"
+    if "minimum" in e or "أقل من الحد" in e:
+        return "الكمية أقل من الحد الأدنى"
+    return str(err)[:60]
 
 
 def _num(v, default=0.0) -> float:
@@ -307,7 +351,9 @@ class OrderManager:
         avg    = float(result.avg_price or 0)
         status = str(result.status or "")
         if filled > 0 and avg > 0:
-            return {"filled": filled, "avg": avg, "status": status, "confirmed": True}
+            return {"filled": filled, "avg": avg, "status": status, "confirmed": True,
+                    "fee": float(getattr(result, "fee", 0) or 0),
+                    "fee_ccy": str(getattr(result, "fee_ccy", "") or "").upper()}
         if not result.order_id:
             return {"filled": filled, "avg": avg, "status": status, "confirmed": False}
         for i in range(attempts):
@@ -322,7 +368,9 @@ class OrderManager:
                                          ("FILLED", "FILLED_FULLY", "FULL_FILL", "FULL-FILL")):
                     px = o.avg_price or await self._ticker(symbol)
                     return {"filled": float(o.filled_qty), "avg": float(px),
-                            "status": st, "confirmed": True}
+                            "status": st, "confirmed": True,
+                            "fee": float(getattr(o, "fee", 0) or 0),
+                            "fee_ccy": str(getattr(o, "fee_ccy", "") or "").upper()}
                 if st in ("CANCELED", "CANCELLED", "REJECTED", "EXPIRED",
                           "CANCELED_BY_USER", "CANCEL", "DEACTIVATED"):
                     return {"filled": float(o.filled_qty or 0), "avg": float(o.avg_price or 0),
@@ -367,7 +415,11 @@ class OrderManager:
             trade.prot_note = "🛡️ SL/TP موضوعان على المنصة نفسها"
         else:
             logger.warning(f"protection فشلت {trade.symbol} [{self.scope}]: {err}")
-            trade.prot_note = "⚠️ تعذّر وضع SL/TP على المنصة — الحماية داخل البوت فقط"
+            # batch58 (#686): السبب + كيف تعمل الحماية البديلة
+            trade.prot_note = ("⚠️ تعذّر وضع SL/TP على المنصة"
+                               + (f" ({_prot_reason_b58(err)})" if err else "")
+                               + " — الحماية داخل البوت: يفحص السعر كل 30 ثانية ويبيع بسعر السوق عند بلوغ الوقف/الهدف "
+                               "(يتطلب أن يكون البوت يعمل)")
 
     async def _drop_protection(self, trade: LiveTrade) -> str:
         """
@@ -547,14 +599,21 @@ class OrderManager:
         if avg <= 0:
             avg = await self._ticker(symbol) or entry_price
 
+        # batch58 (#685/#689): المنصة قد تخصم رسوم الشراء من العملة نفسها (OKX/Bybit/Binance)
+        gross = float(filled)
+        net_qty, fee_open_usd, fee_est = await self._net_after_buy(symbol, gross, avg, fill)
+
         sl_price, tp_price = self._levels(True, avg, stop_loss_pct, take_profit_pct)
         trade = LiveTrade(
             trade_id=trade_id,
             symbol=symbol.upper(),
             side="Buy",
             entry_price=avg,
-            qty=filled,
-            size_usd=filled * avg,
+            qty=net_qty,
+            size_usd=gross * avg,
+            qty_gross=gross,
+            fee_open_usd=fee_open_usd,
+            fee_estimated=fee_est,
             stop_loss=sl_price,
             take_profit=tp_price,
             order_id=result.order_id,
@@ -573,8 +632,56 @@ class OrderManager:
         self._save_trade_to_redis(trade)
         self._fire(self.on_opened, trade)
         logger.info(f"✅ [{self.scope}] صفقة مفتوحة: {trade_id} | {symbol} "
-                    f"qty={filled} @ {avg} | {trade.prot_note}")
+                    f"qty={filled} (متاح {net_qty:g}) @ {avg} | {trade.prot_note}")
         return trade
+
+    EST_FEE_RATE = 0.001   # batch58: تقدير رسوم Taker عند غياب رقم المنصة (0.1%)
+
+    async def _net_after_buy(self, symbol: str, gross: float, avg: float, fill: dict) -> tuple:
+        """batch58 (#685): الكمية المتاحة فعلاً بعد الشراء = المنفَّذة − الرسوم إن خُصمت من العملة.
+        يُعيد (الكمية المتاحة، رسوم الشراء بالدولار، تقديرية؟). لا يزيد عن المنفَّذ أبداً."""
+        base = symbol.upper().split("/")[0].split("-")[0]
+        fee = abs(float((fill or {}).get("fee", 0) or 0))
+        ccy = str((fill or {}).get("fee_ccy", "") or "").upper()
+        net, fee_usd, est = gross, 0.0, False
+        if fee > 0 and ccy == base:
+            net, fee_usd = max(gross - fee, 0.0), fee * avg
+        elif fee > 0 and ccy in ("USDT", "USD", "USDC"):
+            fee_usd = fee
+        else:
+            est = True
+            fee_usd = gross * avg * self.EST_FEE_RATE
+        try:   # الرصيد الفعلي يحسم (رسوم مقرّبة في الواجهة/غير معادة) — فقط إن كان أقل من المنفَّذ
+            bal = await self.exchange.get_balance(base)
+            free = float(getattr(bal, "free", 0) or 0)
+            if 0 < free < net:
+                if est:
+                    fee_usd = (gross - free) * avg
+                net = free
+        except Exception:
+            pass
+        return (net if net > 0 else gross), fee_usd, est
+
+    async def _dust_note(self, symbol: str, price: float) -> str:
+        """batch58 (#690): بقايا أقل من الحد الأدنى للمنصة بعد البيع (تقريب الكمية لخطوة المنصة)."""
+        try:
+            base = symbol.upper().split("/")[0]
+            bal = await self.exchange.get_balance(base)
+            left = float(getattr(bal, "free", 0) or 0)
+            if left < 1e-10:   # بقايا حسابية لا وجود فعلي لها
+                return ""
+            rules = await self.exchange.get_symbol_rules(base) if hasattr(self.exchange, "get_symbol_rules") else {}
+            mn = float((rules or {}).get("min_qty") or 0)
+            if mn and left < mn and left * price < 0.05:
+                _lq = f"{left:.10f}".rstrip("0").rstrip(".")
+                return f"بقايا {_lq} {base} (≈${left * price:.4f}) أقل من الحد الأدنى للبيع — تبقى في حسابك"
+        except Exception:
+            pass
+        return ""
+
+    def _gross(self, trade) -> float:
+        g = float(getattr(trade, "qty_gross", 0) or 0)
+        return g if g > 0 else float(trade.qty or 0)
 
     def _fire(self, cb, trade):
         if cb:
@@ -592,8 +699,14 @@ class OrderManager:
         if exit_price <= 0:
             exit_price = trade.entry_price
         if trade.side.lower() in ("buy", "long"):
-            pnl_pct = (exit_price - trade.entry_price) / trade.entry_price * 100 if trade.entry_price else 0.0
-            pnl_usd = (exit_price - trade.entry_price) * trade.qty
+            # batch58 (#689): صافٍ بعد رسوم الشراء والبيع، بالكمية الفعلية المباعة والتكلفة الفعلية المدفوعة
+            if not (trade.fee_close_usd or 0) > 0:
+                trade.fee_close_usd = float(trade.qty or 0) * exit_price * self.EST_FEE_RATE
+                trade.fee_estimated = True
+            _cost = self._gross(trade) * trade.entry_price
+            _fee_open_quote = trade.fee_open_usd if self._gross(trade) - float(trade.qty or 0) <= 1e-15 else 0.0
+            pnl_usd = (float(trade.qty or 0) * exit_price - trade.fee_close_usd) - (_cost + _fee_open_quote)
+            pnl_pct = pnl_usd / _cost * 100 if _cost > 0 else 0.0
         else:
             pnl_pct = (trade.entry_price - exit_price) / trade.entry_price * 100 if trade.entry_price else 0.0
             pnl_usd = (trade.entry_price - exit_price) * trade.qty
@@ -616,8 +729,11 @@ class OrderManager:
                 f"• السبب: {CLOSE_REASON_AR.get(reason, reason)}\n"
                 f"• الدخول: ${trade.entry_price:,.6g}\n"
                 f"• الخروج: ${exit_price:,.6g}\n"
-                f"• {icon} الربح/الخسارة: {pnl_pct:+.2f}% (${pnl_usd:+,.2f})\n\n"
-                f"/trades لمراجعة الصفقات")
+                f"• {icon} الربح/الخسارة الصافي: {pnl_pct:+.2f}% ({_usd_b58(pnl_usd)})\n"
+                f"• الرسوم: {_usd_b58(-(trade.fee_open_usd + trade.fee_close_usd))}"
+                f"{' (تقديرية)' if trade.fee_estimated else ''} — محسوبة في الصافي\n"
+                + (f"• {trade.dust_note}\n" if trade.dust_note else "")
+                + "\n/trades لمراجعة الصفقات")
         return trade
 
     async def close_trade(self, trade_id: str,
@@ -715,6 +831,17 @@ class OrderManager:
                 self._save_trade_to_redis(trade)
                 return None
             exit_price = fill["avg"] or await self._ticker(trade.symbol) or trade.entry_price
+            # batch58 (#689/#690): الكمية المباعة فعلاً ورسوم البيع ثم البقايا غير القابلة للبيع
+            try:
+                _sold = float(fill.get("filled") or 0) or float(qty)
+                if 0 < _sold <= float(trade.qty or 0) + 1e-12:
+                    trade.qty = _sold
+                _f, _c = abs(float(fill.get("fee", 0) or 0)), str(fill.get("fee_ccy", "") or "").upper()
+                if _f > 0:
+                    trade.fee_close_usd = _f if _c in ("USDT", "USD", "USDC", "") else _f * exit_price
+            except Exception:
+                pass
+            trade.dust_note = await self._dust_note(trade.symbol, exit_price)
             await self._finalize(trade, exit_price, reason)
             return trade
 
@@ -1106,10 +1233,11 @@ class OrderManager:
                    "CANCELLED": "🚫 ملغاة", "PENDING": "⏳ معلّقة"}.get(trade.status, trade.status)
         lines  = [
             f"{icon} *{trade.symbol}* — {trade.side}",
-            f"• الحجم: ${trade.size_usd:,.0f} | الكمية: {trade.qty:.6f}",
-            f"• سعر الدخول: ${trade.entry_price:,.4f}",
-            f"• وقف الخسارة: ${trade.stop_loss:,.4f}",
-            f"• هدف الربح: ${trade.take_profit:,.4f}",
+            # batch58 (#688): الحجم بالسنت والكمية بلا تقريب مضلل، والأسعار بصيغة /signal
+            f"• الحجم: ${trade.size_usd:,.2f} | الكمية: {_qty_b58(trade.qty)}",
+            f"• سعر الدخول: {_px_b58(trade.entry_price)}",
+            f"• وقف الخسارة: {_px_b58(trade.stop_loss)}",
+            f"• هدف الربح: {_px_b58(trade.take_profit)}",
             f"• الحالة: {status}",
         ]
         if trade.status == "OPEN" and trade.prot_note:
@@ -1119,8 +1247,10 @@ class OrderManager:
         if trade.status == "CLOSED":
             pnl_icon = "📈" if trade.pnl_usd >= 0 else "📉"
             lines += [
-                f"• سعر الخروج: ${trade.exit_price:,.4f}",
-                f"• {pnl_icon} PnL: {trade.pnl_pct:+.2f}% (${trade.pnl_usd:+,.2f})",
+                f"• سعر الخروج: {_px_b58(trade.exit_price)}",
+                f"• {pnl_icon} PnL الصافي: {trade.pnl_pct:+.2f}% ({_usd_b58(trade.pnl_usd)})"
+                + (f" — بعد رسوم {_usd_b58(-(trade.fee_open_usd + trade.fee_close_usd))}"
+                   if (trade.fee_open_usd or trade.fee_close_usd) else ""),
                 f"• السبب: {CLOSE_REASON_AR.get(trade.close_reason, trade.close_reason)}",
             ]
         return "\n".join(lines)

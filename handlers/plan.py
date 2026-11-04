@@ -710,7 +710,7 @@ def _fvr_fc50(v) -> str:
         return f"{float(v or 0):.2f}x"
 
 
-def _format_forecast_ar(symbol: str, price: float, fc: dict, days: int = 30) -> str:
+def _format_forecast_ar(symbol: str, price: float, fc: dict, days: int = 30, regime_desc: str = "") -> str:
     """
     تنسيق تنبؤ السعر المتقدم للعرض.
     يشمل: Elliott + Wyckoff + Dow + Sentiment + Fibonacci
@@ -739,7 +739,10 @@ def _format_forecast_ar(symbol: str, price: float, fc: dict, days: int = 30) -> 
         f"🔮 *تنبؤ {symbol} — {days} يوم القادمة*",
         "━━━━━━━━━━━━━━━━━━",
         # batch44: التسمية توضح أن الاتجاه من ترتيب EMA20/50/200 (متأخر) لا من إشارة الدخول
-        f"• الاتجاه (ترتيب EMA): {trend_ar} | قوة ترتيب EMA: {conf_bar} {conf:.0%}",
+        f"• الاتجاه (ترتيب EMA): {trend_ar} | قوة ترتيب EMA: {conf_bar} {conf:.0%}"
+        # batch58 (#677): ترتيب EMA (جهة) مقابل تصنيف السوق الجانبي (قوة ADX) — أساسان مختلفان يُوضَّحان
+        + (f"\n  ↳ لا تناقض مع «تذبذب جانبي» أعلاه: ترتيب المتوسطات يبيّن الجهة، وتصنيف السوق يبيّن ضعف قوة الاتجاه (ADX)"
+           if (fc.get("trend") in ("bullish", "bearish") and ("جانبي" in str(regime_desc) or "تذبذب" in str(regime_desc))) else ""),
         f"• RSI: {fc.get('rsi',50):.0f} | ATR: {_fmt_atr_pct(fc.get('atr_pct',0))}%",
         (f"• Fear&Greed: {fc.get('fear_greed',50)} | BTC Dom: {fc.get('btc_dom',50):.0f}%"
          if not _is_commodity_fc(symbol) else
@@ -1745,7 +1748,7 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 if _fca:
                     lines.append(_format_forecast_ar(
-                        _fca_sym, _fca_p, _fca, days=30))
+                        _fca_sym, _fca_p, _fca, days=30, regime_desc=getattr(regime, "description_ar", "")))
         except Exception as _fcae:
             logger.debug(f"planmonth forecast30: {_fcae}")
 
@@ -2347,6 +2350,13 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             strat_name += f" · {_rs_n}"
                 except Exception:
                     pass
+                try:   # batch58 (#651، قرار رحال): لا ارتداد للمتوسط في هبوط قائم
+                    from core.regime_detector import _strong_bear_b58 as _sbw58
+                    if _sbw58(_reg_a) and "ارتداد للمتوسط" in strat_name:
+                        _parts58 = [x.strip() for x in strat_name.split("·") if "ارتداد للمتوسط" not in x]
+                        strat_name = (" · ".join(p_ for p_ in _parts58 if p_) or "تقليل التعرض") + " (الارتداد للمتوسط معطّل في الهبوط القائم)"
+                except Exception:
+                    pass
 
                 # حساب التغيير 24h
                 change_24h = float((price_d or {}).get("change_24h") or 0)
@@ -2422,6 +2432,9 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     _bear_w57, _adx_w57 = _bcw57(_reg_a)
                 except Exception:
                     _bear_w57, _adx_w57 = False, 0.0
+                if _is_mr_w and _bear_w57:
+                    # batch58 (#651): مسار الارتداد معطّل في الهبوط القائم — تُعرض شروط اتباع الاتجاه (غير مستوفاة عادةً)
+                    _is_mr_w = False
                 if _is_mr_w and rsi_w < 70:
                     _rsi_ok_w = rsi_w <= 35
                     _rsi_mr_txt = (f"{rsi_w:.1f}" if round(rsi_w) == 35 else f"{rsi_w:.0f}")
@@ -2526,7 +2539,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         tp1   = price * (1 + _tp1_pct)
                         tp2   = price * (1 + _tp2_pct)
                         # batch56 (قرار 5ب + قاعدة 2026-10-23): الوقف ≥1.5×ATR بلا سقف 7% — نفس قاعدة /signal
-                        sl    = entry * (1 - max(atr_v * _sl_m, atr_v * 1.5))
+                        sl    = entry - max(atr_v * _sl_m, atr_v * 1.5) * max(price, entry)   # batch58 (#681): بالدولار من ATR$ بدقة
                         _risk = max(price - sl, 1e-9)
                         _rew  = max(tp1 - price, 1e-9)
                         rr    = min(_rew / _risk, 4.0)
@@ -2554,7 +2567,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     # الإصلاح: نفس _disp_support المعروضة فعلياً، لا fib_382.
                     pro_entry_w = max(price * 0.99, _disp_support * 1.001) if 0 < _disp_support < price else price * 0.99
                     pro_tp_w    = price * 1.05
-                    pro_sl_w    = pro_entry_w * (1 - max(0.07, atr_v * 1.5))  # batch56 (5ب): كان 7% ثابتاً
+                    pro_sl_w    = pro_entry_w - max(0.07 * pro_entry_w, atr_v * 1.5 * max(price, pro_entry_w))  # batch56 (5ب) + batch58: 1.5×ATR$
                     rr_w        = 1.5
                     # إصلاح #11: fallback موحَّد لأي حالة بدون entry_lines
                     # (ثقة < 40% أو R/R < 1.2) — يضمن أن كل عملة تُعرض ببيانات كاملة
@@ -2562,7 +2575,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         rsi_t = 35 if "هابط" in regime.description_ar else 45
                         pro_entry_w = max(_disp_support, price * (1 - atr_v * 0.5)) if _disp_support < price else price * (1 - atr_v * 0.4)
                         pro_tp_w    = price * (1 + atr_v * 1.8)
-                        pro_sl_w    = pro_entry_w * (1 - atr_v * 1.5)  # batch56: نفس قاعدة 1.5×ATR في /signal
+                        pro_sl_w    = pro_entry_w - atr_v * 1.5 * max(price, pro_entry_w)  # batch58 (#681): 1.5×ATR$ كما في /signal
                         rr_w        = abs(pro_tp_w - pro_entry_w) / max(abs(pro_sl_w - pro_entry_w), 1e-9)
                         # EMA50_leak_fix: _rsi_cond و_ema_cond مُحسَّبان أعلاه
                         # نُعيَّن rsi_t للاتساق مع _rsi_cond أعلاه
@@ -2725,7 +2738,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     atr_override=_pw_atr_by_sym.get(str(_fc_sym).upper()),
                 )
                 if _fc:
-                    _fct57 = _format_forecast_ar(_fc_sym, _fc_price, _fc, days=30)
+                    _fct57 = _format_forecast_ar(_fc_sym, _fc_price, _fc, days=30, regime_desc=getattr(regime, "description_ar", ""))
                     # batch57 (#669): أفق التنبؤ أطول من الخطة الأسبوعية — يُوسَم
                     _fct57 = _fct57.replace("يوم القادمة*", "يوم القادمة* (أفق شهري مرجعي — أطول من هذه الخطة)", 1)
                     lines.append(_fct57)
