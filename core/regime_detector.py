@@ -108,6 +108,10 @@ def regime_desc_display_b61(result) -> str:
         dp, dm = m.get("di_plus"), m.get("di_minus")
         if dp is not None and dm is not None and abs(float(dp) - float(dm)) < 3 and "قوي" in d:
             return d.replace(" قوي", "").replace("قوي", "").rstrip() + " (غير محسوم — DI متعادل)"
+        # batch65 (#856/#862): تصنيف صاعد/هابط (بلا «قوي») مع DI متعادل يُوسم كذلك
+        if (dp is not None and dm is not None and abs(float(dp) - float(dm)) < 3
+                and float(m.get("adx", 0) or 0) >= 20 and ("صاعد" in d or "هابط" in d) and "غير محسوم" not in d):
+            return d.rstrip() + " (غير محسوم — DI متعادل)"
         # batch63 (#822، قرار رحال: وسم عرض فقط): تصنيف المتوسطات يعاكس جهة DI بفارق ≥3
         if dp is not None and dm is not None:
             _g = float(dp) - float(dm)
@@ -356,10 +360,7 @@ class RegimeDetector:
                 metrics["rsi"] = round(self._rsi(_lc64, 14), 1)
                 metrics["price_vs_ema50"] = round((_lc64[-1] - ema50) / ema50 * 100, 2) if ema50 else metrics["price_vs_ema50"]
                 metrics["live_close"] = round(_lc64[-1], 8)
-                # ATR% للعرض من الشموع الحية (نفس مصدر ATR$ في /signal) — التصنيف أعلاه بقي على المكتملة
-                _atr_l64 = self._atr([float(c["high"]) for c in _live_c64], [float(c["low"]) for c in _live_c64], _lc64, 14)
-                if _lc64[-1] > 0:
-                    metrics["atr_pct"] = round(min(_atr_l64 / _lc64[-1] * 100, 30.0), 4)
+                # batch65: ATR% من الشموع المكتملة (نفس أساس الوقف/الأهداف في /signal) — لا تجاوز حي
             except Exception:
                 pass
         result = RegimeResult(

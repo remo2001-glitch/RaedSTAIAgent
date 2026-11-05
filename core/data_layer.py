@@ -2092,6 +2092,23 @@ class DataLayer:
                 _trades = _data_cvd["data"]
                 _buy_vol  = sum(float(t.get("sz",0)) for t in _trades if t.get("side")=="buy")
                 _sell_vol = sum(float(t.get("sz",0)) for t in _trades if t.get("side")=="sell")
+                # batch65 (البند 5ب، قرار رحال): CVD بنافذة زمنية ساعة — حجم Taker شراء/بيع لآخر 12 شمعة 5 دقائق
+                # من OKX rubik (أثبت من «آخر 500 صفقة» التي قد تغطي دقيقة واحدة لأصل نشط أو يوماً لأصل خامل)
+                _cvd_src = "500"
+                try:
+                    _it65 = "CONTRACTS" if _cvd_perp else "SPOT"
+                    _u65 = (f"https://www.okx.com/api/v5/rubik/stat/taker-volume?ccy={_sym_raw}"
+                            f"&instType={_it65}&period=5m")
+                    _r65 = await _aio_cvd.wait_for(_loop_cvd.run_in_executor(None, _fetch_cvd, _u65), timeout=6.0)
+                    _d65 = (_jj_cvd.loads(_r65) or {}).get("data") or []
+                    _rows65 = [r for r in _d65[:12] if isinstance(r, (list, tuple)) and len(r) >= 3]
+                    if len(_rows65) >= 6:
+                        _s65 = sum(float(r[1]) for r in _rows65)
+                        _b65 = sum(float(r[2]) for r in _rows65)
+                        if _s65 + _b65 > 0:
+                            _buy_vol, _sell_vol, _cvd_src = _b65, _s65, "1h"
+                except Exception as _e65:
+                    logger.debug(f"CVD 1h taker-volume ({symbol}): {_e65}")
                 _cvd = _buy_vol - _sell_vol
                 _total = _buy_vol + _sell_vol
                 # CVD_sanity: تحقق من موثوقية البيانات
@@ -2101,7 +2118,7 @@ class DataLayer:
                     logger.info(f"CVD rejected ({symbol} via {_sym_cvd}): trades={len(_trades)} buy_ratio={_buy_ratio:.3f} total={_total:.4f}")
                 if len(_trades) < _CVD_MIN_TRADES:
                     logger.info(f"CVD too few trades ({symbol} via {_sym_cvd}): {len(_trades)} < {_CVD_MIN_TRADES}")
-                if len(_trades) >= _CVD_MIN_TRADES and _total > 0 and 0.02 < _buy_ratio < 0.98:
+                if (len(_trades) >= _CVD_MIN_TRADES or _cvd_src == "1h") and _total > 0 and 0.02 < _buy_ratio < 0.98:
                     _raw_pct = round(_cvd / max(_total, 1e-9) * 100, 2)
                     # batch13: CVD آخر 100 صفقة يتقلب (-95% → +88%)؛ نعتمد متوسط
                     # batch49 (قرار 2): نافذة أطول (حتى 5 قراءات خلال 60 دقيقة) — ETH قفز +1.4% → −74.6% بقراءتين فقط
@@ -2119,6 +2136,7 @@ class DataLayer:
                     enriched["cvd_pct"] = _avg_pct
                     enriched["cvd_raw_pct"] = _raw_pct
                     enriched["cvd_n"] = len(_hist)
+                    enriched["cvd_src"] = _cvd_src
                     # batch64 (البند 5ج): مدى القراءات خلال النافذة — لوسم «قراءة متذبذبة»
                     enriched["cvd_range"] = round(max(p for _, p in _hist) - min(p for _, p in _hist), 1) if len(_hist) > 1 else 0.0
                     enriched["cvd_signal"] = (
@@ -2128,7 +2146,7 @@ class DataLayer:
                     )
                     _CVD_CACHE[_cvd_key] = (_t_cvd.time(), {
                         k: enriched[k] for k in ("cvd", "cvd_pct", "cvd_signal",
-                                                 "cvd_raw_pct", "cvd_n", "cvd_range")})
+                                                 "cvd_raw_pct", "cvd_n", "cvd_range", "cvd_src")})
                     if len(_CVD_CACHE) > 300:
                         _CVD_CACHE.pop(next(iter(_CVD_CACHE)), None)
                     _cvd_persist_set("last", _cvd_key,

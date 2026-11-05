@@ -543,7 +543,18 @@ class SignalLayer:
         adx_t = None
         try:
             from core.regime_detector import RegimeDetector as _RD56
-            adx_t, _dp56, _dm56 = _RD56._adx_full(highs, lows, closes, 14)
+            # batch65 (#846/#860): قوة الاتجاه وجهة DI من آخر شمعة مكتملة — نفس مصدر تصنيف السوق (الخيار 3)
+            _h65, _l65, _c65 = highs, lows, closes
+            try:
+                from core.indicators import last_candle_is_forming as _lcf65
+                _lc65 = candles[-1] if candles else {}
+                if (len(closes) >= 31 and isinstance(_lc65, dict)
+                        and (_lc65.get("timestamp") is not None or _lc65.get("confirm") is not None)
+                        and _lcf65(candles)):
+                    _h65, _l65, _c65 = highs[:-1], lows[:-1], closes[:-1]
+            except Exception:
+                pass
+            adx_t, _dp56, _dm56 = _RD56._adx_full(_h65, _l65, _c65, 14)
             if adx_t and adx_t >= 25 and _dp56 is not None and _dm56 is not None and abs(_dp56 - _dm56) >= 3:
                 if _dm56 > _dp56:
                     bearish_pts += 2

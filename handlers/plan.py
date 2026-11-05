@@ -489,7 +489,8 @@ def _calc_atr(candles: list, period: int = 14) -> float:
     if not candles or len(candles) < period + 1:
         return 3.0
     try:
-        from core.indicators import wilder_atr_from_candles
+        from core.indicators import wilder_atr_from_candles, completed_candles_b65
+        candles = completed_candles_b65(candles)   # batch65: نفس أساس /signal
         atr   = wilder_atr_from_candles(candles, period)
         price = float(candles[-1].get("close", 0))
         if atr <= 0:
@@ -2478,7 +2479,9 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         _a62 = float(_m62.get("adx", 0) or 0)
                         _g62 = float(_m62.get("di_minus", 0) or 0) - float(_m62.get("di_plus", 0) or 0)
                         # batch63 (#823): صياغة الجهة صراحة بدل فرق سالب
-                        strat_name += ((f" (الارتداد مسموح: +DI أعلى بـ{-_g62:.1f} — جهة DI تعاكس تصنيف الهبوط؛ لا هبوط قائم بقاعدة /signal)"
+                        strat_name += ((f" (الارتداد مسموح: DI متعادل (فرق {abs(_g62):.1f} < 3) — لا هبوط قائم بقاعدة /signal)"
+                                        if abs(_g62) < 3 else   # batch65 (#856)
+                                        f" (الارتداد مسموح: +DI أعلى بـ{-_g62:.1f} — جهة DI تعاكس تصنيف الهبوط؛ لا هبوط قائم بقاعدة /signal)"
                                         if _g62 < 0 else
                                         f" (الارتداد مسموح: ADX {_a62:.0f}، −DI أعلى بـ{_g62:.1f} فقط (< 3) — لا هبوط قائم بقاعدة /signal)")
                                        if _a62 >= 25 else f" (الارتداد مسموح: ADX {_a62:.0f} < 25 — لا هبوط قائم بقاعدة /signal)")
@@ -2628,7 +2631,9 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     _fib_pw = _cf_pw(candles)
                     _ns_pw = float((_fib_pw or {}).get("nearest_support") or 0)
                     _nr_pw = float((_fib_pw or {}).get("nearest_resistance") or 0)
-                    if 0 < _ns_pw < price < _nr_pw:
+                    # batch65 (#855/#857): المستويات مثبتة من آخر إغلاق (الخيار 3) فقد يعبرها السعر الحي —
+                    # كان الشرط يرفضها حينها فتعود الخطة لنطاق 30 يوماً ($48.73/$53.76) بخلاف /signal ($51.08/$52.53)
+                    if _ns_pw > 0 and _nr_pw > 0 and _ns_pw < _nr_pw:
                         _disp_support, _disp_resistance = _ns_pw, _nr_pw
                 except Exception:
                     pass
@@ -2738,7 +2743,11 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                  and locals().get("_dir_ok_w", False)
                                  and not locals().get("_g4_blocked_w", False))
                              else f"  🔒 خيار المحترف: غير مُفعَّل ({'السوق مغلق + حجم <0.3x' if locals().get('_g4_blocked_w', False) else 'ثقة ' + str(round(signal.confidence*100)) + '% < ' + str(_t_entry_plan) + '%' if round(signal.confidence * 100) < _t_entry_plan else 'الاتجاه محايد — لا جهة شراء واضحة' if not locals().get('_dir_ok_w', False) else 'شرط RSI/EMA50 غير مُستوفى'})"),
-                            f"  📊 Fib دعم: {_fmt_price(_disp_support)}{_ft57(_disp_support, price, atr_v * 100)} | مقاومة: {_fmt_price(_disp_resistance)}{_ft57(_disp_resistance, price, atr_v * 100)}",
+                            # batch65: وسم العبور نفسه كما في /signal حين يعبر السعر الحي مستوى مثبتاً
+                            (lambda _x: f"  📊 Fib دعم: {_fmt_price(_disp_support)}{_x['tag_s'] or _ft57(_disp_support, price, atr_v * 100)} | "
+                                        f"مقاومة: {_fmt_price(_disp_resistance)}{_x['tag_r'] or _ft57(_disp_resistance, price, atr_v * 100)}")(
+                                __import__("handlers.analysis", fromlist=["_anchor_cross_b64"])._anchor_cross_b64(
+                                    {"nearest_support": _disp_support, "nearest_resistance": _disp_resistance}, price, atr_v * 100)),
                         ]
                 # batch40: سياق الأصل لجمل الأسابيع (مستويات وقيم حالية بدل نص عام)
                 try:
@@ -3138,8 +3147,10 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     _di_ok64 = (_dg64 <= 0) if _ctx_b40.get("mr") else (_dg64 > 0)
                     _adx_txt = ((f"ADX {_adx_b40:.0f} {'✓' if (_adx_b40 > 20 and _di_ok64) else '✗'}"
                                  + ("" if (_adx_b40 <= 20 or _di_ok64) else
-                                    (f" (القوة من {'+DI' if _dg64 > 0 else '−DI'} — لا تخدم "
-                                     f"{'مسار الارتداد' if _ctx_b40.get('mr') else 'اتباع الاتجاه شراءً'})")))
+                                    ((f" (DI متعادل (فرق {abs(_dg64):.1f}) — لا جهة تخدم "
+                                      f"{'مسار الارتداد' if _ctx_b40.get('mr') else 'اتباع الاتجاه شراءً'})") if abs(_dg64) < 3 else   # batch65 (#858)
+                                     (f" (القوة من {'+DI' if _dg64 > 0 else '−DI'} — لا تخدم "
+                                      f"{'مسار الارتداد' if _ctx_b40.get('mr') else 'اتباع الاتجاه شراءً'})"))))
                                 if _adx_b40 > 0 else "ADX غير متاح الآن")   # batch44: لا «ADX 0» الوهمي
                     if _wk2_cond(symbols).startswith("Fear"):
                         _wk2_now = (f" [الآن: Fear {fear_val} {'✓' if fear_val < 30 else '✗'} · {_adx_txt}]")

@@ -129,6 +129,19 @@ def last_candle_is_forming(candles: list, now: Optional[float] = None) -> bool:
     return True
 
 
+def completed_candles_b65(candles: list) -> list:
+    """batch65 (الخيار 3): الشموع المكتملة فقط — تُسقط الشمعة الجارية حين يُعرف ذلك (طابع زمني/confirm).
+    بلا معلومة زمنية تُعاد القائمة كما هي (لا افتراض)."""
+    try:
+        if candles and len(candles) >= 3 and isinstance(candles[-1], dict) \
+                and (candles[-1].get("timestamp") is not None or candles[-1].get("confirm") is not None) \
+                and last_candle_is_forming(candles):
+            return candles[:-1]
+    except Exception:
+        pass
+    return candles
+
+
 def volume_ratio_completed(candles: list, window: int = 20,
                            now: Optional[float] = None) -> float:
     """
