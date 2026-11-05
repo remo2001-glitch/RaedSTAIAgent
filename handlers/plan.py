@@ -777,7 +777,7 @@ def _format_forecast_ar(symbol: str, price: float, fc: dict, days: int = 30, reg
                 f"  🎯 هدف 1 (1.272): {p_fmt(fc.get('fib_t1',0))}{_far_note(fc.get('fib_t1',0), bull)}",
                 f"  🎯 هدف 2 (1.618): {p_fmt(fc.get('fib_t2',0))}{_far_note(fc.get('fib_t2',0), bull)}",
                 # إصلاح #1076: لا نُظهر الدعم إذا كان أعلى من السعر الحالي
-                *(([f"  🛡️ دعم 1 (0.382 من مدى 30 يوماً): {p_fmt(fc.get('fib_s1',0))}"]
+                *(([f"  🛡️ دعم 1 (0.382 من مدى 30 يوماً — يختلف عن جدول Fib في /signal): {p_fmt(fc.get('fib_s1',0))}"]
                    if fc.get('fib_s1',0) < price else []) +
                   ([f"  🛡️ دعم 2 (0.618 من مدى 30 يوماً — يختلف عن جدول Fib في /signal): {p_fmt(fc.get('fib_s2',0))}"]
                    if fc.get('fib_s2',0) < price else [])),
@@ -786,7 +786,7 @@ def _format_forecast_ar(symbol: str, price: float, fc: dict, days: int = 30, reg
                 f"📐 *مستويات الدعم الرئيسية:*",
                 # إصلاح #1076: لا نُظهر الدعم إذا كان أعلى من السعر الحالي
                 # batch44: كان القسم يظهر فارغاً حين يكون السعر دون مستويي الدعم (هبوط) — نذكر قاع النطاق بدل الفراغ
-                *((([f"  🛡️ دعم 1 (0.382 من مدى 30 يوماً): {p_fmt(fc.get('fib_s1',0))}"]
+                *((([f"  🛡️ دعم 1 (0.382 من مدى 30 يوماً — يختلف عن جدول Fib في /signal): {p_fmt(fc.get('fib_s1',0))}"]
                     if fc.get('fib_s1',0) < price else []) +
                    ([f"  🛡️ دعم 2 (0.618 من مدى 30 يوماً — يختلف عن جدول Fib في /signal): {p_fmt(fc.get('fib_s2',0))}"]
                     if fc.get('fib_s2',0) < price else []))
@@ -1946,7 +1946,8 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     _wi = int((_e.event_time - _now_wk) // (7 * 86400))
                     if 0 <= _wi < len(week_plan):
                         # batch35: الحدث متوسط التأثير (NFP) كان في قائمة الأحداث دون أسبوعه في الجدول
-                        week_plan[_wi] += (f" ⚠️ يتضمن: {_e.name_ar}" if _e.severity != _ES_wk.MEDIUM
+                        week_plan[_wi] += ((f"، {_e.name_ar}" if "⚠️ يتضمن:" in week_plan[_wi] else f" ⚠️ يتضمن: {_e.name_ar}")   # batch62 (#806)
+                                           if _e.severity != _ES_wk.MEDIUM
                                            else f" ℹ️ (تأثير متوسط: {_e.name_ar})")
         except Exception as _wk_e:
             logger.debug(f"planmonth event-week link: {_wk_e}")
@@ -2428,6 +2429,13 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if _sbw58(_reg_a) and "ارتداد للمتوسط" in strat_name:
                         _parts58 = [x.strip() for x in strat_name.split("·") if "ارتداد للمتوسط" not in x]
                         strat_name = (" · ".join(p_ for p_ in _parts58 if p_) or "تقليل التعرض") + " (الارتداد للمتوسط معطّل في الهبوط القائم)"
+                    elif ("ارتداد للمتوسط" in strat_name and "هابط" in str(getattr(_reg_a, "description_ar", "") or "")):
+                        # batch62 (#803): نظام «هابط» دون شرط الهبوط القائم (ADX ≥ 25 و−DI أعلى بـ3) — يُذكر سبب بقاء الارتداد
+                        _m62 = getattr(_reg_a, "metrics", None) or {}
+                        _a62 = float(_m62.get("adx", 0) or 0)
+                        _g62 = float(_m62.get("di_minus", 0) or 0) - float(_m62.get("di_plus", 0) or 0)
+                        strat_name += (f" (الارتداد مسموح: ADX {_a62:.0f}، فرق −DI/+DI {_g62:.1f} < 3 — لا هبوط قائم بقاعدة /signal)"
+                                       if _a62 >= 25 else f" (الارتداد مسموح: ADX {_a62:.0f} < 25 — لا هبوط قائم بقاعدة /signal)")
                 except Exception:
                     pass
 
@@ -2934,6 +2942,11 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 elif len(symbols) > 1:
                     # batch61 (#767): الرأس يقول «يختلف حسب الأصل» فالقيمة المذكورة في القرار هي مرجع BTC — تُسمّى كذلك
                     _pw_ref_lbl = "السوق المرجعي BTC"
+                    # batch62 (#808): قائمة كلها غير كريبتو — القرار يلخص نظام كل أصل بدل مرجع BTC
+                    _own62 = [(str(s).upper(), _pw_asset_reg_ar.get(str(s).upper(), "")) for s in symbols]
+                    if all(v for _, v in _own62):
+                        _pw_ref_lbl = "نظام كل أصل"
+                        _regime_ar = " · ".join(f"{k}: {v}" for k, v in _own62)
                     if _mk_i is not None:
                         lines[_mk_i] = "السوق: يختلف حسب الأصل (انظر كل أصل أدناه)"
         except Exception:
@@ -2953,7 +2966,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _pw_decision = (("⚪ *انتظار* — الأصل لا يستوفي شروط الدخول بعد" if _btc_only_pw
                                  else f"⚪ *انتظار* — الأصل لا يستوفي شروط الدخول بعد ({_pw_ref_lbl}: {_regime_ar})")
                                 if len(symbols) == 1 else
-                                f"⚪ *انتظار* — لا عملة تستوفي الشروط بعد ({_pw_ref_lbl}: {_regime_ar})")
+                                f"⚪ *انتظار* — لا {'أصل يستوفي' if _pw_all_tok else 'عملة تستوفي'} الشروط بعد ({_pw_ref_lbl}: {_regime_ar})")   # batch62 (#807)
         elif _pw_qualified_count >= 3:
             _pw_decision = f"✅ *يمكن الدخول بحجم طبيعي* — {_pw_qualified_count} عملات مؤهلة"
         else:
@@ -3067,7 +3080,9 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                      else " + شرط الاستراتيجية: RSI فوق 45 وفوق EMA50")
                 elif len(symbols) > 1:
                     # batch45 (ملاحظة 42): خطة عدة عملات — إحالة لشروط كل أصل بدل نص عام بلا شرط استراتيجية
-                    _wk2_now = " + شرط استراتيجية كل أصل كما في «شروط الدخول» أعلاه"
+                    # batch62 (#802): لا تكرار — شرط المصفوفة لعدة أصول غير كريبتو يتضمن العبارة أصلاً
+                    _wk2_now = ("" if "شرط استراتيجية كل أصل" in _wk2_cond(symbols)
+                                else " + شرط استراتيجية كل أصل كما في «شروط الدخول» أعلاه")
             except Exception:
                 _wk1_extra = _wk2_now = ""
             _mr_wk2 = bool((locals().get("_pw_asset_ctx") or {}).get("mr")) if len(symbols) == 1 else False
@@ -3112,7 +3127,8 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if _e.severity in (_ES_pwk.HIGH, _ES_pwk.CRITICAL, _ES_pwk.MEDIUM):
                     _wi = int((_e.event_time - _now_pwk) // (7 * 86400))
                     if 0 <= _wi < len(week_lines):
-                        week_lines[_wi] += (f" ⚠️ يتضمن: {_e.name_ar}" if _e.severity != _ES_pwk.MEDIUM
+                        week_lines[_wi] += ((f"، {_e.name_ar}" if "⚠️ يتضمن:" in week_lines[_wi] else f" ⚠️ يتضمن: {_e.name_ar}")   # batch62 (#806)
+                                           if _e.severity != _ES_pwk.MEDIUM
                                             else f" ℹ️ (تأثير متوسط: {_e.name_ar})")
         except Exception as _pwk_e:
             logger.debug(f"planweek event-week link: {_pwk_e}")
@@ -3308,6 +3324,21 @@ async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.warning(f"portfolio {sym}: {e}")
 
+        # batch62 (#794، قرار رحال): ثقة الأصل = ثقة آخر /signal للمستخدم خلال 15 دقيقة إن وُجدت (كانت 44% هنا مقابل 51% في /signal)
+        _conf_src62 = {}
+        try:
+            import time as _t62
+            from handlers.trade import _signal_decision as _sd62
+            for _c62 in candidates:
+                _rec62 = _sd62(update.effective_user.id, _c62["symbol"]) or {}
+                if (_rec62 and str(_rec62.get("mkt", "spot")) == "spot"
+                        and _t62.time() - float(_rec62.get("ts", 0) or 0) <= 900
+                        and float(_rec62.get("confidence", 0) or 0) > 0):
+                    _c62["confidence"] = float(_rec62["confidence"])
+                    _conf_src62[_c62["symbol"]] = "signal"
+        except Exception as _e62:
+            logger.debug(f"portfolio signal-confidence unify: {_e62}")
+
         # ── 5. توزيع المحفظة ──────────────────────────────────
         # إصلاح ملاحظة #4: استخدام قيمة المحفظة الفعلية للمستخدم
         from core.state_manager import state_manager as _sm_p
@@ -3367,8 +3398,13 @@ async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
                            key=lambda x: -x[1])
             if _cl_p:
                 text += (f"\n\n📋 *الأصول المحلَّلة* (حد التوزيع {_thr_p:.0%}):\n"
-                         + " · ".join(f"{s_} {c_:.0%}" + ("" if c_ >= _thr_p else f" (−{(_thr_p - c_) * 100:.0f})")
-                                      for s_, c_ in _cl_p[:10]))
+                         + " · ".join(f"{s_} {c_:.0%}" + ("✱" if _conf_src62.get(s_) else "")
+                                      + ("" if c_ >= _thr_p else f" (−{(_thr_p - c_) * 100:.0f})")
+                                      for s_, c_ in _cl_p[:10])
+                         # batch62 (#794): مصدر كل ثقة معلن
+                         + ("\nℹ️ ✱ = ثقة آخر /signal لك خلال 15 دقيقة؛ البقية تقييم المحفظة (شموع 60 يوماً) وقد تختلف عن /signal"
+                            if _conf_src62 else
+                            "\nℹ️ ثقة تقييم المحفظة (شموع 60 يوماً) — قد تختلف عن /signal؛ شغّل /signal للأصل لتوحيدها هنا"))
         except Exception as _cle:
             logger.debug(f"portfolio candidates list: {_cle}")
         text += (
@@ -3376,6 +3412,10 @@ async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"• Drawdown من رصيد البداية: {_dd_p:.1f}%\n"
             f"• PnL الحي (المراكز المفتوحة، صافٍ بعد رسوم Futures): {'+' if _live_pnl_p >= 0 else '-'}${abs(_live_pnl_p):,.2f}\n"
             f"• صفقات مفتوحة: {_open_p} Spot" + (f" + {_open_fut_p} Futures" if _open_fut_p else "")
+            # batch62 (#798): أسماء مراكز Futures وجهتها
+            + ((" (" + "، ".join(f"{str(k_).upper()} {'Long' if str((v_ or {}).get('side', 'long')) == 'long' else 'Short'}"
+                                 for k_, v_ in list((_vw_p.futures or {}).items())[:6]) + ") — التفاصيل: /vfutures")
+               if (_vw_p and _open_fut_p) else "")
         )
         # batch59 (#704): الحساب الحقيقي منفصل وموسوم
         try:
@@ -3396,12 +3436,15 @@ async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     pass
                 _cl_rp = [t for t in _all_rp.values()
                           if t.status == "CLOSED" and (t.closed_at or 0) >= _t_rp.time() - 86400]
-                _day_rp = sum(float(t.pnl_usd or 0) for t in _cl_rp)
-                _legacy_rp = any(not (getattr(t, "fee_open_usd", 0) or getattr(t, "fee_close_usd", 0)) for t in _cl_rp)
+                # batch62 (#796/#797، قرار رحال): صافٍ دائماً — القديمة بلا رسوم بصافٍ تقديري (0.1%×2)
+                from core.order_manager import net_pnl_b62 as _np62p
+                _nets_rp = [_np62p(t) for t in _cl_rp]
+                _day_rp = sum(n for n, _ in _nets_rp)
+                _legacy_rp = any(e for _, e in _nets_rp)
                 from core.order_manager import _usd_b58 as _u_rp
                 text += (f"\n\n💱 *الحساب الحقيقي*\n• صفقات مفتوحة: {_op_rp}\n"
-                         + (f"• المغلق (24 ساعة): {len(_cl_rp)} صفقة — صافي {_u_rp(_day_rp)}"
-                            + (" (يشمل صفقة سُجّلت قبل احتساب الرسوم — إجمالي)" if _legacy_rp else " بعد الرسوم")
+                         + (f"• المغلق (24 ساعة): {__import__('core.virtual_wallet', fromlist=['_count_ar_b60'])._count_ar_b60(len(_cl_rp), 'صفقة واحدة', 'صفقتان', 'صفقات', 'صفقة')} — صافي {_u_rp(_day_rp)}"
+                            + (" (تقديري — يشمل صفقة سُجّلت قبل احتساب الرسوم؛ رسوم 0.1%×2 مقدَّرة)" if _legacy_rp else " بعد الرسوم")
                             if _cl_rp else "• لا صفقات حقيقية مغلقة خلال 24 ساعة"))   # batch61 (#751)
         except Exception as _rpe:
             logger.debug(f"portfolio real section: {_rpe}")

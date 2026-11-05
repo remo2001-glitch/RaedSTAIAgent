@@ -872,7 +872,7 @@ def _bear_wording_b56(text: str, regime_obj) -> str:
                   else f"اتجاه هابط قائم (ADX {adx:.0f}): لا شراء في Spot")
     t = t.replace("الحجم: 0% — الاتجاه غير مؤكد، انتظر وضوح الجهة", "الحجم: 0% — اتجاه هابط قائم، لا شراء")
     t = _r.sub(r"• الاتجاه غير مؤكد: لا إشارة شراء/بيع قبل ثقة (\d+)%[^\n]*",
-               lambda m: f"• اتجاه هابط قائم والثقة دون حد الإشارة {m.group(1)}% — لا إشارة شراء", t)
+               lambda m: f"• اتجاه هابط قائم والثقة دون حد الإشارة {m.group(1)}% (حد تحديد الجهة، منفصل عن حد الدخول) — لا إشارة شراء", t)
     t = t.replace("الاتجاه غير مؤكد فلا جهة لتأكيدها", "لا إشارة شراء في اتجاه هابط")
     t = t.replace("الاتجاه غير مؤكد فلا تُحتسب مؤشرات التأكيد", "اتجاه هابط قائم فلا تُحتسب مؤشرات تأكيد الشراء")
     t = t.replace("➡️ استمرار الوضع الحالي (لا اتجاه واضح)", f"📉 الاتجاه هابط (ADX {adx:.0f}) — احتفظ بالسيولة")
@@ -886,6 +886,40 @@ def _llm_levels_ctx_b61(fib) -> str:
         if ns > 0:
             return (f"؛ مستوى الكسر الهابط المعتمد في سيناريوهات النظام = الدعم {_fmt_price(ns)} "
                     f"(لا تذكر مستوى Fib آخر كحدّ للانعكاس)")
+    except Exception:
+        pass
+    return ""
+
+
+def _qs_basis_b62(regime_obj, ema_below_count) -> str:
+    """batch62 (#810): /quicksignal — حكم «هابط/صاعد» مع موقع السعر المعاكس من المتوسطات القصيرة يُذكر أساسه (ADX/DI وEMA50)."""
+    try:
+        if regime_obj is None or ema_below_count is None:
+            return ""
+        d = str(getattr(regime_obj, "description_ar", "") or "")
+        m = getattr(regime_obj, "metrics", None) or {}
+        n = int(ema_below_count)
+        if ("هابط" in d and n <= 1) or ("صاعد" in d and n >= 3):
+            adx = float(m.get("adx", 0) or 0)
+            dp, dm = m.get("di_plus"), m.get("di_minus")
+            pve = m.get("price_vs_ema50")
+            bits = []
+            if adx:
+                bits.append(f"ADX {adx:.0f}" + (f" (+DI {float(dp):.0f} / -DI {float(dm):.0f})" if dp is not None and dm is not None else ""))
+            if pve is not None:
+                bits.append(f"السعر vs EMA50 {float(pve):+.1f}%")
+            return (" — أساس الحكم: " + "، ".join(bits) + "؛ المتوسطات القصيرة تعكس حركة قصيرة الأجل") if bits else ""
+    except Exception:
+        pass
+    return ""
+
+
+def _llm_event_ctx_b62(engine) -> str:
+    """batch62 (#780): حدث الماكرو القادم يُمرَّر للنموذج كي تذكره الفقرة (كان يظهر في الرأس فقط)."""
+    try:
+        _em, _er = engine.event_risk.get_exposure_multiplier()
+        if _er:
+            return f"؛ حدث ماكرو قادم يجب ذكره: {_er} (سقف التعرض العام {_em:.0%})"
     except Exception:
         pass
     return ""
@@ -911,6 +945,90 @@ def _llm_para_guard_b61(text: str, direction: str = "", support: float = 0.0) ->
                     return f"{m.group(1)}{_fmt_price(support).lstrip('$')}"
                 return m.group(0)
             t = _r.sub(r"(كسر (?:مستوى|الدعم عند|دعم)?\s*\$?)([\d,]+(?:\.\d+)?)", _fix, t)
+    except Exception:
+        return text
+    return t
+
+
+def _num62(s: str) -> float:
+    try:
+        return float(str(s).replace(",", "").replace("$", ""))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _consistency_pass_b62(text: str) -> str:
+    """batch62: تمريرة اتساق نصية أخيرة على رسائل /signal و/analyze (عرض فقط — لا تغيّر أي قرار أو رقم محسوب):
+    #778 سطر الأطر يشرح تعاكس اليومي و4H؛ #785/#786 DI متعادل ⇒ مرحلة السوق والأطر والاستراتيجية «غير محسومة»؛
+    #779/#780/#789/#790/#791 فقرة النموذج تُطابَق مع أرقام النظام المعروضة (الاتجاه، إشارة CVD، هدف الكسر، Funding، EMA50)؛
+    #782 سقف التعرض العام مقابل حجم الإشارة؛ #783 سطر الأطر في /analyze بعد الاستراتيجية كما في /signal."""
+    import re as _r
+    if not text or ("📍 مناطق الدخول" not in text and "🧠 تحليل" not in text and "📡 إشارة رائد" not in text):
+        return text
+    t = text
+    try:
+        _di = _r.search(r"\+DI:?\s*(\d+(?:\.\d+)?)\s*/\s*-DI:?\s*(\d+(?:\.\d+)?)", t)
+        _neutral = bool(_di and abs(float(_di.group(1)) - float(_di.group(2))) < 3)
+        _bear = ("هبوط قائم" in t) or ("اتجاه هابط قائم" in t)
+        # ── الأطر (#778/#785) ──
+        def _fr(m):
+            d, h, rest = m.group(1), m.group(2), m.group(3) or ""
+            if "—" in rest or "(غير محسوم" in d:
+                return m.group(0)
+            if _neutral and ("صاعد" in d or "هابط" in d):
+                d = d + " (غير محسوم — DI متعادل)"
+            note = ""
+            if "هابط" in d and "صاعد" in h:
+                note = " — ارتداد قصير الأجل داخل الهبوط اليومي (لا يغيّر الحكم)"
+            elif "صاعد" in d and "هابط" in h:
+                note = " — تصحيح قصير الأجل داخل الصعود اليومي"
+            return f"📊 الأطر: يومي {d} | 4H {h}{note}{rest}"
+        t = _r.sub(r"📊 الأطر: يومي (\S+ \S+) \| 4H (\S+ \S+)([^\n]*)", _fr, t)
+        if _neutral:
+            t = _r.sub(r"^(📊 مرحلة السوق: [^\n—]*(?:صعود|هبوط)[^\n—]*)$",
+                       r"\1 — DI متعادل: الجهة غير محسومة", t, flags=_r.M)
+            t = _r.sub(r"^((?:• |🧭 الاستراتيجية الموصى بها: )(?:اتباع الاتجاه|اختراق)[^\n(]*?)\s*$",
+                       r"\1 (مشروطة بحسم الجهة — DI متعادل)", t, flags=_r.M)
+        # ── فقرة النموذج مقابل أرقام النظام ──
+        if _bear:
+            t = _r.sub(r"(?:حالة\s+)?عدم تأكيد (?:لل)?اتجاه(?: القادم)?", "استمرار الاتجاه الهابط القائم", t)
+        _cv = _r.search(r"CVD \(آخر \d+ صفقة\):[^\n]*?\(([-+]\d+(?:\.\d+)?)%\)", t)
+        if _cv and float(_cv.group(1)) < 0:
+            _cva = abs(float(_cv.group(1)))
+            def _cvfix(m):
+                return (m.group(1) + "-" + m.group(2) + "%") if abs(_num62(m.group(2)) - _cva) < 0.11 else m.group(0)
+            t = _r.sub(r"(CVD[^%\n\d]{0,30}?)(?<![-+\d.])(\d+(?:\.\d+)?)%", _cvfix, t)
+        t = t.replace("قد يخالف بعض التوقعات الفنية التقليدية", "رغم ارتفاع الحجم")
+        _bt = _r.search(r"🔴 هابط: كسر \$?([\d,]+(?:\.\d+)?)[^\n]*?يفتح الطريق نحو \$?([\d,]+(?:\.\d+)?)", t)
+        if _bt:
+            _btv = _num62(_bt.group(2)); _btxt = _bt.group(2)
+            def _tgfix(m):
+                v = _num62(m.group(2))
+                return (m.group(1) + _btxt) if (v > 0 and _btv > 0 and abs(v / _btv - 1) > 0.005) else m.group(0)
+            t = _r.sub(r"(كسر\s*\$?[\d,]+(?:\.\d+)?\s*(?:مع|ثم|و)?\s*(?:هدف|نحو|باتجاه)\s*\$?)([\d,]+(?:\.\d+)?)", _tgfix, t)
+        if "سيناريو التصحيح" in t:
+            t = _r.sub(r"\s*سيناريو الانعكاس الهابط يتطلب كسر [^.\n]*\.", "", t)
+        _fd = _r.search(r"Funding Rate:? ([-+]\d+\.\d+)%", t)
+        if _fd and float(_fd.group(1)) > 0:
+            t = t.replace("يتعارض مع ميل السعر الصاعد", "يتوافق مع ميل السعر الصاعد (تمويل موجب طفيف)")
+        _eg = _r.search(r"السعر vs EMA50:? ([-+]?\d+\.\d)%", t)
+        if _eg and abs(float(_eg.group(1))) < 0.1:
+            t = _r.sub(r"(?:و)?السعر (?:فوق|تحت) EMA50(?! \()", lambda m: ("و" if m.group(0).startswith("و") else "") + "السعر عند EMA50 تقريباً", t)
+            t = _r.sub(r"(📉 EMA50 \(يومي=[^)]*\)): (?:✅ فوق|❌ تحت)", r"\1: ≈ عند (فرق < 0.1%)", t)
+        # ── سقف التعرض العام (#782) ──
+        _zero = "• الحجم: 0%" in t
+        t = _r.sub(r"(📅 ماكرو: [^\n]*?) — التعرض المسموح (\d+%)",
+                   lambda m: f"{m.group(1)} — سقف التعرض العام {m.group(2)}" + (" (حجم هذه الإشارة 0%)" if _zero else ""), t)
+        # ── موضع الأطر في /analyze (#783) ──
+        if "🧠 تحليل" in t and "🧭 الاستراتيجية الموصى بها" in t:
+            _fl = _r.search(r"\n📊 الأطر: [^\n]*", t)
+            if _fl:
+                _line = _fl.group(0)
+                t2 = t[:_fl.start()] + t[_fl.end():]
+                _si = t2.find("🧭 الاستراتيجية الموصى بها")
+                _se = t2.find("\n", _si)
+                if _si >= 0 and _se > 0:
+                    t = t2[:_se] + _line + t2[_se:]
     except Exception:
         return text
     return t
@@ -1934,12 +2052,13 @@ def _build_professional_block(
             # batch31: CVD له بند مستقل في آخر القائمة — حُذف من هنا (كان مكرراً)؛ والبند يوضح مسار الارتداد
             if _fib_sup_cond and _fib_sup_cond < price:
                 _vr3 = float(locals().get("_vol_ratio", 0) or 0)
-                _vol_part = (f"الحجم {fmt_vol_ratio(_vr3)} متحقق (≥1.5x) — المطلوب فقط" if _vr3 >= 1.5
+                # batch62 (#787): لا «المطلوب فقط» — الثقة وCVD مطلوبان أيضاً
+                _vol_part = (f"الحجم {fmt_vol_ratio(_vr3)} متحقق (≥1.5x) — يتبقى" if _vr3 >= 1.5
                              else "المطلوب حجم 1.5x+ مع")
                 # batch37: ✅ فقط حين يكتمل الشرط (الحجم متحقق)؛ وإلا يُذكر الجزء المتحقق والمتبقي بلا علامة اكتمال
                 if _vr3 >= 1.5:
                     _cond3 = (f"3. ✅ السعر فوق الدعم {_sup_display} بالفعل — {_vol_part} "
-                              f"الحفاظ على إغلاق 4H فوق {_sup_display} (مسار الارتداد)")
+                              f"الحفاظ على إغلاق 4H فوق {_sup_display} مع بقية الشروط (مسار الارتداد)")
                 else:
                     _cond3 = (f"3. السعر فوق الدعم {_sup_display} (متحقق الآن) — يتبقى: حجم 1.5x+ "
                               f"(حالياً {fmt_vol_ratio(_vr3)}) مع ثبات إغلاق 4H فوقه (مسار الارتداد)")
@@ -1962,6 +2081,10 @@ def _build_professional_block(
         # batch54 (#484): لا «مسار الارتداد» في الشرط 3 حين لا مسار ارتداد في الشرط 1 (استراتيجية بلا ارتداد)
         if (not _mr_first) or locals().get("_mr_off58"):
             entry_conds[2] = str(entry_conds[2]).replace(" (مسار الارتداد)", "")
+        # batch62 (#773، قرار رحال): في الهبوط القائم لا تعليمات شراء (ثبات فوق الدعم/Demand Zone) — يبقى شرط إعادة التفعيل والاختراق
+        _no_buy62 = bool(locals().get("_mr_off58"))
+        if _no_buy62:
+            entry_conds = [c for c in entry_conds if not str(c).startswith("3.")]
         if _alt_breakout:
             entry_conds.append("9. " + _alt_breakout)
         if ns > 0:
@@ -1999,7 +2122,7 @@ def _build_professional_block(
                 _sl_proxy = 0.0
             if _sl_proxy > 0 and _demand_level <= _sl_proxy * 1.01:
                 _demand_level = ns  # يُلغي الشرط التالي
-            if _demand_level <= ns * 0.985:
+            if _demand_level <= ns * 0.985 and not locals().get("_no_buy62"):
                 _demand_b48 = _demand_level
                 entry_conds.append(f"4. بديلاً: وصول Demand Zone {_fmt_price(_demand_level)} (دعم أعمق — فقط إن كُسر الدعم أعلاه وظهر ارتداد)")
         # signal_logic_fix: CVD شرط أساسي للدخول
@@ -2684,6 +2807,7 @@ def _build_professional_block(
         _tp1_pct = min(0.06, atr_dec * 1.2)   # max 6% للـ scalp
         _tp2_pct = min(0.09, atr_dec * 2.0)   # max 9%
         tp1_v = _px_anchor * (1 + _tp1_pct)   # batch61 (#747/#760): من آخر إغلاق مكتمل لا السعر الحي
+        _tp1_basis62 = f"{_tp1_pct / max(atr_dec, 1e-9):.1f}×ATR من آخر إغلاق"
         tp2_v = _px_anchor * (1 + _tp2_pct)
         # ضمان: TP2 > TP1 بفارق لا يقل عن 2%
         tp2_v = max(tp2_v, tp1_v * 1.02)
@@ -2692,6 +2816,7 @@ def _build_professional_block(
         _trade_dur = "ساعات — 3 أيام (Scalp)"
     elif _scenario == "trend_reversal":
         tp1_v = nr_fib; tp2_v = f236; tp3_v = f382
+        _tp1_basis62 = "أقرب مقاومة Fib"
         _time_exit = "14 يوم"
         _trade_dur = "1–3 أسابيع (Swing)"
     else:
@@ -2702,6 +2827,7 @@ def _build_professional_block(
         _eff_tp_atr = _atr_raw_dec if not _fin_corrupted else atr_dec
         # batch61 (#747/#760): الأهداف من آخر إغلاق مكتمل — كان TP1 يتبع السعر الحي فينقلب حكم «لا حافة» مع التذبذب
         tp1_v = _px_anchor * (1 + min(_eff_tp_atr * _tp1_mult, 0.15))  # max 15%
+        _tp1_basis62 = (f"{_tp1_mult:g}×ATR من آخر إغلاق" if _eff_tp_atr * _tp1_mult < 0.15 else "سقف 15% من آخر إغلاق")
         tp2_v = _px_anchor * (1 + min(_eff_tp_atr * _tp2_mult, 0.25))  # max 25%
         tp3_v = None
         _time_exit = "5 أيام"
@@ -3039,8 +3165,14 @@ def _build_professional_block(
     # إصلاح #8: تسمية دقيقة — "عند الدعم" فقط إذا entry_agg ≈ مستوى الدعم المعروض
     # batch56 (#571): «عند الدعم» فقط عند التطابق (≤0.1%)؛ وإلا «قرب الدعم» مع رقمه (الدخول من آخر إغلاق مكتمل)
     _agg_gap_b56 = abs(entry_agg - ns) / max(ns, 1e-9) if ns > 0 else 1.0
+    # batch62 (#774): الرقم = آخر إغلاق مكتمل، والدعم يُذكر بموقعه منه صراحة
     _agg_label = ("عند الدعم" if _agg_gap_b56 <= 0.001 else
-                  f"قرب الدعم {_fmt_price(ns)} (آخر إغلاق مكتمل)" if _agg_gap_b56 < 0.01 else "سحب فني (Pullback)")
+                  (f"آخر إغلاق مكتمل — {'دون' if entry_agg < ns else 'فوق'} الدعم {_fmt_price(ns)} بـ{_agg_gap_b56 * 100:.1f}%")
+                  if _agg_gap_b56 < 0.01 else "سحب فني (Pullback)")
+    try:
+        _bear62 = bool(_bear_confirmed_b56(regime)[0])
+    except Exception:
+        _bear62 = False
     # entry2_dedupe_fix: عند تطابق Entry 2 مع Entry 1 يُدمج السطران بدل تكرار الرقم نفسه.
     _entries_distinct = abs(entry_cons - entry_agg) / max(entry_agg, 1e-9) >= 0.0015
     entry_lines = [
@@ -3048,7 +3180,9 @@ def _build_professional_block(
         "*📍 مناطق الدخول والخروج*",
         (f"• Entry 1 (Aggressive): {_fmt_price(entry_agg)} — {_agg_label}"
          if _entries_distinct else
-         f"• Entry: {_fmt_price(entry_agg)} — {_agg_label}؛ السعر قريب جداً من الدعم فادخل بعد تأكيد الارتداد فقط"),
+         (f"• Entry (مرجعي): {_fmt_price(entry_agg)} — {_agg_label}؛ لا شراء في الهبوط القائم — مستوى للعلم فقط"
+          if _bear62 else
+          f"• Entry: {_fmt_price(entry_agg)} — {_agg_label}؛ السعر قريب جداً من الدعم فادخل بعد تأكيد الارتداد فقط")),
     ]
     if _entries_distinct:
         entry_lines.append(f"• Entry 2 (Conservative): {_fmt_price(entry_cons)} — بعد تأكيد الارتداد")
@@ -3094,7 +3228,8 @@ def _build_professional_block(
             # التأكيدات متحققة؛ العائق الثقة/الاتجاه — الرقم نظري لأن الأهداف غير مفعّلة
             _rr_line = f"• R/R (نظري — الأهداف غير مفعّلة): 1:{_fmt_rr(_rr_calc)}"
         else:
-            _rr_line = (f"• R/R: 1:{_fmt_rr(_rr_calc)} (هدف مرجعي {_fmt_price(tp1_v)})"
+            _rr_line = (f"• R/R: 1:{_fmt_rr(_rr_calc)} (هدف مرجعي {_fmt_price(tp1_v)}"
+                        + (f" = {locals().get('_tp1_basis62')}" if locals().get("_tp1_basis62") else "") + ")"
                         + (" — ⛔ لا حافة إحصائية (دون 1:1)" if _rr_calc < 1.0 else
                            f" — انتظر تأكيد 2/4 مؤشرات (الحالي {_flags_found}/4)"))
     else:
@@ -3112,10 +3247,18 @@ def _build_professional_block(
                     continue
                 if _fv60 > entry_agg:
                     _lv60.append((_fv60, str(_k60)))
+            # batch62 (#784): TP2 المعروض مرشح أيضاً (كان يُذكر امتداد Fib أبعد بينما TP2 الظاهر يحقق 1:1)
+            try:
+                if _conf_score >= 40 and tp2_v and float(tp2_v) > entry_agg:
+                    _lv60.append((float(tp2_v), "TP2"))
+            except Exception:
+                pass
             _lv60.sort()
             _ok60 = [x for x in _lv60 if (x[0] - entry_agg) >= _risk60]
             _near60 = [x for x in _lv60 if 0.95 * _risk60 <= (x[0] - entry_agg) < _risk60]
             def _lbl61(k):
+                if k == "TP2":
+                    return "TP2 المرجعي المعروض"
                 try:
                     return (f"امتداد Fib {float(k):g} (خارج الجدول)" if float(k) > 1.0 else f"Fib {float(k):g}")
                 except (TypeError, ValueError):
@@ -3290,7 +3433,10 @@ def _build_professional_block(
                  else " → الأهداف غير مُفعَّلة حالياً (الثقة دون حد عرضها 40%)"))),
             (f"🔴 هابط: كسر {_fmt_price(_ns_scen)} بإغلاق 4H + حجم بيع مرتفع"
              f" → يفتح الطريق نحو {_fmt_price(_bear_tgt)} (≈ -{_bear_pct:.1f}% من مستوى الكسر"
-             + ("، وهو مستوى الوقف نفسه" if _bear_at_sl else "") + ")"),
+             + ("، وهو مستوى الوقف نفسه" if _bear_at_sl else
+                # batch62 (#775): أساس الهدف الهابط (ليس مستوى Fib)
+                ("؛ = 1×ATR تحت الكسر" if 0.03 < _bear_move < 0.08 else "؛ حد أدنى 3% تحت الكسر" if _bear_move <= 0.03 else "؛ سقف 8% تحت الكسر"))
+             + ")"),
             (f"❌ إلغاء: Entry لا يُفعَّل بمجرد الوصول"
              f" — يشترط شمعة رفض أو استرداد. كسر {_fmt_price(_sl_scen)} = إلغاء"),
             "",
@@ -3355,6 +3501,9 @@ def _build_professional_block(
                 _miss.append(f"RSI < 30 كتأكيد تشبع (حالياً {rsi:.0f} يومي"
                              + ("" if (locals().get("_mr_off58") or not locals().get("_mr_first")) else "؛ مسار الارتداد يكتفي بـ≤35")   # batch59 (#697) + batch61 (#746): فقط حين مسار الارتداد قائم
                              + (f"؛ 4H = {_r4_m:.0f} دون 30 لكنه لا يُحتسب كتأكيد" if (_r4_m and 0 < _r4_m < 30) else "")
+                             # batch62 (#792): التشبع أحد مؤشرات 2/4 الثابتة — لا يخص مسار الاختراق المذكور في «متى تدخل»
+                             + ("؛ أحد مؤشرات 2/4 الثابتة — مسار الاختراق يعتمد RSI > 55"
+                                if (locals().get("_mr_off58") or not locals().get("_mr_first")) else "")
                              + ")")
             if not _cvd_oc_m.get("cvd_signal"):
                 _miss.append("CVD غير متاح الآن (لا يمكن التحقق منه)")
@@ -3413,7 +3562,9 @@ def _build_professional_block(
         if _h_b45 is not None:
             import math as _m46
             _dec46 = 4 if abs(_h_b45) >= 1 else (2 - int(_m46.floor(_m46.log10(abs(_h_b45)))) if _h_b45 else 2)
-            _hs_b45 = f"{_h_b45:+.4g}" if abs(_h_b45) >= 0.01 else f"{_h_b45:+.{min(_dec46, 10)}f}"
+            # batch62 (#777): منازل عشرية متسقة (2 لـ≥1، 3 لـ≥0.01)
+            _hs_b45 = (f"{_h_b45:+.2f}" if abs(_h_b45) >= 1 else f"{_h_b45:+.3f}" if abs(_h_b45) >= 0.01
+                       else f"{_h_b45:+.{min(_dec46, 10)}f}")
             _macd_line_b45 = (f"{'☑' if _h_b45 > 0 else '□'} MACD إيجابي (الهيستوغرام حالياً {_hs_b45}"
                               f"{' — دون الصفر' if _h_b45 <= 0 else ''})")
     except Exception:
@@ -3427,7 +3578,9 @@ def _build_professional_block(
         _reclaim_line,
         _macd_line_b45,
         _whale_line,
-        (f"ℹ️ Funding Rate {_fund_pct:+.4f}% — للعلم فقط لهذا الأصل (لا يدخل في الثقة ولا التأكيدات)"
+        (f"ℹ️ Funding Rate {_fund_pct:+.4f}%"
+         + (" (القيمة المعلنة من OKX صفر حالياً)" if (_fund_pct == 0 and _fund.get("source") == "okx") else "")   # batch62 (#776)
+         + " — للعلم فقط لهذا الأصل (لا يدخل في الثقة ولا التأكيدات)"
          if ((_gold_fund_ex or _is_x_asset or _is_perp_asset or _is_commodity(symbol))   # batch59 (#696): نفس قاعدة قائمة التأكيدات
              and (_fund.get("source") not in (None, "unknown", "") or _fund_pct != 0))
          else f"{'☑' if _fund_pct < -0.01 else '□'} Funding ≤ −0.01% (حالياً {_fund_pct:+.4f}%) — سالب = ضغط Shorts داعم للشراء"
@@ -3551,7 +3704,13 @@ async def _send_long_message(msg, update, context, text: str, parse_mode=None, r
     # الرسالة (حيث ينتهي النص فعلياً)، ليدعم زر "⚡ تنفيذ" الجديد في
     # /signal دون كسر أي استدعاء سابق لا يمرّره.
     text = _tidy_msg_b49(text)
+    text = _consistency_pass_b62(text)
     chunks = _split_long_message(text)
+    # batch62 (#793): الرسالة المقسومة تُوسَم بوضوح — كان الجزء الأول يبدو كاملاً فيُظن أن الباقي مفقود
+    if len(chunks) > 1:
+        _n62 = len(chunks)
+        chunks = [(c + f"\n\n⬇️ يتبع ({i + 1}/{_n62})") if i < _n62 - 1 else c for i, c in enumerate(chunks)]
+        chunks = [c if i == 0 else f"⬆️ تابع ({i + 1}/{_n62})\n\n" + c for i, c in enumerate(chunks)]
 
     async def _safe_send(send_coro_factory, chunk):
         try:
@@ -5307,6 +5466,17 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             ]])
 
+        # batch62 (#781): حدث الماكرو القادم يظهر في /signal كما في /analyze (كان غائباً عن /signal)
+        try:
+            _em62, _er62 = engine.event_risk.get_exposure_multiplier()
+            if _er62 and "📅 ماكرو:" not in full_text:
+                _k62 = full_text.find("الثقة:")
+                _e62 = full_text.find("\n", _k62) if _k62 >= 0 else -1
+                if _e62 > 0:
+                    full_text = (full_text[:_e62] + f"\n📅 ماكرو: {_clean_md(_er62)} — التعرض المسموح {_em62:.0%}"
+                                 + full_text[_e62:])
+        except Exception as _e62x:
+            logger.debug(f"signal macro line: {_e62x}")
         await _send_long_message(msg, update, context, full_text, parse_mode=ParseMode.MARKDOWN,
                                   reply_markup=_sig_reply_markup)
 
@@ -6810,7 +6980,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ema_bearish=ema_bearish,
                 market_phase=_mp_ar_for_groq,
                 decision_ctx=_llm_decision_ctx(_sig_a),
-                facts_ctx=_llm_facts_ctx(_sig_a) + _llm_levels_ctx_b61(fib_a) + (
+                facts_ctx=_llm_facts_ctx(_sig_a) + _llm_levels_ctx_b61(fib_a) + _llm_event_ctx_b62(engine) + (
                     "؛ تحذير أساسي: بيانات غير موثوقة بعد انهيار حاد — اذكر ذلك في أول جملة" if _data_corrupted_an else ""))
             if not analysis or len(analysis.strip()) < 20:
                 raise ValueError("تحليل فارغ")
@@ -8207,10 +8377,12 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines = [
             f"📊 *التحليل الأولي — {display_symbol}*",
             "━━━━━━━━━━━━━━━━━━",
-            f"💰 السعر: {_fmt_price(price, quote)} ({change_sign}{change_24h:.2f}%){_mkt_tag_b41(_mkttype_qs, locals().get('candles'))}",
+            f"💰 السعر: {_fmt_price(price, quote)} ({change_sign}{change_24h:.2f}%"
+            + (" · 24س من تداول الزوج نفسه على OKX" if pair_primary else "")   # batch62 (#811): ليس فرق تغيّر ETH وBTC بالدولار
+            + f"){_mkt_tag_b41(_mkttype_qs, locals().get('candles'))}",
             f"⏱️ الإطار الزمني: يومي (1D)",
             # الأزواج: الاتجاه محسوب من شموع الزوج نفسه لا من سوق الكريبتو
-            f"🌍 {'اتجاه الزوج' if pair_primary else 'السوق'}: {regime_desc}",
+            f"🌍 {'اتجاه الزوج' if pair_primary else 'السوق'}: {regime_desc}" + _qs_basis_b62(regime_obj, locals().get("ema_below_count")),
             # rsi_display_rounding_fix: .0f بدل int() — نفس سبب التوحيد في
             # قسم الأسباب (البتر كان يُظهر 71 في /signal و70 هنا لنفس القيمة)
             f"📈 RSI: {rsi:.0f}"
@@ -8273,6 +8445,19 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _quick_note = (direction.startswith(("🔴", "🟠", "🟢", "🟡")))
         if support > 0 and resistance > 0:
             _sup_s, _res_s = _fmt_price_pair(support, resistance, quote)
+            # batch62 (#809): نفس وسم /signal — مستوى ضمن max(0.5%، ½ATR) من السعر ملاصق وليس حاجزاً فعلياً
+            try:
+                _adj62 = max(0.5, 0.5 * float(_atr_q or 0))
+                for _nm62, _lv62 in (("s", support), ("r", resistance)):
+                    _d62 = abs(price / _lv62 - 1) * 100 if _lv62 else 99
+                    if _d62 <= _adj62:
+                        _tag62 = f" — ملاصق للسعر ({_d62:.1f}%)، ليس حاجزاً فعلياً"
+                        if _nm62 == "s":
+                            _sup_s += _tag62
+                        else:
+                            _res_s += _tag62
+            except Exception:
+                pass
             lines += [
                 "",
                 "🏗️ *المستويات الرئيسية*",

@@ -1637,7 +1637,8 @@ async def cmd_trades(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # trades_enhance_v1: فلترة يومي/أسبوعي/كل
     _trades_args   = context.args or []
     _trades_period = (_trades_args[0].lower() if _trades_args else "daily")
-    _period_label  = {"daily": "اليوم", "weekly": "الأسبوع", "all": "الكل"}.get(_trades_period, "اليوم")
+    # batch62 (#799): الفترة متحركة (آخر 24 ساعة/7 أيام) — التسمية تطابق /portfolio بدل «اليوم»
+    _period_label  = {"daily": "آخر 24 ساعة", "weekly": "آخر 7 أيام", "all": "الكل"}.get(_trades_period, "آخر 24 ساعة")
 
     try:
         if not engine.user_has_live_trading(user_id):
@@ -1693,14 +1694,17 @@ async def cmd_trades(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for t in trades:
             lines.append(om.format_trade_ar(t))
             lines.append("")
-        total = sum(t.pnl_usd for t in trades if t.status == "CLOSED")
-        # batch61 (#753): صفقات سُجّلت قبل الدفعة 58 بلا بيانات رسوم — رقمها إجمالي
-        _legacy_tr = any(t.status == "CLOSED" and not (getattr(t, "fee_open_usd", 0) or getattr(t, "fee_close_usd", 0))
-                         for t in trades)
+        # batch62 (#797/#801، قرار رحال): المجموع صافٍ — الصفقات القديمة بلا رسوم يُقدَّر صافيها (0.1%×2)
+        from core.order_manager import net_pnl_b62 as _np62
+        _closed_tr = [t for t in trades if t.status == "CLOSED"]
+        _nets_tr = [_np62(t) for t in _closed_tr]
+        total = sum(n for n, _ in _nets_tr)
+        _n_est_tr = sum(1 for _, e in _nets_tr if e)
         lines += ["━━━━━━━━━━━━━━━━━━",
-                   f"💹 PnL المغلق ({_period_label}): "
+                   f"💹 PnL المغلق الصافي ({_period_label}): "
                    + (f"{'+' if total >= 0 else '-'}${abs(total):,.4f}" if abs(total) < 0.1 else f"${total:+,.2f}")
-                   + (" — يشمل صفقات إجمالية سُجّلت قبل احتساب الرسوم" if _legacy_tr else " — صافٍ بعد الرسوم")]
+                   + ((f" — تقديري: {'صفقة واحدة سُجّلت' if _n_est_tr == 1 else f'{_n_est_tr} صفقات سُجّلت'} قبل احتساب الرسوم (رسوم 0.1%×2 مقدَّرة)")
+                      if _n_est_tr else " — بعد الرسوم")]
         _close_rows = [[InlineKeyboardButton(f"🔴 إغلاق {t.symbol}",
                                               callback_data=f"rclose_{t.symbol}")]
                        for t in trades if t.status == "OPEN"][:8]

@@ -93,6 +93,31 @@ class LiveTrade:
 _LT_FIELDS = {f.name for f in fields(LiveTrade)}
 
 
+def net_pnl_b62(trade) -> tuple:
+    """batch62 (#797/#801، قرار رحال): صافي الصفقة المغلقة. الصفقات المسجّلة قبل الدفعة 58 بلا رسوم
+    يُقدَّر صافيها برسوم Taker 0.1% على الفتح والإغلاق. يعيد (الصافي، تقديري؟)."""
+    try:
+        pnl = float(getattr(trade, "pnl_usd", 0) or 0)
+        if (getattr(trade, "fee_open_usd", 0) or getattr(trade, "fee_close_usd", 0)):
+            return pnl, False
+        q = float(getattr(trade, "qty", 0) or 0)
+        ep = float(getattr(trade, "entry_price", 0) or 0)
+        xp = float(getattr(trade, "exit_price", 0) or 0)
+        fees = 0.001 * q * (ep + xp) if (q > 0 and ep > 0 and xp > 0) else 0.0
+        return pnl - fees, True
+    except Exception:
+        return float(getattr(trade, "pnl_usd", 0) or 0), False
+
+
+def _ts_b62(ts: float, tz_h: int = 3) -> str:
+    """batch62 (#800): وقت بتوقيت السعودية (UTC+3) بصيغة قصيرة."""
+    try:
+        import time as _t
+        return _t.strftime("%m-%d %H:%M", _t.gmtime(float(ts) + tz_h * 3600))
+    except Exception:
+        return "?"
+
+
 def _usd_b58(v: float) -> str:
     """batch58: مبلغ صغير بالسنت (و4 منازل دون 0.10$) كي لا يظهر $+0.00 أو $+0.02 لربح صافٍ 0.0026."""
     a = abs(float(v or 0))
@@ -1251,7 +1276,19 @@ class OrderManager:
                 (f"• {pnl_icon} PnL الصافي: {trade.pnl_pct:+.2f}% ({_usd_b58(trade.pnl_usd)})"
                  + f" — بعد رسوم {_usd_b58(-(trade.fee_open_usd + trade.fee_close_usd))}")
                 if (trade.fee_open_usd or trade.fee_close_usd) else
-                f"• {pnl_icon} PnL (إجمالي — سُجّلت قبل احتساب الرسوم): {trade.pnl_pct:+.2f}% ({_usd_b58(trade.pnl_usd)})",   # batch61 (#753)
+                (f"• {pnl_icon} PnL (إجمالي — سُجّلت قبل احتساب الرسوم): {trade.pnl_pct:+.2f}% ({_usd_b58(trade.pnl_usd)})"   # batch61 (#753)
+                 + f" — صافٍ تقديري ≈ {_usd_b58(net_pnl_b62(trade)[0])} (رسوم 0.1% فتح + 0.1% إغلاق)"),   # batch62 (#801)
                 f"• السبب: {CLOSE_REASON_AR.get(trade.close_reason, trade.close_reason)}",
             ]
+        # batch62 (#800): وقت الفتح/الإغلاق والمدة لمطابقة سجل المنصة
+        try:
+            if trade.opened_at:
+                _tl = f"• الوقت (توقيت السعودية): فتح {_ts_b62(trade.opened_at)}"
+                if trade.status == "CLOSED" and trade.closed_at:
+                    from core.virtual_wallet import _dur_ar_b60 as _dur62
+                    _tl += (f" → إغلاق {_ts_b62(trade.closed_at)} "
+                            f"(المدة {_dur62(max(0.0, trade.closed_at - trade.opened_at) / 3600)})")
+                lines.append(_tl)
+        except Exception:
+            pass
         return "\n".join(lines)
