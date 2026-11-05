@@ -1558,7 +1558,8 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # regime_conf_hidden (بند 9): «ثقة تشخيص الاتجاه» ثابتة ~82% عبر أنظمة متعاكسة
             # فتُضلِّل؛ مخفية حتى تُراجَع معادلتها.
             f"Fear & Greed: {fear_val} — {_fgz_pm(fear_val)[0]}"
-            + (" (مرجع كريبتو — لا يخص هذه الأصول)" if (symbols and all(_non_crypto_sym(str(_s).upper()) for _s in symbols)) else ""),
+            + ((" (مرجع كريبتو — لا يخص هذا الأصل)" if len(symbols) == 1 else " (مرجع كريبتو — لا يخص هذه الأصول)")   # batch64 (#842)
+               if (symbols and all(_non_crypto_sym(str(_s).upper()) for _s in symbols)) else ""),
         ]
         _pm_breadth = _breadth_note(regime.description_ar, [c.get("change_24h") for c in candidates], "أصول")
         if _pm_breadth:
@@ -1636,7 +1637,9 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     _ra_pm = str((cand or {}).get("regime_ar", "") or "")
                     if _ra_pm and sym_p.upper() != "BTC" and (_ra_pm != str(regime.description_ar) or _non_crypto_sym(sym_p)):
                         _adx_pm = float((cand or {}).get("adx", 0) or 0)
-                        line += (f"\n    🌍 نظام الأصل نفسه: {_ra_pm}" + (f" (ADX {_adx_pm:.0f})" if _adx_pm > 0 else "")
+                        _rpa64, _rpb64 = (_ra_pm.split(" — DI يعاكس", 1) + [""])[:2]   # batch64 (#839)
+                        line += (f"\n    🌍 نظام الأصل نفسه: {_rpa64}" + (f" (ADX {_adx_pm:.0f})" if _adx_pm > 0 else "")
+                                 + (f" — DI يعاكس{_rpb64}" if _rpb64 else "")
                                  + (" — ADX قوي: مراقبة خروج من النطاق" if ("جانبي" in _ra_pm and _adx_pm >= 25) else ""))
                 except Exception:
                     pass
@@ -2334,7 +2337,8 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
              if (_pw_all_tok or any(str(_s).upper() != "BTC" for _s in (symbols or [])))
              else f"السوق: {_regime_ar}"),
             f"Fear & Greed: {fear_val} — {_fear_label}"
-            + (" (مرجع كريبتو — لا يخص هذه الأصول)" if (symbols and all(_non_crypto_sym(str(_s).upper()) for _s in symbols)) else ""),
+            + ((" (مرجع كريبتو — لا يخص هذا الأصل)" if len(symbols) == 1 else " (مرجع كريبتو — لا يخص هذه الأصول)")   # batch64 (#842)
+               if (symbols and all(_non_crypto_sym(str(_s).upper()) for _s in symbols)) else ""),
             "",
         ]
         # open_position_exclusion_fix: نفس التوضيح المُطبَّق في /planmonth —
@@ -2401,7 +2405,9 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _onchain_e = await engine.data_layer.get_signal_enrichment(_plan_enrich_sym(sym), onchain, mkttype=_mk_pw)
                 _reg_a = _asset_regime(engine, sym, candles, regime, fear_val, await _plan_btc_dom(engine))
                 try:
-                    _pw_asset_reg_ar[str(sym).upper()] = str(getattr(_reg_a, "description_ar", "") or "")
+                    # batch64 (#839/#841): الرأس والقرار بوصف العرض نفسه (وسم DI المتعادل/المعاكس)
+                    from core.regime_detector import regime_desc_display_b61 as _rdd64
+                    _pw_asset_reg_ar[str(sym).upper()] = str(_rdd64(_reg_a) or getattr(_reg_a, "description_ar", "") or "")
                 except Exception:
                     pass
                 signal   = engine.signal_layer.generate_snapshot(
@@ -2745,6 +2751,9 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         "sym": sym, "support": _disp_support, "resistance": _disp_resistance,
                         "adx": _adx_ctx, "mr": bool(_is_mr_w), "rsi_t": _rsi_t_w,
                         "rank": None,
+                        # batch64 (البند 8ب): جهة DI للتحقق من أن قوة ADX تخدم الاستراتيجية
+                        "di_gap": float(((getattr(_reg_a, "metrics", None) or {}).get("di_plus") or 0))
+                                  - float(((getattr(_reg_a, "metrics", None) or {}).get("di_minus") or 0)),
                     }
                 except Exception:
                     _pw_asset_ctx = None
@@ -2796,7 +2805,9 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         _ra_w = str(getattr(_reg_a, "description_ar", "") or "")
                     if _ra_w and str(sym).upper() != "BTC" and _ra_w != str(regime.description_ar):
                         _adx_w = float(((getattr(_reg_a, "metrics", None) or {}).get("adx")) or 0)
-                        _pw_extra.append(f"  🌍 نظام الأصل نفسه: {_ra_w}" + (f" (ADX {_adx_w:.0f})" if _adx_w > 0 else "")
+                        _ra_a64, _ra_b64 = (_ra_w.split(" — DI يعاكس", 1) + [""])[:2]   # batch64 (#839): ADX قبل وسم التعاكس
+                        _pw_extra.append(f"  🌍 نظام الأصل نفسه: {_ra_a64}" + (f" (ADX {_adx_w:.0f})" if _adx_w > 0 else "")
+                                         + (f" — DI يعاكس{_ra_b64}" if _ra_b64 else "")
                                          + (" — ADX قوي: مراقبة خروج من النطاق" if ("جانبي" in _ra_w and _adx_w >= 25) else ""))
                 except Exception:
                     pass
@@ -3121,7 +3132,14 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     _wk1_extra = (f" — راقب الدعم {_fmt_price(_ctx_b40['support'])} "
                                   f"والمقاومة {_fmt_price(_ctx_b40['resistance'])}")
                     _adx_b40 = _ctx_b40.get("adx") or 0
-                    _adx_txt = (f"ADX {_adx_b40:.0f} {'✓' if _adx_b40 > 20 else '✗'}"
+                    # batch64 (البند 8ب، #843): ADX يُحتسب متحققاً فقط إن وافقت جهة DI الاستراتيجية
+                    # (اتباع الاتجاه شراءً: +DI أعلى؛ الارتداد: −DI أعلى أي هبوط يُشترى ارتداده)
+                    _dg64 = float(_ctx_b40.get("di_gap") or 0)
+                    _di_ok64 = (_dg64 <= 0) if _ctx_b40.get("mr") else (_dg64 > 0)
+                    _adx_txt = ((f"ADX {_adx_b40:.0f} {'✓' if (_adx_b40 > 20 and _di_ok64) else '✗'}"
+                                 + ("" if (_adx_b40 <= 20 or _di_ok64) else
+                                    (f" (القوة من {'+DI' if _dg64 > 0 else '−DI'} — لا تخدم "
+                                     f"{'مسار الارتداد' if _ctx_b40.get('mr') else 'اتباع الاتجاه شراءً'})")))
                                 if _adx_b40 > 0 else "ADX غير متاح الآن")   # batch44: لا «ADX 0» الوهمي
                     if _wk2_cond(symbols).startswith("Fear"):
                         _wk2_now = (f" [الآن: Fear {fear_val} {'✓' if fear_val < 30 else '✗'} · {_adx_txt}]")
@@ -3170,7 +3188,9 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines, _closed_pw = _collapse_closed_notes(lines)
         if _closed_pw:
             lines += [_CLOSED_GLOBAL_NOTE, ""]
-        if symbols: lines += ["ℹ️ «خيار المحترف» = تنفيذ بمستويات دخول/وقف/هدف عبر زر ⚡؛ يُفعَّل فقط عند اتجاه شراء واضح + الثقة ≥ حد الدخول + تحقق شرطي الاستراتيجية (اتباع الاتجاه: RSI فوق 45 وفوق EMA50؛ الارتداد للمتوسط: RSI ≤ 35 ودون EMA50)."]
+        if symbols: lines += ["ℹ️ «خيار المحترف» = تنفيذ بمستويات دخول/وقف/هدف عبر زر ⚡؛ يُفعَّل فقط عند اتجاه شراء واضح + الثقة ≥ حد الدخول + تحقق شرطي الاستراتيجية (اتباع الاتجاه: RSI فوق 45 وفوق EMA50؛ الارتداد للمتوسط: RSI ≤ 35 ودون EMA50).",
+                              # batch64 (البند 6ب): عتبات RSI حسب المسار — مختلفة عمداً لا تناقض
+                              "ℹ️ عتبات RSI حسب المسار: الخطط >45 لاتباع الاتجاه و≤35 للارتداد؛ /signal >55 لمسار الاختراق و<30 لتأكيد التشبع (2/4)."]
         # batch34: ربط الأحداث الكبرى بأسابيع الجدول كما في /planmonth (كان الوسم غائباً هنا)
         try:
             import time as _t_pwk

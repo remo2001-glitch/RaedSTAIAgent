@@ -327,10 +327,12 @@ async def _build_proposal(engine, user_id: int, base: str):
     tp1_price, tp2_price = float(rec["tp1"]), float(rec.get("tp2") or 0)
     tp1_pct = (tp1_price / price - 1) * 100
     tp2_pct = (tp2_price / price - 1) * 100 if tp2_price > price else tp1_pct
-    rr_now = tp1_pct / sl_pct if sl_pct > 0 else 0
-    if rr_now < 1.0:
+    # batch64 (البند 1ب): نفس بوابة /signal — R/R المرجّح 60% TP1 + 40% TP2
+    rr_now = (0.6 * tp1_pct + 0.4 * tp2_pct) / sl_pct if sl_pct > 0 else 0
+    if round(rr_now, 1) < 1.0:
         return None, (f"⛔ *{base}* — لا حافة إحصائية عند السعر الحالي {_fmt_price(price)}\n"
-                      f"R/R الآن 1:{rr_now:.2f} (الهدف {_fmt_price(tp1_price)} +{tp1_pct:.1f}% مقابل وقف −{sl_pct:.1f}%)\n"
+                      f"R/R المرجّح الآن 1:{rr_now:.2f} (60% الهدف {_fmt_price(tp1_price)} +{tp1_pct:.1f}% + 40% الهدف 2 +{tp2_pct:.1f}% "
+                      f"مقابل وقف −{sl_pct:.1f}%)\n"
                       f"لا تنفيذ — راجع /signal {base}")
 
     # الحجم: Risk Engine على إجمالي محفظة المستخدم الفعلية، ومحدود برصيد USDT المتاح

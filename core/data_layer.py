@@ -2119,6 +2119,8 @@ class DataLayer:
                     enriched["cvd_pct"] = _avg_pct
                     enriched["cvd_raw_pct"] = _raw_pct
                     enriched["cvd_n"] = len(_hist)
+                    # batch64 (البند 5ج): مدى القراءات خلال النافذة — لوسم «قراءة متذبذبة»
+                    enriched["cvd_range"] = round(max(p for _, p in _hist) - min(p for _, p in _hist), 1) if len(_hist) > 1 else 0.0
                     enriched["cvd_signal"] = (
                         "🟢 شراء" if _avg_pct >= 5.0 else
                         "🔴 بيع"  if _avg_pct <= -5.0 else
@@ -2126,7 +2128,7 @@ class DataLayer:
                     )
                     _CVD_CACHE[_cvd_key] = (_t_cvd.time(), {
                         k: enriched[k] for k in ("cvd", "cvd_pct", "cvd_signal",
-                                                 "cvd_raw_pct", "cvd_n")})
+                                                 "cvd_raw_pct", "cvd_n", "cvd_range")})
                     if len(_CVD_CACHE) > 300:
                         _CVD_CACHE.pop(next(iter(_CVD_CACHE)), None)
                     _cvd_persist_set("last", _cvd_key,
@@ -2315,11 +2317,39 @@ class DataLayer:
                                 "inflow":  0.0,
                                 "outflow": 0.0,
                             }
+                            # batch64 (البند 7ب): مئين القراءة مقابل آخر 30 يوماً (OKX يعطي >1.2 دائماً فالقيمة المطلقة بلا معنى) — عرض فقط
+                            try:
+                                _pc = await self._whale_pctile_b64(symbol, ratio)
+                                if _pc:
+                                    result.update(_pc)
+                            except Exception:
+                                pass
                             _store(key, result, "onchain")
                             return result
         except Exception as e:
             logger.debug(f"whale_ratio ({symbol}): {e}")
         return result
+
+    async def _whale_pctile_b64(self, symbol: str, ratio: float) -> dict:
+        """batch64: نسبة الأيام (آخر 30 يوماً) التي كانت قراءتها اليومية ≤ القراءة الحالية."""
+        key = f"whale_d30:{symbol.upper()}"
+        hist = _cached(key, "onchain")
+        if not hist:
+            url = (f"https://www.okx.com/api/v5/rubik/stat/contracts/"
+                   f"long-short-account-ratio?ccy={symbol.upper()}&period=1D")
+            hist = []
+            if self.session:
+                async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=8)) as r:
+                    if r.status == 200:
+                        data = await r.json()
+                        hist = [float(x[1]) for x in (data.get("data") or [])[:30] if len(x) >= 2]
+            if hist:
+                _store(key, hist, "onchain")
+        if not hist or len(hist) < 10:
+            return {}
+        p = sum(1 for v in hist if v <= ratio) / len(hist) * 100
+        return {"pctile": round(p), "pctile_n": len(hist),
+                "d30_min": round(min(hist), 2), "d30_max": round(max(hist), 2)}
 
     async def get_miner_flows(self, symbol: str = "BTC") -> dict:
         """

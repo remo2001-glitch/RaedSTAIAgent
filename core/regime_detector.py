@@ -196,6 +196,20 @@ class RegimeDetector:
             if _entry and time.time() - _entry["ts"] < _REGIME_CACHE_TTL:
                 return _entry["result"]
 
+        # batch64 (#824/#825، قرار رحال — الخيار 3): التصنيف وADX/DI وEMA من آخر شمعة مكتملة
+        # (كانت الشمعة الجارية تقلب «هابط»↔«جانبي» بحركة 0.1%)؛ RSI والسعر مقابل EMA50 يبقيان حيين للعرض.
+        _live_c64 = candles
+        _anch64 = False
+        try:
+            from core.indicators import last_candle_is_forming as _lcf64
+            _l64 = candles[-1] if candles else {}
+            if (len(candles) >= 31 and isinstance(_l64, dict)
+                    and (_l64.get("timestamp") is not None or _l64.get("confirm") is not None)
+                    and _lcf64(candles)):
+                candles = candles[:-1]
+                _anch64 = True
+        except Exception:
+            candles = _live_c64
         if len(candles) < 30:
             return RegimeResult(
                 Regime.UNKNOWN, 0.3,
@@ -333,6 +347,21 @@ class RegimeDetector:
         else:
             market_phase = "Unknown"
 
+        # batch64: عرض حي لـRSI والسعر مقابل EMA50 (التصنيف أعلاه من الشموع المكتملة)
+        metrics["anchored"] = _anch64
+        metrics["anchor_close"] = round(float(closes[-1]), 8)
+        if _anch64:
+            try:
+                _lc64 = [float(c["close"]) for c in _live_c64]
+                metrics["rsi"] = round(self._rsi(_lc64, 14), 1)
+                metrics["price_vs_ema50"] = round((_lc64[-1] - ema50) / ema50 * 100, 2) if ema50 else metrics["price_vs_ema50"]
+                metrics["live_close"] = round(_lc64[-1], 8)
+                # ATR% للعرض من الشموع الحية (نفس مصدر ATR$ في /signal) — التصنيف أعلاه بقي على المكتملة
+                _atr_l64 = self._atr([float(c["high"]) for c in _live_c64], [float(c["low"]) for c in _live_c64], _lc64, 14)
+                if _lc64[-1] > 0:
+                    metrics["atr_pct"] = round(min(_atr_l64 / _lc64[-1] * 100, 30.0), 4)
+            except Exception:
+                pass
         result = RegimeResult(
             regime=regime,
             confidence=confidence,
