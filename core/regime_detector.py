@@ -108,6 +108,12 @@ def regime_desc_display_b61(result) -> str:
         dp, dm = m.get("di_plus"), m.get("di_minus")
         if dp is not None and dm is not None and abs(float(dp) - float(dm)) < 3 and "قوي" in d:
             return d.replace(" قوي", "").replace("قوي", "").rstrip() + " (غير محسوم — DI متعادل)"
+        # batch63 (#822، قرار رحال: وسم عرض فقط): تصنيف المتوسطات يعاكس جهة DI بفارق ≥3
+        if dp is not None and dm is not None:
+            _g = float(dp) - float(dm)
+            if ("هابط" in d and _g >= 3) or ("صاعد" in d and _g <= -3):
+                return (d + f" — DI يعاكس التصنيف ({'+DI' if _g > 0 else '−DI'} أعلى بـ{abs(_g):.0f})، "
+                        f"الجهة غير محسومة")
         return d
     except Exception:
         return str(getattr(result, "description_ar", "") or "")

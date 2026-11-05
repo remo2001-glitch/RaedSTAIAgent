@@ -745,8 +745,22 @@ def _chart_fix_risk_size_b53(analysis: str, rr1, stop_pct):
         return analysis
 
 
-def _llm_decision_ctx(sig) -> str:
-    """batch36: جملة قرار النظام تُمرَّر لنموذج /analyze كي لا تتناقض الفقرة مع القرار."""
+def _llm_decision_ctx(sig, regime_obj=None) -> str:
+    """batch36: جملة قرار النظام تُمرَّر لنموذج /analyze كي لا تتناقض الفقرة مع القرار.
+    batch63 (#815): في الهبوط القائم لا «الاتجاه غير مؤكد» — نفس صياغة الرأس والقرار."""
+    try:
+        if regime_obj is not None:
+            _ok63, _adx63 = _bear_confirmed_b56(regime_obj)
+            if _ok63 and str(getattr(sig, "direction", "neutral") or "neutral").lower() not in ("long", "short"):
+                try:
+                    _c63 = float(getattr(sig, "confidence", 0) or 0)
+                    _c63 = _c63 * 100 if _c63 <= 1 else _c63
+                except (TypeError, ValueError):
+                    _c63 = 0.0
+                return (f"قرار النظام: انتظار — اتجاه هابط قائم (ADX {_adx63:.0f}) ولا إشارة شراء (الثقة {_c63:.0f}% دون حد الدخول)"
+                        ". اذكر هذا القرار صراحةً، ولا تصف الاتجاه بأنه غير مؤكد")
+    except Exception:
+        pass
     try:
         d = str(getattr(sig, "direction", "neutral") or "neutral").lower()
         if d == "long":
@@ -992,6 +1006,18 @@ def _consistency_pass_b62(text: str) -> str:
         # ── فقرة النموذج مقابل أرقام النظام ──
         if _bear:
             t = _r.sub(r"(?:حالة\s+)?عدم تأكيد (?:لل)?اتجاه(?: القادم)?", "استمرار الاتجاه الهابط القائم", t)
+            t = t.replace("قرار النظام: انتظار — الاتجاه غير مؤكد ولا إشارة دخول", "قرار النظام: انتظار — اتجاه هابط قائم ولا إشارة شراء")   # batch63 (#815)
+        # batch63 (#819): ترتيب EMA مختلط ⇒ لا «فوق المتوسطات الرئيسية»؛ DI متعادل ⇒ لا «يميل نحو السيناريو الصاعد/الهابط» بلا تحفظ
+        if "ترتيب مختلط" in t:
+            t = _r.sub(r"السعر فوق المتوسطات(?: المتحركة)? الرئيسية", "السعر فوق EMA50 فقط (ترتيب المتوسطات مختلط)", t)
+        if _neutral:
+            t = _r.sub(r"يميل المشهد(?: الفني)? نحو السيناريو (الصاعد|الهابط)",
+                       lambda m: f"يميل المشهد هيكلياً نحو السيناريو {m.group(1)} دون حسم للجهة (DI متعادل)", t)
+        # batch63 (#820): السقف 70% ليس تقييداً «بنسبة 70%»
+        t = _r.sub(r"تقييد التعرض(?: العام)? بنسبة (\d+%)", r"تقييد التعرض العام بسقف \1", t)
+        # batch63 (#821): حكم البوابة (AUTO-FAIL: R/R دون 1:1) يُذكر مع سبب الانتظار في الفقرة
+        if "AUTO-FAIL" in t and "لا حافة إحصائية" in t and "دون حد الدخول، وR/R" not in t:
+            t = _r.sub(r"(قرار النظام: انتظار[^\n]*?دون حد الدخول)\)", r"\1، وR/R دون 1:1 — لا حافة إحصائية)", t, count=1)
         _cv = _r.search(r"CVD \(آخر \d+ صفقة\):[^\n]*?\(([-+]\d+(?:\.\d+)?)%\)", t)
         if _cv and float(_cv.group(1)) < 0:
             _cva = abs(float(_cv.group(1)))
@@ -1020,7 +1046,8 @@ def _consistency_pass_b62(text: str) -> str:
         t = _r.sub(r"(📅 ماكرو: [^\n]*?) — التعرض المسموح (\d+%)",
                    lambda m: f"{m.group(1)} — سقف التعرض العام {m.group(2)}" + (" (حجم هذه الإشارة 0%)" if _zero else ""), t)
         # ── موضع الأطر في /analyze (#783) ──
-        if "🧠 تحليل" in t and "🧭 الاستراتيجية الموصى بها" in t:
+        # batch63 (#816): رأس /analyze فيه تنسيق «🧠 *تحليل» — كان الشرط لا يطابقه فلم يُنقل السطر
+        if _r.search(r"🧠\s*\*?\s*تحليل", t) and "🧭 الاستراتيجية الموصى بها" in t:
             _fl = _r.search(r"\n📊 الأطر: [^\n]*", t)
             if _fl:
                 _line = _fl.group(0)
@@ -2833,6 +2860,13 @@ def _build_professional_block(
         _time_exit = "5 أيام"
         _trade_dur = "2–5 أيام"
 
+    # batch63 (#812): مضاعف ATR في الوسم يُحسب من ATR المعروض للمستخدم (الهدف يُحسب بـATR الخام فكان «0.8×» لا يطابق 3.4%)
+    try:
+        if "×ATR" in str(locals().get("_tp1_basis62", "")) and float(atr_pct) > 0 and _px_anchor > 0 and tp1_v:
+            _r63 = (float(tp1_v) / _px_anchor - 1) / (float(atr_pct) / 100.0)
+            _tp1_basis62 = f"{_r63:.2f}×ATR ({float(atr_pct):.1f}%) من آخر إغلاق {_fmt_price(_px_anchor)}"
+    except Exception:
+        pass
     # FIN5b: R/R من pro_sl الفعلي المُحسَّن
     # rr_entry_reference_fix: كان _risk/_reward يُحسَبان من price (السعر
     # الحالي الخام) بينما "Entry 1 (Aggressive)" المعروضة للمستخدم مباشرة
@@ -3103,7 +3137,7 @@ def _build_professional_block(
             _cvd_n = int(_onchain.get("cvd_n", 1) or 1)
         except (TypeError, ValueError):
             _cvd_n = 1
-        _cvd_avg = f" — متوسط {_cvd_n} قراءات" if _cvd_n > 1 else " — قراءة واحدة (لا قراءات سابقة خلال 60 دقيقة للتنعيم)"
+        _cvd_avg = (" — متوسط قراءتين" if _cvd_n == 2 else f" — متوسط {_cvd_n} قراءات") if _cvd_n > 1 else " — قراءة واحدة (لا قراءات سابقة خلال 60 دقيقة للتنعيم)"
         deriv_lines.append(f"• CVD (آخر 500 صفقة): {_cvd_sig} ({_cvd_pct:+.1f}%){_cvd_avg}{_cvd_note}")
     else:
         # cvd_missing_notice: كان السطر يختفي بصمت عند فشل جلب CVD فيبدو كأنه غير مدعوم
@@ -3266,7 +3300,9 @@ def _build_professional_block(
             if _ok60:
                 _rr60 = (_ok60[0][0] - entry_agg) / _risk60
                 _rr_line += (f"\n• 📍 للمراقبة: أقرب مستوى يحقق R/R ≥ 1:1 هو {_fmt_price(_ok60[0][0])} — {_lbl61(_ok60[0][1])} "
-                             f"(1:{_rr60:.1f}) — ليس هدفاً مُفعَّلاً؛ الحكم يبقى «لا حافة»")
+                             f"(1:{_rr60:.1f}) — ليس هدفاً مُفعَّلاً؛ الحكم يبقى «لا حافة»"
+                             # batch63 (#817): بوابة R/R تُقاس على TP1 وحده (قرار رحال) — توضيح حين يكون المستوى TP2 نفسه
+                             + (" (بوابة R/R تُقاس على TP1 وحده)" if _ok60[0][1] == "TP2" else ""))
                 if _near60:
                     _rr_line += (f" | {_lbl61(_near60[0][1])} عند {_fmt_price(_near60[0][0])} يكاد يحققه "
                                  f"(1:{(_near60[0][0] - entry_agg) / _risk60:.2f})")
@@ -3511,8 +3547,14 @@ def _build_professional_block(
                     and not (_is_x_asset or tech.get("is_perp_asset", False) or _is_commodity(symbol))   # batch59 (#696)
                     and (_fund.get("source") not in (None, "unknown", "") or _fund_pct != 0)):
                 _miss.append(f"Funding سالب (حالياً {_fund_pct:+.4f}%)")
+            # batch63 (#814): في الهبوط القائم أول الناقص انتهاء الهبوط نفسه (كما في «متى تدخل» البند 1)
+            try:
+                if locals().get("_bear62") or _bear_confirmed_b56(regime)[0]:
+                    _miss.insert(0, "أولاً: انتهاء الهبوط القائم (ADX < 25 أو تقارب DI) — قبله لا تُحتسب تأكيدات الشراء")
+            except Exception:
+                pass
             if _miss:
-                parts.append("  ↳ الناقص: " + " | ".join(_miss[:4]))
+                parts.append("  ↳ الناقص: " + " | ".join(_miss[:5]))
         except Exception:
             pass
 
@@ -6979,7 +7021,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 candles_summary=_full_context_an,
                 ema_bearish=ema_bearish,
                 market_phase=_mp_ar_for_groq,
-                decision_ctx=_llm_decision_ctx(_sig_a),
+                decision_ctx=_llm_decision_ctx(_sig_a, locals().get("regime_obj")),
                 facts_ctx=_llm_facts_ctx(_sig_a) + _llm_levels_ctx_b61(fib_a) + _llm_event_ctx_b62(engine) + (
                     "؛ تحذير أساسي: بيانات غير موثوقة بعد انهيار حاد — اذكر ذلك في أول جملة" if _data_corrupted_an else ""))
             if not analysis or len(analysis.strip()) < 20:
@@ -8399,7 +8441,10 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                               "السعر تحت المتوسطات الأسية الأربعة (EMA 5/10/20/50)" if _n == 4 else
                               f"السعر تحت {_n} من 4 متوسطات أسية (EMA 5/10/20/50)"))(int(locals().get("ema_below_count")))
                  if locals().get("ema_below_count") is not None else ""),
-                ("سوق هابط" if is_bearish else "")) if x),
+                ("سوق هابط" if is_bearish else ""),
+                # batch63 (#827): سبب الانتظار يظهر في الأساس (كان يذكر عوامل إيجابية فقط)
+                ("سوق جانبي" if ("جانبي" in str(regime_desc) or "تذبذب" in str(regime_desc)) else ""),
+                ("R/R < 1" if _qs_rr_low else "")) if x),
             "",
             ("📍 *مستويات مرجعية فقط — غير موصى بالدخول (R/R < 1)*"
              if _qs_rr_low else
@@ -8490,14 +8535,15 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if sl > 0 and entry > 0:
             _qs_sl_pct = abs(entry - sl) / entry * 100
             _qs_tp_pct = abs(tp1 - entry) / entry * 100
-            if _qs_sl_pct > 0 and _qs_tp_pct / _qs_sl_pct < 2.0:
+            # batch63 (#826): R/R < 1 له سطر ⛔ واحد (العنوان يذكره أصلاً) — لا سطر «ضعيف» مكرر
+            if _qs_sl_pct > 0 and 1.0 <= _qs_tp_pct / _qs_sl_pct < 2.0:
                 _qs_warns.append(
                     f"⚠️ R/R = 1:{_fmt_rr(_qs_tp_pct/_qs_sl_pct)} "
                     + ("ضعيف" if _qs_tp_pct/_qs_sl_pct < 1.5 else "مقبول لكن دون 2.0")
                     + " (يُفضَّل ≥ 2.0) — محسوب على الهدف 1")
             # qs_rr_below_one: R/R < 1 (XKORU 0.7) = خسارة متوقعة سالبة هيكلياً
             if _qs_sl_pct > 0 and _qs_tp_pct / _qs_sl_pct < 1.0:
-                _qs_warns.append("⛔ R/R < 1 — المخاطرة أكبر من العائد المتوقع: لا يُنصح بالدخول بهذا الإعداد")
+                _qs_warns.append(f"⛔ R/R = 1:{_fmt_rr(_qs_tp_pct/_qs_sl_pct)} (< 1، محسوب على الهدف 1) — المخاطرة أكبر من العائد المتوقع: لا يُنصح بالدخول بهذا الإعداد")
             # qs_target_vs_atr: هدف أبعد من ~4×ATR غير واقعي في المدى القصير (XSPY: هدف 4.5% وATR 0.7%)
             try:
                 _atr_chk_qs = _calc_atr(candles) if candles else 0.0

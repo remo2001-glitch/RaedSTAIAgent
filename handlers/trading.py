@@ -3447,6 +3447,9 @@ def _exposure_note_b59(vw, symbol: str, side: str, spot: bool) -> str:
     return ""
 
 
+_NO_PERP_B63 = {"XAUT"}   # batch63 (#829): لا عقد دائم على OKX (راجع data_layer: XAUT-USDT-SWAP غير موجود)
+
+
 async def _open_virtual_futures_b58(user_id, symbol, side, price, amount, leverage,
                                     sl_pct, tp_pct, atr_pct, max_hold, size_note="") -> str:
     """batch59 (#726، قرار رحال): المبلغ المعتمد = القيمة الاسمية؛ الهامش = المبلغ ÷ الرافعة
@@ -3498,6 +3501,9 @@ async def _open_virtual_futures_b58(user_id, symbol, side, price, amount, levera
            f"الانزلاق قد يصل للتصفية قبل الوقف؛ خفّض الرافعة"]
           if (lev > 1 and atr_pct and abs(sl - float(pos['liq_price'])) < 0.5 * float(atr_pct) / 100 * ep) else []),
         *([_expo] if _expo else []),
+        # batch63 (#829): أصل بلا عقد دائم على OKX (XAUT-USDT-SWAP غير موجود) — كانت الخطط تقول ذلك والمحفظة تفتح بلا تنبيه
+        *([f"ℹ️ لا عقد دائم لـ {sym_u} على OKX — المركز الافتراضي يُسعَّر من الفوري (تدريب فقط؛ لا مقابل حقيقي في Futures)"]
+          if sym_u in _NO_PERP_B63 else []),
         f"💰 الرصيد المتبقي: ${vw.balance:,.2f}",
         "",
         "🎮 صفقة تدريبية — لا أموال حقيقية؛ الرافعة الحقيقية غير مفعّلة",

@@ -751,6 +751,8 @@ def _format_forecast_ar(symbol: str, price: float, fc: dict, days: int = 30, reg
         "",
         f"🔮 *تنبؤ {symbol} — {days} يوم القادمة*",
         "━━━━━━━━━━━━━━━━━━",
+        # batch63 (#831): السيناريوهات من الشموع اليومية (الجارية ضمنها) والنسب من السعر المعروض — يُذكر الأساس
+        f"• الأساس: شموع يومية حتى لحظة الطلب؛ النسب من السعر {p_fmt(price)}",
         # batch44: التسمية توضح أن الاتجاه من ترتيب EMA20/50/200 (متأخر) لا من إشارة الدخول
         f"• الاتجاه (ترتيب EMA): {trend_ar} | قوة ترتيب EMA: {conf_bar} {conf:.0%}"
         # batch58 (#677): ترتيب EMA (جهة) مقابل تصنيف السوق الجانبي (قوة ADX) — أساسان مختلفان يُوضَّحان
@@ -883,6 +885,27 @@ async def _open_position_lines_b59(engine, user_id: int, syms) -> list:
         except Exception:
             pass
     return out
+
+
+def _exclude_perp_only_spot_b63(symbols: list, use_futures: bool) -> tuple:
+    """batch63 (#828، قرار رحال): في خطط Spot يُستبعد الأصل المتاح كعقد دائم فقط (XAG = الفضة)
+    — كان يُحلَّل ببيانات العقد ويُعرض كأنه قابل للتنفيذ الفوري. يعيد (القائمة، المستبعَد)."""
+    if use_futures or not symbols:
+        return symbols, []
+    try:
+        from core.data_layer import _PERP_ONLY_COMMODITY as _po
+    except Exception:
+        _po = {"XAG"}
+    keep = [s for s in symbols if str(s).upper() not in _po]
+    return keep, [str(s).upper() for s in symbols if str(s).upper() in _po]
+
+
+def _perp_excl_line_b63(excl: list, cmd: str) -> str:
+    if not excl:
+        return ""
+    _s = "، ".join(sorted(set(excl)))
+    return (f"⏸️ مُستبعَد من خطة Spot: {_s} — متاح على OKX كعقد دائم فقط (الفضة)؛ "
+            f"للخطة: /{cmd} {' '.join(sorted(set(excl)))} ثم اختر Futures")
 
 
 def _exclude_open_position_symbols(symbols: list, excluded: set) -> tuple:
@@ -1149,6 +1172,7 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # للوقت والتركيز على فرص جديدة فعلاً، بناءً على طلب رحال الصريح.
         _excluded_open_pm = await _get_open_position_symbols(engine, update.effective_user.id)
         symbols, _excluded_syms_pm = _exclude_open_position_symbols(symbols, _excluded_open_pm)
+        symbols, _perp_excl_pm = _exclude_perp_only_spot_b63(symbols, _use_futures_pm)   # batch63 (#828)
 
         # ── 2. OHLCV لجميع العملات متوازية ───────────────────
         # إصلاح #123: timeout صريح — يمنع تجمد كامل الطلب إذا عملة واحدة
@@ -1421,6 +1445,8 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "regime_ar":       (__import__("core.regime_detector", fromlist=["regime_desc_display_b61"]).regime_desc_display_b61(_reg_asset_pm)
                                         if _reg_asset_pm is not None else ""),   # batch35: نظام الأصل نفسه (batch61 #744)
                     "adx":             float(((getattr(_reg_asset_pm, "metrics", None) or {}).get("adx")) or 0),
+                    "strong_bear":     bool(__import__("core.regime_detector", fromlist=["_strong_bear_b58"])._strong_bear_b58(_reg_asset_pm))
+                                       if _reg_asset_pm is not None else False,   # batch63 (#832)
                     "signal_id":       _sig_id_pm,
                     "change_24h":      float((((_prices_all[i] if not isinstance(_prices_all[i], Exception) else {}) or {}).get("change_24h")) or 0),
                 })
@@ -1495,6 +1521,8 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lines.append(f"{_pm_noun_h}: {', '.join(_display_syms_pm if '_display_syms_pm' in dir() else symbols)}")
         # open_position_exclusion_fix: توضيح صريح لأي رمز استُبعِد من المسح
         # لوجود مركز مفتوح عليه بالفعل — بدل اختفائه بصمت
+        if locals().get("_perp_excl_pm"):
+            lines.append(_perp_excl_line_b63(_perp_excl_pm, "planmonth"))
         if locals().get("_excluded_syms_pm"):
             lines.append(
                 f"⏸️ مُستبعَد (مركز مفتوح بالفعل): {', '.join(sorted(set(_excluded_syms_pm)))}"
@@ -1612,6 +1640,9 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                  + (" — ADX قوي: مراقبة خروج من النطاق" if ("جانبي" in _ra_pm and _adx_pm >= 25) else ""))
                 except Exception:
                     pass
+                if _use_futures_pm and (cand or {}).get("strong_bear"):   # batch63 (#832)
+                    line += ("\n    ℹ️ الهبوط القائم مجال Short في Futures (متاح في المحفظة الافتراضية فقط؛ "
+                             "لا تقييم Short في رائد بعد)")
                 if sym_p in _g4_blocked_pm:
                     line += f"\n    {_g4_blocked_pm[sym_p]}"
                 elif sym_p in _g4_notes_pm:
@@ -2182,6 +2213,10 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # رحال الصريح بأن يشمل الاستبعاد كل أوامر المسح معاً لا أمراً بمفرده.
     _excluded_open_pw = await _get_open_position_symbols(engine, update.effective_user.id)
     symbols, _excluded_syms_pw = _exclude_open_position_symbols(symbols, _excluded_open_pw)
+    symbols, _perp_excl_pw = _exclude_perp_only_spot_b63(symbols, _use_futures_pw)   # batch63 (#828)
+    if _perp_excl_pw and not symbols and not _excluded_syms_pw:
+        await _get_message_p(update, context).reply_text(_perp_excl_line_b63(_perp_excl_pw, "planweek"))
+        return
     sym_str2 = ", ".join(symbols)
 
     # إصلاح #875: دعم msg من callback
@@ -2304,6 +2339,8 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         # open_position_exclusion_fix: نفس التوضيح المُطبَّق في /planmonth —
         # لا اختفاء صامت لأي رمز استُبعِد لوجود مركز مفتوح عليه بالفعل
+        if locals().get("_perp_excl_pw"):
+            lines.append(_perp_excl_line_b63(_perp_excl_pw, "planweek"))
         if locals().get("_excluded_syms_pw"):
             lines.append(
                 f"⏸️ مُستبعَد (مركز مفتوح بالفعل): {', '.join(sorted(set(_excluded_syms_pw)))}"
@@ -2434,7 +2471,10 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         _m62 = getattr(_reg_a, "metrics", None) or {}
                         _a62 = float(_m62.get("adx", 0) or 0)
                         _g62 = float(_m62.get("di_minus", 0) or 0) - float(_m62.get("di_plus", 0) or 0)
-                        strat_name += (f" (الارتداد مسموح: ADX {_a62:.0f}، فرق −DI/+DI {_g62:.1f} < 3 — لا هبوط قائم بقاعدة /signal)"
+                        # batch63 (#823): صياغة الجهة صراحة بدل فرق سالب
+                        strat_name += ((f" (الارتداد مسموح: +DI أعلى بـ{-_g62:.1f} — جهة DI تعاكس تصنيف الهبوط؛ لا هبوط قائم بقاعدة /signal)"
+                                        if _g62 < 0 else
+                                        f" (الارتداد مسموح: ADX {_a62:.0f}، −DI أعلى بـ{_g62:.1f} فقط (< 3) — لا هبوط قائم بقاعدة /signal)")
                                        if _a62 >= 25 else f" (الارتداد مسموح: ADX {_a62:.0f} < 25 — لا هبوط قائم بقاعدة /signal)")
                 except Exception:
                     pass
@@ -2723,6 +2763,14 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                   if is_tokenized_x_ticker(str(_disp_sym_pw).upper()) else [])
                 # batch36: ملاحظة الذهب ونظام الأصل نفسه في /planweek (كانا في /planmonth فقط)
                 _pw_extra = []
+                # batch63 (#832): خطة Futures لأصل في هبوط قائم — نفس توضيح /signal عن Short
+                try:
+                    from core.regime_detector import _strong_bear_b58 as _sb63
+                    if _use_futures_pw and _sb63(_reg_a):
+                        _pw_extra.append("  ℹ️ الهبوط القائم مجال Short في Futures (متاح في المحفظة الافتراضية فقط؛ "
+                                         "لا تقييم Short في رائد بعد) — الشروط أدناه للشراء فقط")
+                except Exception:
+                    pass
                 try:
                     _vl_pw = _atr_vol_line(atr_v * 100) if atr_v else ""
                     if _vl_pw:
@@ -2944,6 +2992,13 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     _pw_ref_lbl = "السوق المرجعي BTC"
                     # batch62 (#808): قائمة كلها غير كريبتو — القرار يلخص نظام كل أصل بدل مرجع BTC
                     _own62 = [(str(s).upper(), _pw_asset_reg_ar.get(str(s).upper(), "")) for s in symbols]
+                    # batch63 (#830): نفس ترتيب أقسام الأصول المعروضة أدناه
+                    def _pos63(k):
+                        for _ix, _l in enumerate(lines):
+                            if isinstance(_l, str) and "💎" in _l and f"*{k}*" in _l:
+                                return _ix
+                        return 10 ** 6
+                    _own62.sort(key=lambda kv: _pos63(kv[0]))
                     if all(v for _, v in _own62):
                         _pw_ref_lbl = "نظام كل أصل"
                         _regime_ar = " · ".join(f"{k}: {v}" for k, v in _own62)
