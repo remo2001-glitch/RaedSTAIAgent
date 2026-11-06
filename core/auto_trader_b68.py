@@ -28,7 +28,10 @@ AUTO_SLIP = 0.001
 AUTO_HOLD_HOURS = 120.0
 AUTO_MIN_USD = 20.0
 STABLES = {"USDT", "USDC", "BUSD", "DAI", "TUSD", "USDP", "FDUSD", "USDD", "GUSD", "LUSD", "FRAX",
-           "MIM", "ALUSD", "SUSD", "PYUSD", "USDE", "USD1", "RLUSD", "EURC"}
+           "MIM", "ALUSD", "SUSD", "PYUSD", "USDE", "USD1", "RLUSD", "EURC", "USDS", "USDTB", "BUIDL", "USYC",
+           # batch68c: أصول مغلّفة/مرهونة تكرّر BTC/ETH (ولا سوق فوري لها على OKX) + رموز منصات بلا سيولة OKX كافية
+           "WBTC", "WETH", "STETH", "WSTETH", "WEETH", "CBBTC", "RETH", "WBETH", "METH", "LBTC", "SOLVBTC", "BSC-USD",
+           "JITOSOL", "MSOL", "LEO", "FIGR_HELOC", "WBT"}
 # معايير العبور إلى الحقيقي (المتفق عليها 2026-11-06)
 CRIT_MIN_TRADES = 50
 CRIT_MAX_DD_PCT = 10.0
