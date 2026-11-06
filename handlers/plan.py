@@ -665,7 +665,7 @@ def _calc_price_forecast(candles: list, days: int = 30,
         return {
             "trend":        trend,
             "rsi":          round(rsi, 1),
-            "atr_pct":      round(atr_pct, 2),
+            "atr_pct":      atr_pct,   # batch67 (#959): بلا تقريب مسبق — round(1.5498,2)=1.55 كان يُعرض 1.6 مقابل 1.5 في كتلة الأصل
             "fear_greed":   fear_greed,
             "btc_dom":      btc_dominance,
             "vol_ratio":    round(vol_ratio, 2),
@@ -760,9 +760,9 @@ def _format_forecast_ar(symbol: str, price: float, fc: dict, days: int = 30, reg
         + (f"\n  ↳ لا تناقض مع «تذبذب جانبي» أعلاه: ترتيب المتوسطات يبيّن الجهة، وتصنيف السوق يبيّن ضعف قوة الاتجاه (ADX)"
            if (fc.get("trend") in ("bullish", "bearish") and ("جانبي" in str(regime_desc) or "تذبذب" in str(regime_desc))) else ""),
         f"• RSI: {fc.get('rsi',50):.0f} | ATR: {_fmt_atr_pct(fc.get('atr_pct',0))}%",
-        (f"• Fear&Greed: {fc.get('fear_greed',50)} | BTC Dom: {fc.get('btc_dom',50):.0f}%"
-         if not _is_commodity_fc(symbol) else
-         f"• Fear&Greed: {fc.get('fear_greed',50)} | BTC Dom: {fc.get('btc_dom',50):.0f}% (مرجع للسوق الرقمي فقط — لا يخص الذهب)"),
+        # batch67 (#963 — امتداد قرار #874): لا Fear&Greed/هيمنة في تنبؤ أصل غير كريبتو (كان يُعرض ثم يُقال «لا يخص»)
+        *([f"• Fear&Greed: {fc.get('fear_greed',50)} | BTC Dom: {fc.get('btc_dom',50):.0f}%"]
+          if not (_is_commodity_fc(symbol) or __import__('core.symbol_classify', fromlist=['x']).is_tokenized_x_ticker(symbol)) else []),
         (f"• 🔊 حجم مرتفع (Wyckoff ✅) ({_fvr_fc50(fc.get('vol_ratio',0))})" if fc.get('wyckoff')
          # batch57 (#661/#671): الأيقونة تتبع وصف volume_word نفسه (كان 1.2x «عادي» يظهر 🔊 مرة و🔉 مرة)
          else f"• {({'مرتفع': '🔊', 'عادي': '🔉', 'أقل من المتوسط': '🔉'}).get(_vol_word(fc.get('vol_ratio', 1.0)), '🔇')} حجم {_vol_word(fc.get('vol_ratio', 1.0))} ({_fvr_fc50(fc.get('vol_ratio',0))})"),
@@ -2483,7 +2483,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         # batch63 (#823): صياغة الجهة صراحة بدل فرق سالب
                         strat_name += ((f" (الارتداد مسموح: DI متعادل (فرق {abs(_g62):.1f} < 3) — لا هبوط قائم بقاعدة /signal)"
                                         if abs(_g62) < 3 else   # batch65 (#856)
-                                        f" (الارتداد مسموح: +DI أعلى بـ{-_g62:.1f} — جهة DI تعاكس تصنيف الهبوط؛ لا هبوط قائم بقاعدة /signal)"
+                                        f" (المطبّق: الارتداد للمتوسط بشروطه أدناه وبحجم مخفّض — +DI أعلى بـ{-_g62:.1f}: جهة DI تعاكس تصنيف الهبوط؛ لا هبوط قائم بقاعدة /signal)"
                                         if _g62 < 0 else
                                         f" (الارتداد مسموح: ADX {_a62:.0f}، −DI أعلى بـ{_g62:.1f} فقط (< 3) — لا هبوط قائم بقاعدة /signal)")
                                        if _a62 >= 25 else f" (الارتداد مسموح: ADX {_a62:.0f} < 25 — لا هبوط قائم بقاعدة /signal)")
@@ -2514,6 +2514,12 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if len(closes_w) >= 50:
                     _ema50_w_raw = _ema_last(closes_w, 50, closes_w[-1])
                     ema50_w = _ema50_w_raw if _ema50_w_raw <= price * 3.0 else price
+                try:   # batch67 (#958/#971): EMA50 من الشموع المكتملة = نفس رقم «السعر vs EMA50» في /signal (كانت الخطة تشمل الشمعة الجارية: 9.5% مقابل 9.9%)
+                    _e50_reg67 = float(((getattr(locals().get('_reg_a'), "metrics", None) or {}).get("ema50")) or 0)
+                    if _e50_reg67 > 0 and _e50_reg67 <= price * 3.0:
+                        ema50_w = _e50_reg67
+                except Exception:
+                    pass
                 rsi_w    = _calc_rsi(candles) if len(candles) >= 15 else 50.0
                 # batch40: نفس RSI الظاهر في /signal (من تقنيات الإشارة) بدل إعادة حسابه من الشموع (40 مقابل 41)
                 try:
@@ -2806,7 +2812,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         if _use_futures_pw:
                             from handlers.analysis import _mkt_tag_b41 as _mt_b45
                             if "لا عقد دائم" in _mt_b45("futures", candles):
-                                _pw_extra.append("  ℹ️ لا عقد دائم للأصل — البيانات من الفوري")
+                                _pw_extra.append("  ⚠️ مرجعي فقط: لا عقد دائم للأصل على OKX — البيانات من الفوري، والتنفيذ في Futures غير ممكن حقيقياً (التدريب الافتراضي مسموح)")   # batch67 (قرار رحال #960/#978)
                     except Exception:
                         pass
                     try:   # batch61 (#744)
@@ -2827,7 +2833,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"  الإشارة: {dir_ar} | الثقة: {signal.confidence:.0%}{conf_warning}",
                     f"  الاستراتيجية: {strat_name}",
                     f"  🏷️ الجاهزية: {_ready_tag_w} ({_n_ok_w}/4 شروط)",
-                ] + _pw_extra + _synth_pw_line + ([f"  {_sharp_warn(change_24h)}"] if _sharp_warn(change_24h) else []) + entry_lines + ([f"  {_g4_msg_w}"] if _g4_msg_w else []) + [""]
+                ] + _pw_extra + _synth_pw_line + ([f"  {_sharp_warn(change_24h, float(locals().get('atr_v') or 0) * 100)}"] if _sharp_warn(change_24h, float(locals().get('atr_v') or 0) * 100) else []) + entry_lines + ([f"  {_g4_msg_w}"] if _g4_msg_w else []) + [""]
             except Exception as e:
                 logger.warning(f"plan_week {sym}: {e}")
                 lines.append(f"⚠️ {sym}: {str(e)[:50]}")
@@ -2899,6 +2905,14 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                                               or getattr(regime, "description_ar", "")))
                     # batch57 (#669): أفق التنبؤ أطول من الخطة الأسبوعية — يُوسَم
                     _fct57 = _fct57.replace("يوم القادمة*", "يوم القادمة* (أفق شهري مرجعي — أطول من هذه الخطة)", 1)
+                    try:   # batch67 (#962): التنبؤ لأصل واحد — يُذكر لماذا وأين تنبؤ البقية
+                        _oth67 = [str(x).upper() for x in symbols if str(x).upper() != str(_fc_sym).upper()]
+                        if _oth67:
+                            _fct57 = _fct57.replace("━━━━━━━━━━━━━━━━━━",
+                                                    f"━━━━━━━━━━━━━━━━━━\nℹ️ التنبؤ لأصل واحد في الخطة الأسبوعية؛ لتنبؤ {'، '.join(_oth67)}: "
+                                                    f"/planmonth {' '.join(_oth67)}", 1)
+                    except Exception:
+                        pass
                     lines.append(_fct57)
         except Exception as _fce:
             logger.debug(f"planweek forecast30: {_fce}")
@@ -3196,7 +3210,8 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _wk3_extra = _wk4_extra = ""
             week_lines = [
                 f"• أسبوع 1: مراقبة — لا دخول حتى تتضح الإشارات{_wk1_extra}",
-                f"• أسبوع 2: دخول جزئي (25%) فقط إذا تحقق شرط المصفوفة ({_wk2_cond(symbols, _mr_wk2)}){_wk2_now} مع ثقة ≥ حد الدخول وتأكيدات 2/4",
+                f"• أسبوع 2: دخول جزئي (25%) فقط إذا تحقق شرط المصفوفة ({_wk2_cond(symbols, _mr_wk2)}){_wk2_now} مع ثقة ≥ حد الدخول وتأكيدات 2/4"
+                " — ضمن سقف التعرض (70% قبل حدث كبير، 50% في نافذته)",   # batch67 (#964 — قرار #876)
                 f"• أسبوع 3: إن وُجدت صفقة مفتوحة فراجع وقف الخسارة{_wk3_extra or (' (وقف كل أصل بقاعدة /signal الخاص به: ≥1.5×ATR تحت الدخول)' if len(symbols) > 1 else '')}؛ وإلا واصل المراقبة",
                 f"• أسبوع 4: تقييم — هل بلغت الثقة حد الدخول (55%) وتحققت تأكيدات 2/4 مع اتجاه شراء؟{_wk4_extra}",
             ]

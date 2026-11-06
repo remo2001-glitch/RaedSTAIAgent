@@ -13,16 +13,43 @@ BREADTH_WEAK_UP = 0.30      # نسبة الصاعدة ≤ هذا مع وصف ص�
 BREADTH_STRONG_UP = 0.70    # نسبة الصاعدة ≥ هذا مع وصف هابط → تنبيه
 
 
-def sharp_move_warning(change_24h) -> str:
-    """نص تحذير (فارغ إن لا حركة حادة). يُستخدم بنفس الصيغة في كل الواجهات."""
+SHARP_ATR_MULT = 1.5        # batch67 (قرار رحال): الحركة حادة إن تجاوزت 6% أو 1.5×ATR
+
+
+def sharp_move_level(change_24h, atr_pct=None) -> int:
+    """batch67 (قرار رحال 2026-11-06 «الاثنان معاً»): تعريف واحد للحركة الحادة في كل الأوامر.
+    0 = عادية · 1 = حادة (|تغير| > 6% أو ≥ 1.5×ATR) · 2 = حادة بالمعيارين معاً → «🚨 خطر الدخول مرتفع».
+    بلا ATR معروف: العتبة الثابتة وحدها تعطي 1 (لا 🚨 لأن المعيار الثاني غير قابل للتحقق)."""
     try:
-        c = float(change_24h)
+        c = abs(float(change_24h))
     except (TypeError, ValueError):
+        return 0
+    try:
+        a = float(atr_pct or 0)
+    except (TypeError, ValueError):
+        a = 0.0
+    fixed = c > SHARP_MOVE_PCT
+    by_atr = a > 0 and c >= SHARP_ATR_MULT * a
+    if fixed and by_atr:
+        return 2
+    return 1 if (fixed or by_atr) else 0
+
+
+def sharp_move_warning(change_24h, atr_pct=None) -> str:
+    """نص تحذير (فارغ إن لا حركة حادة). يُستخدم بنفس الصيغة في كل الواجهات."""
+    lvl = sharp_move_level(change_24h, atr_pct)
+    if not lvl:
         return ""
-    if abs(c) <= SHARP_MOVE_PCT:
-        return ""
+    c = float(change_24h)
     kind = "ارتفاع" if c > 0 else "انخفاض"
-    return f"🚨 {kind} حاد {abs(c):.1f}% في 24 ساعة — خطر الدخول مرتفع"
+    try:
+        a = float(atr_pct or 0)
+    except (TypeError, ValueError):
+        a = 0.0
+    _x = f" (≈{abs(c) / a:.1f}×ATR)" if a > 0 else ""
+    if lvl == 2:
+        return f"🚨 {kind} حاد {abs(c):.1f}%{_x} في 24 ساعة — خطر الدخول مرتفع"
+    return f"⚠️ {kind} حاد {abs(c):.1f}%{_x} في 24 ساعة — لا مطاردة؛ انتظر استقرار السعر"
 
 
 def breadth_note(regime_desc: str, changes: Iterable, noun: str = "عملات") -> Optional[str]:

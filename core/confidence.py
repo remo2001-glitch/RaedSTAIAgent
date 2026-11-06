@@ -34,6 +34,7 @@ def collect_confirmation_flags(
     fund_pct: float, oi_chg: float,
     base_flags: Optional[List[str]] = None,
     exclude_funding: bool = False,
+    vol_dir: str = "",
 ) -> List[str]:
     """التعريف الوحيد للتأكيدات (batch44: يستخدمه /signal و/analyze والخطط والمسح — كان في /signal نسخة
     منفصلة مكرَّرة). يُرجع نصوص المتحقق منها قبل تصفية الاتجاه. exclude_funding للذهب."""
@@ -47,7 +48,9 @@ def collect_confirmation_flags(
         # ولا فرق في العوائد بعدها، فكان يرفع الثقة دون قدرة تنبؤية. يبقى للعرض فقط.
         if vol_ratio >= 1.5:
             from core.indicators import fmt_vol_ratio as _fvr
-            flags.append(f"Volume Spike {_fvr(vol_ratio)} ✓")
+            # batch67 (#944): جهة شمعة الحجم تُوسَم — حجم شمعة هابطة لا يؤكد الشراء (والعكس)
+            _vd = {"down": " (شمعة هابطة)", "up": " (شمعة صاعدة)"}.get(str(vol_dir or ""), "")
+            flags.append(f"Volume Spike {_fvr(vol_ratio)}{_vd} ✓")
         if rsi < 30:
             flags.append(f"RSI ذروة بيع ({rsi:.0f}) ✓")
         if cvd_signal and cvd_pct >= 20.0:
@@ -71,7 +74,11 @@ def filter_flags_by_direction(flags: List[str], direction: str) -> Tuple[List[st
     ignored: List[str] = []
     for f in (flags or []):
         is_vol = str(f).startswith("Volume Spike")
-        ok = (d == "long") or (is_vol and d == "short")
+        if is_vol:
+            # batch67 (#944): حجم شمعة هابطة يؤكد Short فقط، وحجم شمعة صاعدة يؤكد Long فقط
+            ok = (d == "long" and "هابطة" not in str(f)) or (d == "short" and "صاعدة" not in str(f))
+        else:
+            ok = (d == "long")
         (counted if ok else ignored).append(f)
     return counted, ignored
 
@@ -154,6 +161,7 @@ def boosted_confidence_from_signal(
         fund_pct=_f(enriched.get("funding_rate_pct")),
         oi_chg=_f(oi_chg),
         exclude_funding=funding_excluded(getattr(signal, "symbol", "")),
+        vol_dir=str(tech.get("vol_dir", "") or ""),
     )
     flags, _ign = filter_flags_by_direction(flags, direction)   # batch36: اتجاه الإشارة يحدد ما يُحتسب
     new_conf, boost = apply_confirmation_boost(

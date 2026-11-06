@@ -1203,10 +1203,30 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
             _sorted_ev = sorted(events[:6], key=lambda e: _news_impact(e)[0])
             lines += ["", "⚡ *الأحداث الرئيسية (السلبي أولاً)*",
                       "🔴 سلبي · 🟡 محايد · 🟢 إيجابي — تصنيف آلي بالكلمات المفتاحية"]
+            # batch67 (#937): خبر لا يذكر العملة المطلوبة يُوسم
+            _al67 = {"BTC": ("btc", "bitcoin", "بيتكوين", "بتكوين"), "ETH": ("eth", "ethereum", "إيثيريوم", "ايثيريوم", "إيثريوم"),
+                     "SOL": ("sol", "solana", "سولانا"), "XRP": ("xrp", "ripple", "ريبل"), "BNB": ("bnb", "binance", "بينانس")}
+            def _not_sym67(e):
+                try:
+                    if not symbols:
+                        return ""
+                    el = str(e).lower()
+                    if any(any(a in el for a in _al67.get(str(sy).upper(), (str(sy).lower(),))) for sy in symbols):
+                        return ""
+                    return f" (لا يخص {'، '.join(symbols)} مباشرة)"
+                except Exception:
+                    return ""
             lines += [
-                f"{_news_impact(e)[1]} {_truncate_at_word(_html.unescape(str(e)).replace('_',' ').replace('*',''), 170)}"
+                f"{_news_impact(e)[1]} {_truncate_at_word(_html.unescape(str(e)).replace('_',' ').replace('*',''), 170)}{_not_sym67(e)}"
                 for e in _sorted_ev if e
             ]
+            # batch67 (#936): «محايد» مع غلبة السلبي في الأحداث المعروضة
+            try:
+                _ic67 = [_news_impact(e)[1] for e in _sorted_ev if e]
+                if sent_label.startswith("⚪") and _ic67.count("🔴") > _ic67.count("🟢"):
+                    lines[2] = lines[2].replace(f"المشاعر: {sent_label}", "المشاعر: ⚪ محايد مائل للسلبي (حسب الأحداث المعروضة)", 1)
+            except Exception:
+                pass
 
         flags = analysis.get("risk_flags", [])
         if flags:
@@ -1364,7 +1384,13 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
         # ستُترجم تلقائياً بعد تفعيل Groq API في ملخص التحليل
         _out_news = "\n".join(lines)
         # توحيد التسمية داخل نص عربي
-        _out_news = _out_news.replace("Bitcoin ETFs", "ETF البيتكوين").replace("Bitcoin", "BTC").replace("ETFs", "ETF")
+        # batch67 (#932/#933): لا يُستبدل «Bitcoin» داخل أسماء العلم (Mercado Bitcoin، Bitcoin Magazine…) ولا تتكرر «BTC (BTC)»
+        import re as _rb67
+        _out_news = _out_news.replace("Bitcoin ETFs", "ETF البيتكوين")
+        _out_news = _rb67.sub(r"Bitcoin\s*\(BTC\)", "BTC", _out_news)
+        _out_news = _rb67.sub(r"(?<![A-Za-z])(?<![A-Za-z] )Bitcoin(?!\s+[A-Z])(?!\w)(?!\.[a-z])", "BTC", _out_news)
+        _out_news = _rb67.sub(r"BTC\s*\(BTC\)", "BTC", _out_news)
+        _out_news = _out_news.replace("ETFs", "ETF")
         return _out_news
 
 

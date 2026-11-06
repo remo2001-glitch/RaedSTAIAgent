@@ -2631,7 +2631,9 @@ class DataLayer:
             defi_only = [
                 p for p in protos
                 if p.get("name","").lower() not in CEX_EXCLUDE
-                and p.get("category","").lower() not in ("cex","exchange","centralized exchange")
+                and p.get("category","").lower() not in ("cex","exchange","centralized exchange",
+                                                         # batch67 (#897): الجسور والسلاسل وحفظ الأصول ليست «بروتوكولات DeFi» (LayerZero ظهر الأكبر)
+                                                         "bridge","canonical bridge","cross chain","cross chain bridge","chain","interoperability")
             ]
             top = sorted(defi_only, key=lambda x: float(x.get("tvl") or 0),
                          reverse=True)[:10]

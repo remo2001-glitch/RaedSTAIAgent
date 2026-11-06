@@ -53,6 +53,37 @@ def _pct_nz46(x):
     return "0.0" if abs(x) < 0.05 else f"{x:+.1f}"
 
 
+def _oi_pct_b67(x) -> str:
+    """batch67 (#899/#951): تغيّر OI (ساعة) بمنزلتين في كل الأوامر — كان /signal يعرض «0.0%» و/onchain «+0.5%» بدقتين مختلفتين."""
+    try:
+        x = float(x or 0)
+    except (TypeError, ValueError):
+        x = 0.0
+    return "0.00" if abs(x) < 0.005 else f"{x:+.2f}"
+
+
+def _imbalance_lbl67(imb) -> str:
+    try:
+        from core.microstructure import _imbalance_label
+        return _imbalance_label(imb)
+    except Exception:
+        return ""
+
+
+def _whale_range_b67(r: float, w: dict) -> str:
+    """batch67 (#895): القراءة خارج مدى آخر 30 يوماً تُذكر صراحة (كان «2.97 — المدى 1.21–2.96»)."""
+    try:
+        lo, hi = float(w.get("d30_min") or 0), float(w.get("d30_max") or 0)
+        rng = f"{lo:.2f}–{hi:.2f}"
+        if hi > 0 and r > hi:
+            return f"(أعلى من أقصى آخر 30 يوماً: المدى {rng})"
+        if lo > 0 and r < lo:
+            return f"(أدنى من أقل آخر 30 يوماً: المدى {rng})"
+        return f"(المدى {rng})"
+    except Exception:
+        return ""
+
+
 def _whale_line_b66(whale) -> str:
     """batch66 (#864/#870): سطر Whale موحّد لـ/onchain و/liquidity بنفس وصف المئين في /signal
     (OKX > 1.2 دائماً تقريباً، فالقيمة المطلقة لا تعني شيئاً — الموقع من آخر 30 يوماً هو المعنى)."""
@@ -69,7 +100,7 @@ def _whale_line_b66(whale) -> str:
             lbl = ("🟢 ميل Long أعلى من المعتاد" if p >= 80 else
                    "🔴 ميل Long أدنى من المعتاد" if p <= 20 else "⚪ ضمن المعتاد")
             return (f"• Whale Ratio ({r:.2f}): {lbl} — مئين {p} مقابل آخر {int(w.get('pctile_n') or 30)} يوماً "
-                    f"(المدى {float(w.get('d30_min') or 0):.2f}–{float(w.get('d30_max') or 0):.2f}) — للعرض فقط")
+                    f"{_whale_range_b67(r, w)} — للعرض فقط")
     except Exception:
         pass
     return f"• Whale Ratio ({r:.2f}): ⚪ بلا مرجع 30 يوماً — عيّنة حسابات OKX، للعرض فقط"
@@ -856,6 +887,15 @@ def _adx_fmt58(adx) -> str:
         return f"{float(adx or 0):.0f}"
 
 
+def _dpct_b67(d: float) -> str:
+    """batch67 (#961/#970): مسافة صغيرة بمنزلتين (0.05% لا «0.0%» في أمر و«0.1%» في آخر لنفس المستوى)."""
+    try:
+        d = abs(float(d))
+    except (TypeError, ValueError):
+        return "0.0"
+    return f"{d:.2f}" if d < 0.1 else f"{d:.1f}"
+
+
 def _fib_tight_b57(level: float, price: float, atr_pct: float = 0.0) -> str:
     """batch57 (#664): مستوى ضمن max(0.5%، نصف ATR) من السعر ليس حاجزاً فعلياً — يُوسَم بدل حذفه (لا يغيّر الدخول)."""
     try:
@@ -863,8 +903,8 @@ def _fib_tight_b57(level: float, price: float, atr_pct: float = 0.0) -> str:
         if d < max(0.5, 0.5 * float(atr_pct or 0)):
             # batch59 (#698): «ملاصق» لما دون 0.5%؛ الأبعد داخل نصف ATR يُسمّى بأساسه
             if d < 0.5:
-                return f" — ملاصق للسعر ({d:.1f}%)، ليس حاجزاً فعلياً"
-            return f" — ضمن نصف ATR من السعر ({d:.1f}%)، حاجز ضعيف"
+                return f" — ملاصق للسعر ({_dpct_b67(d)}%)، ليس حاجزاً فعلياً"
+            return f" — ضمن نصف ATR من السعر ({_dpct_b67(d)}%)، حاجز ضعيف"
     except Exception:
         pass
     return ""
@@ -1073,6 +1113,21 @@ def _consistency_pass_b62(text: str) -> str:
     if not text or ("📍 مناطق الدخول" not in text and "🧠 تحليل" not in text and "📡 إشارة رائد" not in text):
         return text
     t = text
+    try:   # batch67 (#952/#953): R/R للأهداف المخفية يُوسم مرجعياً، والدرجة العالية تُقرن بـEV السلبي
+        if "الأهداف: غير مُفعَّلة" in t:
+            t = t.replace("• R/R المرجّح: 1:", "• R/R المرجّح (أهداف مرجعية غير مفعّلة): 1:")
+        if "EV سلبي" in t:
+            t = _r.sub(r"(📊 \*?جودة إعداد الصفقة[^\n]*?\d+/100)(?! \(EV)", r"\1 (EV سلبي بالثقة الحالية — الدرجة للبنية لا للفرصة)", t, count=1)
+    except Exception:
+        pass
+    try:   # batch67 (#967/#968): تصنيف هابط يعاكسه DI (وسم عرض — قرار الدفعة 63) — السبب والسيناريو لا يُقدَّمان كهبوط قائم
+        if "DI يعاكس التصنيف" in t and "+DI أعلى" in t:
+            t = t.replace("📊 السيناريو: 📉 الاتجاه هابط — احتفظ بالسيولة",
+                          "📊 السيناريو: 📉 التصنيف هابط لكن +DI أقوى (الجهة غير محسومة) — احتفظ بالسيولة حتى الحسم")
+            t = _r.sub(r"\(السبب: سوق هابط وADX=([\d.]+)>30\)",
+                       r"(السبب: تصنيف هابط وADX=\1>30 — لكن +DI أعلى: ليس هبوطاً قائماً بقاعدة /signal، ومسار الارتداد غير معطّل)", t)
+    except Exception:
+        pass
     try:
         _di = _r.search(r"\+DI:?\s*(\d+(?:\.\d+)?)\s*/\s*-DI:?\s*(\d+(?:\.\d+)?)", t)
         _neutral = bool(_di and abs(float(_di.group(1)) - float(_di.group(2))) < 3)
@@ -1197,14 +1252,14 @@ def _move24_line_b56(chg: float, atr_pct: float) -> str:
     """batch56 (#607/#616): حركة 24س كبيرة (≥1.5×ATR) تُذكر صراحة بدل تجاهلها في القرار والفقرة."""
     try:
         chg, atr_pct = float(chg or 0), float(atr_pct or 0)
-        from core.market_checks import SHARP_MOVE_PCT as _smp66
-        # batch66 (#888): الحركة فوق عتبة الحدة الثابتة تظهر هنا أيضاً حتى دون 1.5×ATR (كان SOL −6.9% يظهر أسفل الرسالة فقط)
-        if atr_pct > 0 and (abs(chg) >= 1.5 * atr_pct or abs(chg) > _smp66):
-            # batch61 (#745): سطر واحد للحركة الكبيرة — يضم «خطر الدخول مرتفع» (كان سطر 🚨 منفصلاً أسفل الرسالة بعتبة أخرى)
-            from core.market_checks import SHARP_MOVE_PCT as _smp61
+        # batch67 (#945/#985 — قرار رحال): تعريف واحد core/market_checks.sharp_move_level
+        # (حادة: > 6% أو ≥ 1.5×ATR؛ 🚨 عند تحقق المعيارين) — كان 🚨 مرتبطاً بـ6% وحدها فظهر لـETH 1.6×ATR لا BTC 1.8×ATR
+        from core.market_checks import sharp_move_level as _sml67
+        _lv67 = _sml67(chg, atr_pct)
+        if atr_pct > 0 and _lv67:
             return (f"⚡ حركة 24س {chg:+.2f}% ≈ {abs(chg) / atr_pct:.1f}×ATR — "
                     + ("ارتداد/صعود قوي قصير الأجل" if chg > 0 else "هبوط حاد قصير الأجل")
-                    + (" — 🚨 خطر الدخول مرتفع" if abs(chg) > _smp61 else ""))
+                    + (" — 🚨 خطر الدخول مرتفع" if _lv67 == 2 else ""))
     except Exception:
         pass
     return ""
@@ -1631,6 +1686,9 @@ def _fmt_rr(rr: float) -> str:
     """
     if round(rr, 1) == 2.0:
         return f"{rr:.2f}"
+    # batch67 (#939/#992): قرب حد الحافة 1:1 تُعرض منزلتان (0.94 لا «0.9»/«0.90»؛ 0.95 لا «1.0»)
+    if 0.9 <= rr < 1.05:
+        return f"{rr:.2f}"
     return f"{rr:.1f}"
 
 
@@ -1837,6 +1895,8 @@ def _calc_fibonacci(candles: list, lookback: int = 60, price_cap_mult: float = 3
                 and (_l64.get("timestamp") is not None or _l64.get("confirm") is not None)
                 and _lcf64f(candles)):
             _live_px64 = float(_l64.get("close", 0) or 0)
+            _live_lo67 = float(_l64.get("low", 0) or 0)    # batch67 (#946): أدنى/أعلى الشمعة الجارية لرصد كسر لحظي
+            _live_hi67 = float(_l64.get("high", 0) or 0)
             candles = candles[:-1]
             _anch64 = True
     except Exception:
@@ -1889,6 +1949,7 @@ def _calc_fibonacci(candles: list, lookback: int = 60, price_cap_mult: float = 3
             "nearest_resistance": nearest_resistance,
             "price": price,
             "anchored": _anch64, "anchor_close": price, "live_price": _live_px64 or price,
+            "live_low": locals().get("_live_lo67") or 0.0, "live_high": locals().get("_live_hi67") or 0.0,
         }
     except Exception:
         return {}
@@ -1912,10 +1973,12 @@ def _entry_hint_b65(price: float, entry: float, ns: float, atr_pct: float = 0.0)
     try:
         if ns > 0 and price < ns:
             return ""   # batch66 (#879): وسم الدخول يقول «دخول بعد استرداده» — لا تكرار
-        d = (price / entry - 1) * 100 if entry > 0 else 0.0
+        # batch67 (#987): المسافة كنسبة من السعر الحي — نفس أساس «على بُعد» في الأسباب و☑ في الـChecklist (كان 2.7% مقابل 2.6%)
+        d = (price - entry) / price * 100 if (entry > 0 and price > 0) else 0.0
         if d <= max(0.5, 0.5 * float(atr_pct or 0)):
             return "السعر قريب من الدعم فادخل بعد تأكيد الارتداد فقط"
-        return f"أمر Limit عند المستوى — السعر الحي أعلى منه بـ{d:.1f}%؛ لا مطاردة للسعر"
+        # batch67 (#986): لا «أمر Limit» مسبق — Entry يشترط شمعة رفض أو استرداد (قاعدة السيناريوهات)
+        return f"السعر الحي أعلى منه بـ{_dpct_b67(d)}% — انتظر وصوله ثم شمعة رفض؛ لا مطاردة ولا أمر مسبق"
     except Exception:
         return "ادخل بعد تأكيد الارتداد فقط"
 
@@ -1986,6 +2049,16 @@ def _fmt_fib_lines(fib: dict, price: float, atr_pct: float = 0.0) -> list:
         if ns > 0 and _lv0 > 0 and abs(ns - _lv0) / _lv0 < 1e-6:
             lines.append("⚠️ الدعم المعتمد = قاع نطاق Fib (0.0) — كسره يعني قاعاً جديداً بلا دعم Fib أدنى؛ "
                          "الهدف التالي بمقياس ATR لا بمستوى Fib")
+    except Exception:
+        pass
+    try:   # batch67 (#946): كسر لحظي اليوم ثم استرداد — اختبار حي لقيمة المستوى
+        _llo = float(fib.get("live_low") or 0)
+        _lhi = float(fib.get("live_high") or 0)
+        if fib.get("anchored") and ns > 0 and 0 < _llo < ns <= price:
+            lines.append(f"ℹ️ الدعم {_fmt_price(ns)} كُسر لحظياً اليوم (أدنى {_fmt_price(_llo)}، −{_dpct_b67((ns - _llo) / ns * 100)}%) ثم استُرد — "
+                         "اختبار حي؛ إغلاق يومي تحته يُسقطه")
+        if fib.get("anchored") and nr > 0 and _lhi > nr >= price:
+            lines.append(f"ℹ️ المقاومة {_fmt_price(nr)} اختُرقت لحظياً اليوم (أعلى {_fmt_price(_lhi)}) ثم ارتد السعر تحتها — رفض حي للمستوى")
     except Exception:
         pass
     if fib.get("anchored"):   # batch64: أساس المستويات معلن
@@ -2095,8 +2168,13 @@ def _build_professional_block(
     # SignalResult لا يملك حقل vol_ratio على المستوى الأعلى، فكان السطر
     # السابق (#260 لاحقاً) يفشل في رصد vol_ratio<0.8 قبل إعادة التعيين
     # اللاحقة في الكود — الآن مصدر واحد للحقيقة من البداية
+    _vdir67b = ""
     try:
         _vol_ratio = float(tech.get("vol_ratio", 1.0) or 1.0)
+        _vdir67b = str(tech.get("vol_dir", "") or "")
+        if not _vdir67b:
+            from core.indicators import completed_candle_dir_b67 as _ccd67b
+            _vdir67b = _ccd67b(candles)
     except Exception:
         _vol_ratio = 1.0
     adx       = _calc_adx(candles) or float(tech.get("adx", 0) or 0)
@@ -2157,7 +2235,8 @@ def _build_professional_block(
     if macd_hist < 0:
         reasons.append("• MACD سالب (البائعون مسيطرون — من آخر شمعة يومية مكتملة)")
     elif macd_hist > 0:
-        reasons.append("• MACD موجب (زخم شراء — من آخر شمعة يومية مكتملة، لا يشمل حركة اليوم)")
+        reasons.append("• MACD موجب (زخم شراء — من آخر شمعة يومية مكتملة، لا يشمل حركة اليوم)"
+                       + (" — ارتداد قصير داخل اتجاه هابط، لا ينقض التصنيف" if is_bear else ""))   # batch67 (#955)
     # rsi_display_rounding_fix: int() كان يبتر الكسر (70.6→"70") بينما رأس
     # الرسالة نفسها يُقرِّب .0f (70.6→"71") — فارق رقم بين الرأس والأسباب
     # لنفس القيمة. توحيد على .0f كبقية الرسالة.
@@ -2175,7 +2254,7 @@ def _build_professional_block(
     nr = fib.get("nearest_resistance", 0)
     if ns > 0:
         dist = abs(price - ns) / max(price, 1e-9) * 100
-        reasons.append(f"• أقرب دعم {_fmt_price(ns)} على بُعد {dist:.1f}%")
+        reasons.append(f"• أقرب دعم {_fmt_price(ns)} على بُعد {_dpct_b67(dist)}%")
     # batch32: أسباب كانت تظهر في ذيل الرسالة فقط أو لا تظهر (IOST: RSI 4H=76 وBB فوق الحد العلوي والحياد بلا شرح)
     try:
         _c4_r = tech.get("candles_4h") or []
@@ -2282,7 +2361,11 @@ def _build_professional_block(
                 _vol_part = (f"الحجم {fmt_vol_ratio(_vr3)} متحقق (≥1.5x) — يتبقى" if _vr3 >= 1.5
                              else "المطلوب حجم 1.5x+ مع")
                 # batch37: ✅ فقط حين يكتمل الشرط (الحجم متحقق)؛ وإلا يُذكر الجزء المتحقق والمتبقي بلا علامة اكتمال
-                if _vr3 >= 1.5:
+                if _vr3 >= 1.5 and _vdir67b == "down":
+                    # batch67 (#944): حجم شمعة هابطة = حجم بيع — لا يُعد متحققاً لمسار الارتداد (شراء)
+                    _cond3 = (f"3. السعر فوق الدعم {_sup_display} (متحقق الآن) — الحجم {fmt_vol_ratio(_vr3)} من شمعة هابطة (حجم بيع) "
+                              f"فلا يُحتسب للارتداد؛ يتبقى: شمعة صاعدة بحجم 1.5x+ مع ثبات إغلاق 4H فوقه (مسار الارتداد)")
+                elif _vr3 >= 1.5:
                     _cond3 = (f"3. ✅ السعر فوق الدعم {_sup_display} بالفعل — {_vol_part} "
                               f"الحفاظ على إغلاق 4H فوق {_sup_display} مع بقية الشروط (مسار الارتداد)")
                 else:
@@ -2665,6 +2748,7 @@ def _build_professional_block(
         whale_ratio=_whale_ratio, cvd_signal=_cvd_oc_f.get("cvd_signal"), cvd_pct=_cvd_pct_f,
         fund_pct=_fund_pct, oi_chg=_oi_chg,
         base_flags=list(_conf_flags), exclude_funding=_gold_fund_ex,
+        vol_dir=_vdir67b,
     )
     _conf_flags, _flags_ignored = _ffd(_conf_flags, direction)
     _flags_found = len(_conf_flags)
@@ -3094,7 +3178,9 @@ def _build_professional_block(
     _rr_adjusted_note = ""
     # batch57 (قرار رحال 2026-11-04 14:00): لا رفع آلي للهدف إلى 1:1 — كان يُخفي بنية بلا حافة بعد وقف ≥1.5×ATR
     # (XKORU/SOL/ETH «1:1.0» بهدف مشتق من الوقف). يُعرض R/R الحقيقي، ودون 1:1 = لا حافة ⇒ حجم 0% وقرار انتظار.
-    _no_edge_b57 = rr_real < 1.0
+    # batch67 (#992): الحكم على القيمة غير المقرّبة — 0.96 كانت تُقرَّب 1.0 فتفلت من «لا حافة»
+    rr_raw = min(_rrw_64, 5.0)
+    _no_edge_b57 = rr_raw < 1.0
     if _no_edge_b57:
         _rr_adjusted_note = " — ⛔ لا حافة إحصائية (دون 1:1)"
         if not str(_pos_size_rule).strip().startswith("0%"):
@@ -3113,7 +3199,12 @@ def _build_professional_block(
             # نفس الأساس المستخدم الآن لعرض TP1%/TP2%/SL% للمستخدم، لضمان
             # أن R/R المعروض يطابق حسابياً ما يراه المستخدم من الأسعار الفعلية
             _rr_shown = _rrw_64   # batch64: نفس R/R المرجّح المعروض
-        if _rr_shown is not None and 0 < _rr_shown < 2.0:
+        if _rr_shown is not None and 0 < _rr_shown < 1.0:
+            # batch67 (#942 — نفس قرار #826 في /quicksignal): دون 1:1 سطر ⛔ واحد بلا «ضعيف (يُفضَّل ≥ 2.0)»
+            _risk_warnings.append(
+                f"⛔ R/R المرجّح = 1:{_fmt_rr(_rr_shown)} — لا حافة إحصائية: العائد المرجّح للهدفين أقل من مسافة الوقف "
+                "(≥1.5×ATR)؛ لا دخول بهذه البنية")
+        elif _rr_shown is not None and 1.0 <= _rr_shown < 2.0:
             _risk_warnings.append(
                 f"⚠️ R/R = 1:{_fmt_rr(_rr_shown)} "
                 + ("ضعيف" if _rr_shown < 1.5 else "مقبول لكن دون 2.0")
@@ -3299,9 +3390,9 @@ def _build_professional_block(
         # batch54 (#466): الأصل المُرمَّز بلا عقد دائم — «غير متاح لهذا الأصل» لا «الآن» (يوحي بعطل مؤقت)
         deriv_lines.append("• Funding Rate: ⚪ غير متاح لهذا الأصل (لا عقد دائم)" if (_is_x_asset or _is_commodity(symbol))
                            else "• Funding Rate: ⚪ غير متاح الآن")
-    if _oi_chg != 0:
-        deriv_lines.append(f"• Open Interest (آخر ساعة): {_pct_nz46(_oi_chg)}% {_oi_sig}")
-    elif not _oi_known_b41:
+    if _oi_chg != 0 or _oi_known_b41:
+        deriv_lines.append(f"• Open Interest (آخر ساعة): {_oi_pct_b67(_oi_chg)}% {_oi_sig}".rstrip())
+    else:
         deriv_lines.append("• Open Interest: ⚪ غير متاح لهذا الأصل (لا عقد دائم)" if (_is_x_asset or _is_commodity(symbol))
                            else "• Open Interest: ⚪ غير متاح الآن")
     # إصلاح #241-A: Whale/TVL غير ذي صلة للأصول المُرمَّزة غير الرقمية
@@ -3332,7 +3423,7 @@ def _build_professional_block(
                     _whale_ext_b59 = ""
                     _whale_note_pro = ""
                     _pc64 = (f" — مئين {int(_whale['pctile'])} مقابل آخر {int(_whale.get('pctile_n') or 30)} يوماً "
-                             f"(المدى {float(_whale.get('d30_min') or 0):.2f}–{float(_whale.get('d30_max') or 0):.2f})")
+                             f"{_whale_range_b67(_whale_ratio, _whale)}")   # batch67 (#895)
             except Exception:
                 _pc64 = ""
             deriv_lines.append(f"• Whale Ratio{_wr_txt}: {_whale_sig}{_whale_note_pro}{_whale_src_b49}{_whale_ext_b59}{_pc64} — للعرض فقط (لا يدخل في الثقة)")
@@ -3375,6 +3466,10 @@ def _build_professional_block(
     if deriv_lines:
         # batch66 (#883): في Spot بيانات المشتقات من سوق العقود الدائمة — يُوسم مصدرها
         _spot66 = isinstance(tech, dict) and str(tech.get("bb_mkt", "")).lower() == "spot"
+        # batch67 (#969): لا وسم «من سوق العقود الدائمة» لأصل بلا عقد دائم (كل المشتقات «غير متاح لهذا الأصل»)
+        if _spot66 and not any(("Funding Rate: " in str(_l) and "غير متاح لهذا الأصل" not in str(_l)) or
+                               ("Open Interest (" in str(_l)) for _l in deriv_lines):
+            _spot66 = False
         parts.extend(["", "*🔗 Derivatives & On-Chain*" + (" (المشتقات من سوق العقود الدائمة — مرجع للفوري)" if _spot66 else "")])
         parts.extend(deriv_lines)
 
@@ -3454,7 +3549,7 @@ def _build_professional_block(
          if (_entries_distinct and _bear62) else
          (f"• Entry 1 (Aggressive): {_fmt_price(entry_agg)} — {_agg_label}"
           # batch66 (#885): توجيه المسافة نفسه لـ Entry 1 حين يبعد عن السعر الحي
-          + (("؛ " + _h66b) if ((_h66b := _entry_hint_b65(price, entry_agg, ns, atr_pct)) and "Limit" in _h66b) else ""))
+          + (("؛ " + _h66b) if ((_h66b := _entry_hint_b65(price, entry_agg, ns, atr_pct)) and "أعلى منه" in _h66b) else ""))
          if _entries_distinct else
          (f"• Entry (مرجعي): {_fmt_price(entry_agg)} — {_agg_label}؛ لا شراء في الهبوط القائم — مستوى للعلم فقط"
           if _bear62 else
@@ -3502,10 +3597,10 @@ def _build_professional_block(
     # rr_display_fix: عرض R/R دائماً حتى عند عدم التأكيد
     _has_real_targets = _confirmed and tp1_v > 0 and tp1_v != price and _conf_score >= 40
     if _has_real_targets and not _is_wait_decision:
-        _rr_line = f"• R/R الواقعي المرجّح (TP1 60% + TP2 40%): 1:{rr_real}{_rr_adjusted_note}"
+        _rr_line = f"• R/R الواقعي المرجّح (TP1 60% + TP2 40%): 1:{_fmt_rr(rr_raw)}{_rr_adjusted_note}"
     elif _has_real_targets:
         # batch30 rr_label_wait: «الواقعي» لصفقة حجمها 0% والقرار انتظار تسمية مضلّلة
-        _rr_line = f"• R/R المرجّح (نظري — القرار انتظار؛ TP1 60% + TP2 40%): 1:{rr_real}{_rr_adjusted_note}"
+        _rr_line = f"• R/R المرجّح (نظري — القرار انتظار؛ TP1 60% + TP2 40%): 1:{_fmt_rr(rr_raw)}{_rr_adjusted_note}"
     elif tp1_v > 0 and pro_entry > 0 and pro_sl > 0:
         # display_pct_consistency_fix (#307): نفس التوحيد أعلاه
         _rr_calc = _rrw_64 if "_rrw_64" in dir() else abs(tp1_v - entry_agg) / max(abs(entry_agg - pro_sl), 1e-9)   # batch64: مرجّح
@@ -3551,13 +3646,16 @@ def _build_professional_block(
                     return f"Fib {k}"
             if _ok60:
                 _rr60 = (_ok60[0][0] - entry_agg) / _risk60
-                _rr_line += (f"\n• 📍 للمراقبة: أقرب مستوى يحقق R/R ≥ 1:1 هو {_fmt_price(_ok60[0][0])} — {_lbl61(_ok60[0][1])} "
-                             f"(1:{_rr60:.1f}) — ليس هدفاً مُفعَّلاً؛ الحكم يبقى «لا حافة»"
-                             # batch63 (#817): بوابة R/R تُقاس على TP1 وحده (قرار رحال) — توضيح حين يكون المستوى TP2 نفسه
-                             + (" (البوابة تقيس R/R المرجّح 60/40 لا TP2 منفرداً)" if _ok60[0][1] == "TP2" else ""))
-                if _near60:
-                    _rr_line += (f" | {_lbl61(_near60[0][1])} عند {_fmt_price(_near60[0][0])} يكاد يحققه "
-                                 f"(1:{(_near60[0][0] - entry_agg) / _risk60:.2f})")
+                # batch67 (#941): مستوى Fib يكاد يطابق TP2 المعروض (≤0.1%) يُذكر صراحة — كان يبدو أن الهدف الثاني ليس عند مستوى حافة
+                _tp2_near67 = ""
+                try:
+                    if tp2_v and _ok60[0][1] != "TP2" and abs(float(tp2_v) - _ok60[0][0]) / _ok60[0][0] <= 0.001:
+                        _tp2_near67 = " = TP2 المرجعي تقريباً"
+                except Exception:
+                    pass
+                # batch67 (#940): المقياس هنا R/R هدف منفرد — يُسمّى كذلك (البوابة على المرجّح 60/40)، وأُزيل «يكاد يحققه»
+                _rr_line += (f"\n• 📍 للمراقبة: أقرب مستوى يحقق 1:1 كهدف منفرد هو {_fmt_price(_ok60[0][0])} — {_lbl61(_ok60[0][1])}"
+                             f"{_tp2_near67} (1:{_rr60:.1f} منفرداً) — ليس هدفاً مُفعَّلاً؛ الحكم على R/R المرجّح 60/40 يبقى «لا حافة»")
             else:
                 _rr_line += "\n• 📍 لا مستوى Fib ضمن المدى يحقق R/R ≥ 1:1 من هذا الدخول"
     except Exception:
@@ -3609,7 +3707,7 @@ def _build_professional_block(
     # batch31: Tail Risk بأساسين (السعر الحالي ونقطة الدخول) كي لا يُقارَن −3.0% «من الدخول» بـ ~10% «من السعر» بلا ربط
     _wc_ent_txt = ""
     try:
-        if entry_agg and entry_agg > 0 and wc_bd2 and abs(entry_agg - price) / max(price, 1e-9) > 0.002:
+        if entry_agg and entry_agg > 0 and wc_bd2:   # batch67 (#973): يُذكر دائماً — نفس صيغة كل الأصول
             _wc_ent_txt = f"، {(entry_agg - wc_bd2) / entry_agg * 100:.1f}% من نقطة الدخول"
     except Exception:
         _wc_ent_txt = ""
@@ -3622,10 +3720,8 @@ def _build_professional_block(
             # batch53 (#368/#387): رقم المقياس يُذكر مرة واحدة وبوضوح عند وجود سقف/حد أدنى فقط (كان «3.5×ATR (مقياس 4×ATR…)» يربك)
             _wc_sl_bound = bool(pro_sl) and abs(wc_bd2 - pro_sl * 0.95) <= max(abs(wc_bd2), 1e-9) * 1e-6
             if _wc_sl_bound:
-                _wc_ent_txt += " (أبعد بـ5% من الوقف — الحد الأدنى للمسافة بعد الكسر)"
-                if _wc_atr_x > 4.5:
-                    # batch56 (#602): لأصل منخفض التقلب يطغى حد 5% فيصير «المتطرف» أضعاف ATR
-                    _wc_ent_txt += " — حد 5% يتجاوز مقياس ATR لهذا الأصل منخفض التقلب"
+                # batch67 (#973): صياغة واحدة مختصرة بدل جملتين متداخلتين
+                _wc_ent_txt += (" — 5% تحت الوقف (حد أدنى" + ("؛ يتجاوز مقياس ATR لهذا الأصل منخفض التقلب)" if _wc_atr_x > 4.5 else ")"))
                 # batch54 (#473/#485): قد تتجاوز المسافة سقف 15% لأن الوقف نفسه عميق
                 if abs(_px_anchor - wc_bd2) / max(_px_anchor, 1e-9) > 0.155:
                     _wc_ent_txt += " — وهو يتجاوز سقف 15% لأن الوقف نفسه عميق (تقلب الأصل مرتفع)"
@@ -3732,7 +3828,7 @@ def _build_professional_block(
              f" → يفتح الطريق نحو {_fmt_price(_bear_tgt)} (≈ -{_bear_pct:.1f}% من مستوى الكسر"
              + ("، وهو مستوى الوقف نفسه" if _bear_at_sl else
                 # batch62 (#775): أساس الهدف الهابط (ليس مستوى Fib)
-                ("؛ = 1×ATR تحت الكسر" if 0.03 < _bear_move < 0.08 else "؛ حد أدنى 3% تحت الكسر" if _bear_move <= 0.03 else "؛ سقف 8% تحت الكسر"))
+                ("؛ = 1×ATR% محسوباً من مستوى الكسر" if 0.03 < _bear_move < 0.08 else "؛ حد أدنى 3% تحت الكسر" if _bear_move <= 0.03 else "؛ سقف 8% تحت الكسر"))
              + ")"),
             (f"❌ إلغاء: Entry لا يُفعَّل بمجرد الوصول"
              f" — يشترط شمعة رفض أو استرداد. كسر {_fmt_price(_sl_scen)} = إلغاء"),
@@ -3855,7 +3951,7 @@ def _build_professional_block(
     if ns > 0:
         _price_diff_pct = (price - ns) / max(price, 1e-9) * 100  # batch18: نفس أساس سطر الأسباب (نسبة من السعر)
         if price >= ns:
-            _reclaim_line = f"☑ السعر فوق الدعم {_fmt_price(ns)} (+{_price_diff_pct:.1f}%)"
+            _reclaim_line = f"☑ السعر فوق الدعم {_fmt_price(ns)} (+{_dpct_b67(_price_diff_pct)}%)"
         elif price >= ns * 0.99:
             _reclaim_line = (f"⚠️ السعر أسفل الدعم {_fmt_price(ns)} "
                              f"بـ {abs(_price_diff_pct):.1f}% — يحتاج إعادة اختبار")
@@ -3885,7 +3981,9 @@ def _build_professional_block(
         "",
         "*📋 Checklist الاستعداد (مؤشرات داعمة للعلم — لا تدخل في تأكيدات 2/4 ولا تؤثر على حجم الصفقة)*",
         _div_line,
-        f"{'☑' if _vol_ratio >= 1.5 else '□'} Volume Spike ≥1.5x (حالياً {fmt_vol_ratio(_vol_ratio)})",
+        (f"□ Volume Spike ≥1.5x (حالياً {fmt_vol_ratio(_vol_ratio)} — شمعة هابطة: حجم بيع لا يدعم الشراء)"
+         if (_vol_ratio >= 1.5 and locals().get("_vdir67b") == "down") else
+         f"{'☑' if _vol_ratio >= 1.5 else '□'} Volume Spike ≥1.5x (حالياً {fmt_vol_ratio(_vol_ratio)})"),   # batch67 (#944)
         _reclaim_line,
         _macd_line_b45,
         _whale_line,
@@ -3925,6 +4023,7 @@ def _build_professional_block(
         "confidence_pct": _conf_score, "confirmations_met": _flags_found,
         "rsi": rsi, "direction": direction, "is_x_asset": _is_x_asset,
         "confirmed": _confirmed, "rr_real": rr_real if "rr_real" in dir() else None,
+        "rr_raw": locals().get("rr_raw"),   # batch67 (#992): بوابة G3 على القيمة غير المقرّبة
         "decision_label": locals().get("_decision_label", ""),
         "pos_size_rule": locals().get("_pos_size_rule", ""),   # batch58: لقرار /trade
         "price": price,
@@ -4377,9 +4476,18 @@ async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"news fetch failed: {_ne}")
             items = []
 
+        # batch67 (#934): الملخص يُبنى من أخبار الكريبتو المعروضة فقط (كان يذكر «الذكاء الاصطناعي» من خبر محذوف)
+        _items_llm67 = items
+        try:
+            from core.news import _is_crypto_news as _icn67, _is_political_noise as _ipn67
+            _f67 = [it for it in items if _icn67(str((it or {}).get("title", ""))) and not _ipn67(str((it or {}).get("title", "")))]
+            if _f67:
+                _items_llm67 = _f67
+        except Exception:
+            _items_llm67 = items
         try:
             analysis = await _aio_n.wait_for(
-                engine.news_engine.analyze(items, symbols),
+                engine.news_engine.analyze(_items_llm67, symbols),
                 timeout=15.0)
             if not analysis or not isinstance(analysis, dict):
                 analysis = engine.news_engine._neutral_analysis()
@@ -4403,13 +4511,54 @@ async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _ev56 = engine.event_risk.upcoming_events(hours_ahead=168) if getattr(engine, "event_risk", None) else []
             _ev56 = sorted(_ev56, key=lambda e: e.event_time)[:3]
             if _ev56 and "السيناريوهات السعرية" in text:
-                import datetime as _dt56
-                _evs = "، ".join(f"{e.name_ar} ({_dt56.datetime.utcfromtimestamp(e.event_time + 3 * 3600).strftime('%Y-%m-%d')})" for e in _ev56)
+                import datetime as _dt56, time as _tm67
+                from core.event_risk import _hours_ar_b66 as _har67
+                def _evd67(e):
+                    _h = (e.event_time - _tm67.time()) / 3600.0
+                    _when = (f"بعد {_har67(max(1, int(round(_h))))}" if 0 < _h <= 24 else
+                             _dt56.datetime.utcfromtimestamp(e.event_time + 3 * 3600).strftime('%Y-%m-%d'))
+                    return f"{e.name_ar} ({_when})"
+                _evs = "، ".join(_evd67(e) for e in _ev56)
                 _k56 = text.find("💡")
-                _ins56 = f"📅 محفزات ماكرو قريبة: {_evs} — نتائجها قد تتجاوز أثر الأخبار أعلاه\n\n"
+                _ins56 = f"📅 محفزات ماكرو قريبة: {_evs} — نتائجها قد تتجاوز أثر الأخبار أعلاه\n"
+                # batch67 (#930 — قرار #876 موحّد في كل الأوامر): سقف التعرض الحالي
+                try:
+                    _em67n, _er67n = engine.event_risk.get_exposure_multiplier()
+                    if _er67n:
+                        _ins56 += f"🛡️ {_clean_md(_er67n)} — سقف التعرض العام {_em67n:.0%}\n"
+                except Exception:
+                    pass
+                _ins56 += "\n"
                 text = (text[:_k56] + _ins56 + text[_k56:]) if _k56 > 0 else (text + "\n\n" + _ins56.strip())
+                # batch67 (#935): السيناريوهات تُربط بالمحفز المعروف بدل «بيانات اقتصادية إيجابية» العامة
+                _e0 = _ev56[0].name_ar
+                text = text.replace("🟢 *صاعد:* إذا جاءت بيانات اقتصادية إيجابية",
+                                    f"🟢 *صاعد:* إذا خففت نتائج {_e0} توقعات التشديد النقدي")
+                text = text.replace("🔴 *هابط:* إذا تصاعدت التوترات التنظيمية",
+                                    f"🔴 *هابط:* إذا عززت نتائج {_e0} توقعات التشديد، أو تصاعدت التوترات التنظيمية")
+                text = text.replace("💡 *توصية:* أخبار محايدة — تابع المؤشرات التقنية",
+                                    f"💡 *توصية:* أخبار محايدة — تابع المؤشرات التقنية، وراعِ سقف التعرض قبل {_e0}", 1)
         except Exception as _e56n:
             logger.debug(f"news macro events: {_e56n}")
+        # batch67 (#931): حركة BTC الحادة بلا خبر مفسِّر تُذكر صراحة بدل الإيحاء بهدوء السوق
+        try:
+            _pb67 = await _aio_n.wait_for(engine.data_layer.get_price("BTC"), timeout=8.0)
+            _cb67 = float((_pb67 or {}).get("change_24h", 0) or 0)
+            _dc67 = await _aio_n.wait_for(engine.data_layer.get_ohlcv("BTC", "1d", 60), timeout=10.0)
+            _ab67 = float(_calc_atr(_dc67) or 0) if isinstance(_dc67, list) and len(_dc67) >= 20 else 0.0
+            from core.market_checks import sharp_move_level as _sml_n
+            if _sml_n(_cb67, _ab67):
+                _kw67 = ("هبوط", "انهيار", "تراجع", "تصفية", "crash", "plunge", "sell-off", "selloff", "dump", "liquidation") if _cb67 < 0 \
+                    else ("صعود", "ارتفاع", "قفزة", "rally", "surge", "pump")
+                _evs67 = " ".join(str(e) for e in (analysis.get("key_events", []) or [])).lower() + " " + str(analysis.get("summary_ar", "")).lower()
+                if not any(k in _evs67 for k in _kw67):
+                    _ln67 = (f"⚠️ {'هبوط' if _cb67 < 0 else 'صعود'} BTC {_cb67:+.1f}% خلال 24 ساعة (حركة حادة) غير مرتبط بخبر في المصادر المتاحة — "
+                             "السبب على الأرجح فني/سيولة أو ماكرو؛ لا تفسّره الأخبار أعلاه\n\n")
+                    _ks67 = text.find("📊 *السيناريوهات")
+                    text = (text[:_ks67] + _ln67 + text[_ks67:]) if _ks67 > 0 else (text + "\n\n" + _ln67.strip())
+                text = text.replace("⚪ *محايد:* السيناريو الأرجح — انتظار محفز واضح", "⚪ *محايد:* تذبذب حتى محفز واضح (بعد حركة حادة)")
+        except Exception as _e67n:
+            logger.debug(f"news sharp move: {_e67n}")
         # إصلاح #16: تحذير عند تناقض مشاعر الأخبار مع حالة السوق الفعلية
         try:
             _fear_n  = await _aio_n.wait_for(engine.data_layer.get_fear_greed(), timeout=8.0)
@@ -4506,6 +4655,13 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _btc_chg_live = float((_btc_live or {}).get("change_24h", 0) or 0)
         except Exception:
             _btc_chg_live = 0.0
+        _btc_atr67 = 0.0   # batch67 (#945): ATR اليومي لـBTC لتعريف الحركة الحادة الموحّد
+        try:
+            _bc67 = await asyncio.wait_for(engine.data_layer.get_ohlcv("BTC", "1d", 60), timeout=6.0)
+            if isinstance(_bc67, list) and len(_bc67) >= 20:
+                _btc_atr67 = float(_calc_atr(_bc67) or 0)
+        except Exception:
+            _btc_atr67 = 0.0
 
         # ── السياق الكلي (CoinGecko) — يُجلب أولاً لأن «ما تغيّر اليوم» يحتاجه ──
         _btc_dom = 0.0
@@ -4565,7 +4721,9 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         if fear_val > 70: _bear_conditions.append("جشع مرتفع")
         if _fund_pct > 0.02: _bear_conditions.append("Funding مرتفع")
-        if tvl > 0 and tvl_change < -3: _bear_conditions.append("خروج سيولة DeFi")
+        # batch67 (#890/#891): TVL بالدولار يهبط مع الأسعار — «خروج سيولة» فقط إن هبط أكثر من السوق الكلي بنقطة مئوية
+        _tvl_price_only67 = bool(tvl > 0 and tvl_change < -3 and _mcap_chg and (tvl_change - _mcap_chg) >= -1.0)
+        if tvl > 0 and tvl_change < -3 and not _tvl_price_only67: _bear_conditions.append("خروج سيولة DeFi")
         try:
             if btc_adv.get("sopr") is not None and float(btc_adv["sopr"]) < 0.97:
                 _bear_conditions.append("SOPR < 0.97")
@@ -4589,7 +4747,9 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _reco_parts.append("Funding مرتفع — رافعة شرائية مزدحمة")
         elif _fund_pct:
             _reco_parts.append("Funding محايد (لا رافعة مزدحمة)")
-        if tvl > 0 and tvl_change < -3:
+        if tvl > 0 and tvl_change < -3 and _tvl_price_only67:
+            _reco_parts.append(f"هبوط TVL ({tvl_change:+.1f}%) أقل من هبوط السوق ({_mcap_chg:+.1f}%) — أثر سعري لا خروج سيولة")
+        elif tvl > 0 and tvl_change < -3:
             _reco_parts.append("خروج سيولة من DeFi")
         elif tvl > 0 and tvl_change > 3:
             _reco_parts.append("دخول سيولة إلى DeFi")
@@ -4617,13 +4777,25 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if _pm is not None and float(_pm) < 0.5: _cyc_flags.append("Puell في قاع تعدين")
             if any(v is not None for v in (_mz, _sp, _pm)):
                 _cyc_state = " · ".join(_cyc_flags) if _cyc_flags else "ضمن النطاق الطبيعي — لا إشارة قمة أو قاع دورية"
+                # batch67 (#892): الحكم يُنسب لما توفّر فقط
+                _have67 = [n for n, v in (("MVRV", _mz), ("SOPR", _sp), ("Puell", _pm)) if v is not None]
+                _miss67 = [n for n, v in (("MVRV", _mz), ("SOPR", _sp), ("Puell", _pm)) if v is None]
+                if _miss67:
+                    _cyc_state += f" (من {'/'.join(_have67)} فقط — {'/'.join(_miss67)} غير متاح)"
         except Exception:
             _cyc_state = ""
 
         # ── 🧭 الخلاصة (#865: الشرطان معاً، #866: الهبوط الحاد) ──
-        from core.market_checks import SHARP_MOVE_PCT as _smp_oc
-        _sharp_dn = _btc_chg_live <= -_smp_oc
-        _sharp_up = _btc_chg_live >= _smp_oc
+        from core.market_checks import sharp_move_level as _sml_oc
+        _lvl_oc = _sml_oc(_btc_chg_live, _btc_atr67)   # batch67 (#945): 6% أو 1.5×ATR
+        _sharp_dn = bool(_lvl_oc) and _btc_chg_live < 0
+        _sharp_up = bool(_lvl_oc) and _btc_chg_live > 0
+        # batch67 (#890): في الهبوط الحاد الخوف نتيجة الهبوط لا شرط صعود مستقل — لا يُعدّ ضد الشروط الهابطة
+        if _sharp_dn and "Fear & Greed منخفض" in _bull_conditions:
+            _bull_conditions = [c for c in _bull_conditions if c != "Fear & Greed منخفض"]
+            _fear_from_crash67 = True
+        else:
+            _fear_from_crash67 = False
         if _bull_conditions and _bear_conditions:
             _verdict = ("⚖️ إشارات متعارضة — شروط صاعدة (" + " + ".join(_bull_conditions[:2]) +
                         ") وهابطة (" + " + ".join(_bear_conditions[:2]) + ") متحققة معاً؛ لا ميل واضح، انتظر تأكيداً سعرياً")
@@ -4631,15 +4803,18 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _verdict = "🟢 ميل إيجابي — " + " + ".join(_bull_conditions[:2])
         elif _bear_conditions:
             _verdict = "🔴 ميل سلبي — " + " + ".join(_bear_conditions[:2])
+        elif _sharp_dn:
+            _verdict = "🔴 حذر — هبوط حاد بلا شرط صعود مستقل" + (" (الخوف ناتج عن الهبوط نفسه)" if _fear_from_crash67 else "")
         else:
             _verdict = "⚪ محايد — لا شرط صاعد أو هابط متحقق الآن"
         _summary = ["🧭 *الخلاصة*", _verdict]
         if _sharp_dn:
-            _summary.append(f"⚠️ هبوط حاد في BTC ({_btc_chg_live:+.1f}% خلال 24h): "
+            _summary.append(f"{'🚨' if _lvl_oc == 2 else '⚠️'} هبوط حاد في BTC ({_btc_chg_live:+.1f}% خلال 24h"
+                            + (f"، ≈{abs(_btc_chg_live) / _btc_atr67:.1f}×ATR" if _btc_atr67 > 0 else "") + "): "
                             + ("الخوف هنا نتيجة الهبوط لا إشارة شراء بذاته — " if fear_val < 45 else "")
                             + "التجميع فقط بعد استقرار السعر (إغلاق يومي فوق قاع الهبوط)")
         elif _sharp_up:
-            _summary.append(f"⚠️ صعود حاد في BTC ({_btc_chg_live:+.1f}% خلال 24h): لا مطاردة — انتظر تصحيحاً أو إغلاقاً يومياً يؤكد")
+            _summary.append(f"{'🚨' if _lvl_oc == 2 else '⚠️'} صعود حاد في BTC ({_btc_chg_live:+.1f}% خلال 24h): لا مطاردة — انتظر تصحيحاً أو إغلاقاً يومياً يؤكد")
         if _reco_parts:
             _summary.append("💡 القراءة: " + " · ".join(_reco_parts))
         if _cyc_state:
@@ -4660,6 +4835,13 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _today.append(f"• إجمالي السوق: {_mcap_txt}")
         if _btc_chg_live:
             _today.append(f"• BTC 24h: {_btc_chg_live:+.1f}% (OKX)")
+            # batch67 (#900): فرق السوق الكلي عن BTC = أداء البدائل
+            try:
+                if _mcap_chg and not locals().get("_mcap_conflict") and abs(_mcap_chg - _btc_chg_live) >= 1.5:
+                    _today.append("  ↳ " + ("البدائل أضعف من BTC" if _mcap_chg < _btc_chg_live else "البدائل أقوى من BTC")
+                                  + f" (السوق {_mcap_chg:+.1f}% مقابل BTC {_btc_chg_live:+.1f}%)")
+            except Exception:
+                pass
         _today.append(f"• إجمالي TVL: ${tvl/1e9:.2f}B ({tvl_change:+.2f}% 24h)" if tvl > 0
                       else "• إجمالي TVL: غير متاح حالياً (تعذّر جلب DeFiLlama)")
         _today.append(f"• {fear_emoji} Fear & Greed: {fear_val} — {_fgz_oc(fear_val)[0]}")
@@ -4675,12 +4857,15 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _deriv.append(f"• Funding: {_fund_pct:+.4f}% {_fsig}")
         if _oi_ok:
             # batch66 (#867): تغيّر صغير (<0.05%) كان يظهر «0.0%» — يُعرض بخانتين
-            _oi_txt = f"{_oi_chg:+.2f}" if abs(_oi_chg) < 0.05 else _pct_nz46(_oi_chg)
+            _oi_txt = _oi_pct_b67(_oi_chg)   # batch67 (#899)
             _deriv.append(f"• Open Interest (آخر ساعة): {_oi_txt}% {_oi_sig}".rstrip())
         else:
             _deriv.append("• Open Interest: ⚪ غير متاح الآن (OKX لم يستجب)")
         if _whale_r > 0 or _whale_sig:
-            _deriv.append(_whale_line_b66(whale))
+            _wl67 = _whale_line_b66(whale)
+            if _sharp_dn and "أعلى من المعتاد" in _wl67:   # batch67 (#896)
+                _wl67 += " — لا يُقرأ كإشارة شراء أثناء الهبوط الحاد"
+            _deriv.append(_wl67)
         if _deriv:
             _deriv.insert(0, "📐 *مشتقات BTC*")
 
@@ -4688,9 +4873,10 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _cycle = []
         if btc_adv.get("available"):
             _cv = []
-            if "mvrv_zscore" in btc_adv: _cv.append(f"MVRV Z {btc_adv['mvrv_zscore']}")
-            if "sopr" in btc_adv:        _cv.append(f"SOPR {btc_adv['sopr']}")
-            if "puell_multiple" in btc_adv: _cv.append(f"Puell {btc_adv['puell_multiple']}")
+            # batch67 (#893): الغائب يُذكر كما يُذكر غياب Netflow
+            _cv.append(f"MVRV Z {btc_adv['mvrv_zscore']}" if "mvrv_zscore" in btc_adv else "MVRV غير متاح")
+            _cv.append(f"SOPR {btc_adv['sopr']}" if "sopr" in btc_adv else "SOPR غير متاح")
+            _cv.append(f"Puell {btc_adv['puell_multiple']}" if "puell_multiple" in btc_adv else "Puell غير متاح")
             if "exchange_netflow_btc" in btc_adv:
                 _cv.append(f"Netflow {float(btc_adv['exchange_netflow_btc']):+,.1f} BTC")
             else:
@@ -4712,7 +4898,11 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _cycle = ["ℹ️ مؤشرات الدورة (MVRV/SOPR/Netflow) غير متاحة حالياً — الخلاصة تعتمد على المتاح فقط."]
 
         # ── 📋 السيناريوهات ──
-        _scen = ["📋 *السيناريوهات (شروط قابلة للقياس)*",
+        _sopr_na67 = btc_adv.get("sopr") is None
+        _nf_na67 = btc_adv.get("exchange_netflow_btc") is None
+        _na67 = " (SOPR" + ("/Netflow" if _nf_na67 else "") + " غير متاح الآن — شرطه غير قابل للتقييم)" if _sopr_na67 else (
+            " (Netflow غير متاح الآن)" if _nf_na67 else "")
+        _scen = ["📋 *السيناريوهات (شروط قابلة للقياس)*" + _na67,
                  "🟢 صاعد إذا: SOPR > 1.02 مع Netflow سالب، أو Funding ≤ −0.01%، أو Fear & Greed < 30"
                  + f" — المتحقق الآن: {' + '.join(_bull_conditions[:2]) if _bull_conditions else 'لا شيء'}",
                  "🔴 هابط إذا: Funding > 0.02%، أو SOPR < 0.97، أو خروج TVL > 3% خلال 24h، أو جشع > 70"
@@ -4722,7 +4912,9 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _det = []
         if _btc_dom: _det.append(f"هيمنة BTC {_btc_dom:.1f}%")
         if _defi_dom: _det.append(f"حصة DeFi {_defi_dom:.1f}% (رسملة ${_defi_mcap/1e9:.0f}B؛ تختلف عن TVL)")
-        if btc_hashrate > 0: _det.append(f"Hashrate {btc_hashrate/1e9:.1f} EH/s")
+        if btc_hashrate > 0:   # batch67 (#898): فاصل آلاف
+            _hr67 = btc_hashrate / 1e9
+            _det.append(f"Hashrate {_hr67:,.0f} EH/s" if _hr67 >= 100 else f"Hashrate {_hr67:.1f} EH/s")
         if top_p:
             _tp = top_p[0]
             _det.append(f"أكبر بروتوكول {str(_tp.get('name', '')).replace('_', ' ')} ${float(_tp.get('tvl') or 0)/1e9:.2f}B")
@@ -4776,7 +4968,7 @@ async def cmd_regime(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         candles, fear, btc_dom = await asyncio.gather(
-            engine.data_layer.get_ohlcv(symbol, "1d", 250),
+            engine.data_layer.get_ohlcv(symbol, "1d", 400),   # batch67 (#924): نفس عدد شموع /signal (EMA50 كان يختلف 0.4%)
             engine.data_layer.get_fear_greed(),
             engine.data_layer.get_btc_dominance(),
             return_exceptions=True
@@ -4802,6 +4994,27 @@ async def cmd_regime(update: Update, context: ContextTypes.DEFAULT_TYPE):
         result = engine.regime_detector.detect(
             candles, btc_dominance=btc_dom, fear_greed=fear_val_r)
         text = _clean_md(engine.regime_detector.format_ar(result))
+        # batch67 (#911/#912/#950): اسم الأصل في الترويسة، أساس الأرقام، ولا مؤشرات كريبتو لغير الكريبتو
+        try:
+            from core.regime_detector import strip_crypto_refs_b67 as _scr67, anchor_basis_note_b67 as _abn67
+            text = text.replace("📊 *حالة السوق الحالية*", f"📊 *حالة السوق الحالية — {symbol}*", 1)
+            text = _scr67(text, symbol)
+            _abn = _abn67(result)
+            if _abn:
+                text = text.replace("\n\n📈 *المؤشرات*", f"\n{_abn}\n\n📈 *المؤشرات*", 1)
+        except Exception:
+            pass
+        # batch67 (#913/#945): الحركة الحادة (تعريف موحّد) تُوقف «لا مانع» وتُذكر صراحة
+        _sharp_r67 = ""
+        try:
+            _pd_r67 = await engine.data_layer.get_price(symbol)
+            _chg_r67 = float((_pd_r67 or {}).get("change_24h", 0) or 0)
+            _sharp_r67 = _sharp_warn(_chg_r67, float((getattr(result, "metrics", {}) or {}).get("atr_pct", 0) or 0))
+            if _sharp_r67:
+                text = re.sub(r"• الإجراء: [^\n]*", "• الإجراء: ⏳ انتظار — حركة 24 ساعة حادة؛ لا دخول قبل استقرار السعر (القرار من /signal)", text, count=1)
+                text = text.replace("\n\n🎯 *الاستراتيجية الموصى بها*", f"\n{_sharp_r67}\n\n🎯 *الاستراتيجية الموصى بها*", 1)
+        except Exception:
+            _sharp_r67 = ""
 
         # F8: توصيات أوضح بناءً على regime
         _regime_action = getattr(result, "action", "")
@@ -4854,20 +5067,40 @@ async def cmd_regime(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # batch33: «حجم طبيعي» لا يُقال بزخم ضعيف (ADX<25 أو حجم<1x) — هذا تقييم بيئة لا إشارة دخول
             try:
                 if (0 < _adx_r < 25) or _vol_r < 1.0:
-                    _tip = (f"⚠️ بيئة السوق مقبولة لكن الزخم ضعيف (ADX {_adx_r:.0f}، حجم {fmt_vol_ratio(_vol_r)}) "
+                    # batch67 (#914/#920): يُذكر سبب الضعف الفعلي فقط — الحجم المرتفع لا يُسرد دليلاً على ضعف الزخم
+                    _why67 = []
+                    if 0 < _adx_r < 25:
+                        _why67.append(f"ADX {_adx_r:.0f} — لا اتجاه واضح")
+                    if _vol_r < 1.0:
+                        _why67.append(f"حجم {fmt_vol_ratio(_vol_r)} دون المتوسط")
+                    _extra67 = ""
+                    if _vol_r >= 1.5:
+                        _extra67 += f"؛ الحجم مرتفع ({fmt_vol_ratio(_vol_r)}) لكن بلا جهة محسومة"
+                    try:
+                        _rsi67 = float((getattr(result, "metrics", {}) or {}).get("rsi", 50) or 50)
+                        if _rsi67 <= 40:
+                            _extra67 += f"؛ RSI {_rsi67:.0f} قريب من التشبع البيعي — الارتداد يحتاج RSI ≤ 35 وتأكيداً"
+                    except Exception:
+                        pass
+                    _tip = (f"⚠️ الزخم ضعيف ({'، '.join(_why67)}){_extra67} "
                             f"— هذا تقييم للبيئة وليس إشارة دخول؛ القرار من /signal")
             except Exception:
                 pass
+        if _sharp_r67:
+            _tip = "⏳ حركة حادة خلال 24 ساعة — لا مطاردة ولا ارتداد قبل استقرار السعر (إغلاق يومي يؤكد)؛ القرار من /signal"
         if _tip:
             text += f"\n\n💡 *توصية رائد:* {_tip}"
 
         try:
+            # batch67 (#917): تحذير ADX<20 لا يتكرر إن ذكره الإجراء أو التوصية أصلاً
+            if ("ADX" in str(_tip)) or ("< 20)" in text):
+                _warns = [w for w in _warns if "< 20 → لا اتجاه" not in w]
             if _warns:
                 text += "\n\n⚠️ *تحذيرات النظام*\n" + "\n".join(_warns)
         except Exception:
             pass
 
-        text += f"\n\n📡 *المصدر:* OKX + BGeometrics | 🤖 رائد التداول الذكي"
+        text += f"\n\n📡 *المصدر:* OKX (الشموع والسعر) + Fear & Greed + هيمنة BTC | 🤖 رائد التداول الذكي"   # batch67 (#919)
         await msg.edit_text(text, parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         logger.error(f"cmd_regime: {e}")
@@ -4884,7 +5117,7 @@ def _mkt_tag_b41(mkttype, candles=None) -> str:
         try:
             if candles and isinstance(candles[-1], dict) \
                     and str(candles[-1].get("source", "")) in ("okx", "binance", "coingecko"):
-                return " · 📉 Futures (لا عقد دائم للأصل — البيانات من الفوري)"
+                return " · 📉 Futures (مرجعي: لا عقد دائم للأصل — البيانات من الفوري)"   # batch67 (#960)
         except Exception:
             pass
         return " · 📉 Futures"
@@ -5422,14 +5655,20 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     raise ValueError("no 24h change available")
                 _price_chg = float(_pd_rs.get("change_24h", 0) or 0)
                 _corr_diff = _price_chg - _btc_chg
-                _sw_sig = _sharp_warn(_price_chg)
+                _sw_sig = _sharp_warn(_price_chg, atr_pct)   # batch67: تعريف موحّد (6% أو 1.5×ATR)
                 # FA_missing_fix: إظهار FA دائماً (بدون شرط حجم التغير)
                 # FA_name_fix: استخدام _display_symbol للعرض
                 _sym_disp = f" {_display_symbol}" if "_display_symbol" in dir() else f" {symbol}"
-                if _corr_diff > 2:
-                    _btc_corr_txt = f"\n• 🟢{_sym_disp} يتفوق على BTC بـ {abs(_corr_diff):.1f}% (24س) — قوة نسبية"
-                elif _corr_diff < -2:
-                    _btc_corr_txt = f"\n• 🔴{_sym_disp} أضعف من BTC بـ {abs(_corr_diff):.1f}% (24س) — ضعف نسبي"
+                # batch67 (#989): في الحركات الكبيرة الفرق النسبي يُعتبر أيضاً (−7.6% مقابل −5.8% = أعمق بـ31% لا «قريب»)
+                _rel67 = (abs(_corr_diff) / abs(_btc_chg)) if abs(_btc_chg) >= 3.0 else 0.0
+                if _corr_diff > 2 or (_corr_diff > 0 and _rel67 >= 0.25):
+                    _btc_corr_txt = (f"\n• 🟢{_sym_disp} يتفوق على BTC بـ {abs(_corr_diff):.1f}% (24س: {_signed_pct(_price_chg)}% مقابل "
+                                     f"{_signed_pct(_btc_chg)}%) — قوة نسبية")
+                elif _corr_diff < -2 or (_corr_diff < 0 and _rel67 >= 0.25):
+                    _btc_corr_txt = (f"\n• 🔴{_sym_disp} أضعف من BTC بـ {abs(_corr_diff):.1f}% (24س: {_signed_pct(_price_chg)}% مقابل "
+                                     f"{_signed_pct(_btc_chg)}%"
+                                     + (f"؛ هبوط أعمق بـ{_rel67:.0%}" if _price_chg < 0 and _btc_chg < 0 and _rel67 >= 0.25 else "")
+                                     + ") — ضعف نسبي")
                 else:
                     _btc_corr_txt = (f"\n• ⚪{_sym_disp} شبه ثابت بينما BTC {_signed_pct(_btc_chg)}% — فرق {abs(_corr_diff):.1f}% (ضمن ±2%)"
                                      if (abs(_price_chg) < 0.3 and abs(_btc_chg) >= 1.0) else
@@ -5449,6 +5688,11 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
         _regime_fmt = engine.regime_detector.format_ar(regime)
+        try:   # batch67 (#950/#975): لا Fear & Greed/هيمنة BTC كمؤشرين للسلع والأسهم المرمّزة
+            from core.regime_detector import strip_crypto_refs_b67 as _scr67s
+            _regime_fmt = _scr67s(_regime_fmt, symbol)
+        except Exception:
+            pass
         if _ema50_sig_corrupted and "_e50_sig_raw" in dir() and _e50_sig_raw > 0:
             import re as _re_ema
             _pve50_raw_sig = (price - _e50_sig_raw) / max(_e50_sig_raw, 0.0001) * 100
@@ -5622,7 +5866,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     support_gap_pct = _sm_sig.get("support_gap_pct"),
                 )
                 try:  # batch14: نفس R/R المعروض (rr_real) لا الخام — توحيد حكم /signal و/analyze
-                    _rr_m = _sm_sig.get("rr_real")
+                    _rr_m = _sm_sig.get("rr_raw") or _sm_sig.get("rr_real")   # batch67 (#992)
                     if _rr_m and float(_rr_m) > 0:
                         _si.rr_ratio = float(_rr_m)
                 except (TypeError, ValueError):
@@ -5698,7 +5942,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 _mv56 = ""
             if _mv56:   # batch61 (#745): لا تكرار لسطر 🚨 الحركة الحادة
-                full_text = re.sub(r"\n[•\s]*🚨 (?:ارتفاع|انخفاض) حاد [^\n]*", "", full_text)
+                full_text = re.sub(r"\n[•\s]*(?:🚨|⚠️) (?:ارتفاع|انخفاض) حاد [^\n]*", "", full_text)   # batch67: الصيغتان
             if _mv56 and "💰 السعر:" in full_text:
                 _i56 = full_text.find("\n", full_text.find("💰 السعر:"))
                 if _i56 > 0:
@@ -6069,7 +6313,28 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # الترويسة (العنوان + الفاصل) تبقى أعلى الرسالة؛ الخلاصة تأتي بعدها مباشرة
         _hdr_n = 2 if len(_ls) >= 2 and _ls[1].startswith("━") else 1
         _hdr_lines = _ls[:_hdr_n]
-        body = "\n".join(_ls[_hdr_n:]).strip("\n")
+        # batch67 (#901/#902/#903/#910): سطرا «السيولة/الحكم» يُدمجان في الخلاصة؛ حصة الشراء تصير شريطاً واحداً في Order Book؛
+        # سطر Slippage المكرر يُحذف (له قسم مستقل)
+        _liq_pct67 = None
+        _body_l = []
+        _imb_b = getattr(profile, "imbalance", 0.5)
+        for _ln in _ls[_hdr_n:]:
+            if _ln.startswith("السيولة: "):
+                try:
+                    _liq_pct67 = int(re.search(r"(\d+)%", _ln).group(1))
+                except Exception:
+                    pass
+                continue
+            if _ln.startswith("الحكم: "):
+                continue
+            if _ln.startswith("• Slippage متوقع"):
+                continue
+            if _ln.startswith("• حصة الشراء من العمق"):
+                _ob = int(round(_imb_b * 100))
+                _ln = (f"• حصة الشراء من العمق: {'█' * int(_ob / 10)}{'░' * (10 - int(_ob / 10))} {_ob}% "
+                       f"({_imbalance_lbl67(_imb_b)}) — ميزان الدفتر لا تدفق صفقات (التدفق الفعلي = CVD في /signal)")
+            _body_l.append(_ln)
+        body = "\n".join(_body_l).strip("\n")
 
         funding = funding if isinstance(funding, dict) else {}
         oi      = oi      if isinstance(oi,      dict) else {}
@@ -6090,7 +6355,7 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:                    _fsig = "⚪ محايد"
             deriv_lines.append(f"• Funding Rate: {_fund_pct:+.4f}% {_fsig}")
         if _oi_ok:
-            _oi_txt = f"{_oi_chg:+.2f}" if abs(_oi_chg) < 0.05 else _pct_nz46(_oi_chg)   # batch66 (#867)
+            _oi_txt = _oi_pct_b67(_oi_chg)   # batch66 (#867) + batch67 (#899)
             deriv_lines.append(f"• Open Interest (آخر ساعة): {_oi_txt}% {_oi_sig}".rstrip())
         if _whale_r > 0:
             deriv_lines.append(_whale_line_b66(whale))   # batch66 (#870): مئين 30 يوماً كـ/signal
@@ -6102,8 +6367,7 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _ofs_bar  = "█" * _ofs_bars + "░" * (10 - _ofs_bars)
         from core.microstructure import _imbalance_label as _imb_lbl_ofs, fmt_book_slip_b66 as _fbs66
         _ofs_label = _imb_lbl_ofs(_imb)
-        _balance_blk = ("📊 *ميزان الدفتر* (حصة الشراء من عمق Order Book — ليس تدفق صفقات فعلياً؛ التدفق الفعلي = CVD في /signal)"
-                        f"\n{_ofs_bar} {_ofs}% — {_ofs_label}")
+        _balance_blk = ""   # batch67 (#910): دُمج في سطر حصة الشراء داخل Order Book
 
         _bid_d = getattr(profile, "bid_depth_usd", 0) or 0
         _ask_d = getattr(profile, "ask_depth_usd", 0) or 0
@@ -6122,13 +6386,16 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return _sz / _thin if _thin > 0 else 0
                 _bk49 = getattr(profile, "book_slip", None)
                 if isinstance(_bk49, dict) and _bk49:
-                    _sl_lines = ["📐 *Slippage المتوقع* (أمر شراء Market بالقيمة المذكورة — من عمق الدفتر الفعلي عبر أول 20 مستوى)"]
-                    for _lbl, _sz in (("$1K", 1000), ("$10K", 10000), ("$50K", 50000)):
-                        _sl_lines.append(f"• {_lbl}: {_fbs66(_bk49.get(_sz))}")
+                    _sl_lines = ["💧 *Slippage المتوقع* (أمر شراء Market — من عمق الدفتر الفعلي عبر أول 20 مستوى)"]
+                    _vals67 = [(_lbl, _fbs66(_bk49.get(_sz))) for _lbl, _sz in (("$1K", 1000), ("$10K", 10000), ("$50K", 50000))]
+                    if len({v for _, v in _vals67}) == 1:   # batch67 (#903): قيمة واحدة للأحجام الثلاثة = سطر واحد
+                        _sl_lines.append(f"• $1K / $10K / $50K: {_vals67[0][1]}")
+                    else:
+                        _sl_lines += [f"• {_lbl}: {_v}" for _lbl, _v in _vals67]
                 else:
                     _s1, _s10, _s50 = _slip_for_size(1000), _slip_for_size(10000), _slip_for_size(50000)
                     _all_min = _s1 == _s10 == _s50
-                    _sl_lines = ["📐 *Slippage المتوقع* (أمر Market بالقيمة المذكورة — تقدير مبني على الـSpread، أول 20 مستوى)"]
+                    _sl_lines = ["💧 *Slippage المتوقع* (أمر Market بالقيمة المذكورة — تقدير مبني على الـSpread، أول 20 مستوى)"]
                     for _lbl, _sz, _sv in (("$1K", 1000, _s1), ("$10K", 10000, _s10), ("$50K", 50000, _s50)):
                         _sh = _share(_sz)
                         _note = f" — يستهلك {_sh:.0%} من أضيق جهة في الدفتر" if _sh >= 0.2 else ""
@@ -6186,7 +6453,7 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             _vp_pos = (f"السعر داخل نطاق 70% من حجم آخر 24 ساعة — توازن؛ "
                                        f"{'فوق' if _price_liq > _poc else 'تحت'} POC ${_poc:,.{_vpd}f}")
                         _vp_blk = (
-                            f"📊 *توزيع الحجم — آخر {len(_liq_candles)} شمعة ساعية (1س)*"
+                            f"📦 *توزيع الحجم — آخر {len(_liq_candles)} شمعة ساعية (1س)*"
                             f"\n• أعلى تركّز للحجم (POC): ${_poc:,.{_vpd}f}"
                             f"\n• نطاق 70% من الحجم: ${_val:,.{_vpd}f} – ${_vah:,.{_vpd}f}"
                             f"\n• السعر الحالي {'داخل' if _inside else 'خارج'} هذا النطاق"
@@ -6199,19 +6466,30 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
+        # batch67 (#906): الحركة الحادة 24 ساعة بالتعريف الموحّد
+        _sharp67 = ""
+        try:
+            _pd_l67 = await engine.data_layer.get_price(symbol)
+            _chg_l67 = float((_pd_l67 or {}).get("change_24h", 0) or 0)
+            _dc_l67 = await asyncio.wait_for(engine.data_layer.get_ohlcv(symbol, "1d", 60), timeout=6.0)
+            _atr_l67 = float(_calc_atr(_dc_l67) or 0) if isinstance(_dc_l67, list) and len(_dc_l67) >= 20 else 0.0
+            _sharp67 = _sharp_warn(_chg_l67, _atr_l67)
+        except Exception:
+            _sharp67 = ""
         # ── 🎯 الخلاصة ──
         _summary = []
         try:
             _liq_score = (getattr(profile, "liquidity_score", 0) or 0) * 100
             _is_tradeable = getattr(profile, "is_tradeable", True)
+            _lp67 = f" ({_liq_pct67}%)" if _liq_pct67 is not None else f" ({_liq_score:.0f}%)"
             if not _is_tradeable:
-                _summary.append("⛔ التنفيذ: غير موصى بالتداول — سيولة غير كافية")
+                _summary.append(f"⛔ التنفيذ: سيولة{_lp67} غير كافية — غير موصى بالتداول")
             elif _liq_score >= 60:
-                _summary.append("✅ التنفيذ: سيولة كافية — الانزلاق ليس عائقاً بالأحجام المعتادة")
+                _summary.append(f"✅ التنفيذ: سيولة{_lp67} كافية — الانزلاق ليس عائقاً بالأحجام المعتادة")
             elif _liq_score >= 40:
-                _summary.append("🟡 التنفيذ: سيولة متوسطة — قلّل الحجم")
+                _summary.append(f"🟡 التنفيذ: سيولة{_lp67} متوسطة — قلّل الحجم")
             else:
-                _summary.append("🔴 التنفيذ: سيولة منخفضة — خطر Slippage")
+                _summary.append(f"🔴 التنفيذ: سيولة{_lp67} منخفضة — خطر Slippage")
             if _ofs > 65:
                 _summary.append(f"📗 الدفتر: ضغط شراء قوي ({_ofs}%) — دعم محتمل قريب")
             elif _ofs < 35:
@@ -6222,6 +6500,13 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _summary.append(f"📘 الدفتر: متوازن ({_ofs}%) — انتظر اتجاهاً واضحاً")
             if _vp_pos:
                 _summary.append("📍 " + _vp_pos)
+                # batch67 (#905): ميل الدفتر عكس موقع السعر من منطقة الحجم — يُحسم صراحة
+                if _ofs > 52 and _vp_pos.startswith("السعر تحت"):
+                    _summary.append("↳ ميل الدفتر للشراء لا يكفي مقابل خروج السعر تحت منطقة القبول — الأرجح أن البائعين يسيطرون حتى الاسترداد")
+                elif _ofs < 48 and _vp_pos.startswith("السعر فوق"):
+                    _summary.append("↳ ميل الدفتر للبيع يخالف الثبات فوق منطقة القبول — راقب الاسترداد نحو أعلى النطاق قبل الحكم")
+            if _sharp67:
+                _summary.append(_sharp67)   # batch67 (#906): نفس تعريف الحركة الحادة في /onchain و/signal
             if _fund_pct < -0.01:
                 _summary.append("💡 Funding سالب يدعم سيناريو ارتداد Long")
             elif _fund_pct > 0.02:
@@ -6230,13 +6515,12 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.debug(f"T18_fix summary: {_t18e}")
         _sum_blk = ("🎯 *الخلاصة* (قراءة لحظية للدفتر)\n" + "\n".join(_summary)) if _summary else ""
 
-        _parts = ["\n".join(_hdr_lines)]
-        if _sum_blk:
-            _parts.append(_sum_blk)
+        # batch67 (#907): الخلاصة تلي الفاصل مباشرة بلا سطر فارغ (كما في /onchain)
+        _parts = ["\n".join(_hdr_lines) + (("\n" + _sum_blk) if _sum_blk else "")]
         _parts.append(body)
         _parts.append(_balance_blk)
         if deriv_lines:
-            _parts.append("📐 *مشتقات*\n" + "\n".join(deriv_lines))
+            _parts.append("📈 *مشتقات*\n" + "\n".join(deriv_lines))   # batch67 (#908): رمز مميز
         if _slip_blk:
             _parts.append(_slip_blk)
         if _vp_blk:
@@ -6376,9 +6660,18 @@ async def _outlook_btc_snapshot(engine) -> dict:
             if e50:
                 snap["ema50_gap"] = (snap["price"] / e50[-1] - 1) * 100.0
             try:
+                snap["atr_pct"] = float(_calc_atr(c) or 0)   # batch67 (#926): لتعريف الحركة الحادة الموحّد
+            except Exception:
+                pass
+            try:
                 reg = engine.regime_detector.detect(c, symbol="BTC")
                 snap["regime"] = getattr(reg, "description_ar", "") or ""
-                snap["adx"] = float((getattr(reg, "metrics", {}) or {}).get("adx", 0) or 0)
+                _rm67 = getattr(reg, "metrics", {}) or {}
+                snap["adx"] = float(_rm67.get("adx", 0) or 0)
+                snap["anchored"] = bool(_rm67.get("anchored"))
+                # batch67 (#924/#949): نفس «السعر vs EMA50» في /signal و/regime (EMA من الشموع المكتملة، السعر حي)
+                if _rm67.get("price_vs_ema50") is not None:
+                    snap["ema50_gap"] = float(_rm67["price_vs_ema50"])
             except Exception:
                 pass
     except Exception:
@@ -6399,7 +6692,14 @@ def _outlook_snapshot_lines(snap: dict, fg=None, dom=None, chg=None) -> list:
     if snap.get("price"):
         facts.append(f"سعر BTC {_fmt_price(snap['price'])}" + (f" ({chg:+.2f}% / 24س)" if isinstance(chg, (int, float)) else ""))
     if snap.get("regime"):
-        facts.append(f"نظام السوق: {snap['regime']}" + (f" (ADX {snap['adx']:.0f})" if snap.get("adx") else ""))
+        facts.append(f"نظام السوق: {snap['regime']}" + (f" (ADX {snap['adx']:.0f})" if snap.get("adx") else "")
+                     + (" — من آخر إغلاق يومي مكتمل" if snap.get("anchored") else ""))   # batch67 (#929)
+    try:   # batch67 (#926): الحركة الحادة بالتعريف الموحّد (6% أو 1.5×ATR)
+        _sw67 = _sharp_warn(chg, snap.get("atr_pct")) if isinstance(chg, (int, float)) else ""
+        if _sw67:
+            facts.append(_sw67)
+    except Exception:
+        pass
     if snap.get("rsi"):
         facts.append(f"RSI يومي {snap['rsi']:.0f}")
     if snap.get("ema50_gap") is not None:
@@ -6436,6 +6736,19 @@ def _outlook_summary_line_b54(snap: dict, fg=None) -> str:
             (pos if gap >= 0 else caut).append(f"السعر {'فوق' if gap >= 0 else 'تحت'} EMA50")
         if isinstance(fg, (int, float)) and fg:
             (caut if fg < 45 else pos if fg > 55 else neu).append(f"الخوف والطمع {int(fg)}")
+        # batch67 (#927): حركة 24س وFunding من اللقطة نفسها تدخل الخلاصة
+        _chg67 = snap.get("chg24")
+        if isinstance(_chg67, (int, float)):
+            try:
+                from core.market_checks import sharp_move_level as _sml_o
+                if _sml_o(_chg67, snap.get("atr_pct")):
+                    (caut if _chg67 < 0 else pos).append(f"حركة 24س {_chg67:+.1f}% حادة")
+            except Exception:
+                pass
+        _fp67 = snap.get("funding_pct")
+        if _fp67 is not None:
+            (caut if _fp67 > 0.02 else pos if _fp67 < -0.01 else neu).append(
+                f"Funding {'مرتفع' if _fp67 > 0.02 else 'سالب' if _fp67 < -0.01 else 'محايد'}")
         reg = str(snap.get("regime") or "")
         if reg:
             (neu if ("جانب" in reg or "تذبذب" in reg) else caut if "هابط" in reg else pos if "صاعد" in reg else neu).append(f"النظام {reg}")
@@ -6477,6 +6790,46 @@ def _outlook_guard_b54(text: str) -> str:
         if not all(n in out for n in ("BlackRock", "Vanguard", "Morningstar")):
             return text
         return out
+    except Exception:
+        return text
+
+
+def _outlook_facts_b67(text: str, snap: dict, fg=None, chg=None) -> str:
+    """batch67 (#921–#923/#928): فقرات النموذج تُطابَق مع تصنيفات النظام —
+    (1) Funding دون عتبة الازدحام (0.02%) لا يوصف «ازدحاماً»؛ (2) الهيمنة لا تُربط بالرافعة؛
+    (3) في الهبوط الحاد لا يُقدَّم الخوف «توقيتاً مناسباً للشراء»؛ (4) لا سالب مزدوج في بُعد EMA50.
+    الجملة المخالفة تُستبدل بجملة نظام ثابتة (لا تُحذف) كي تبقى كل مؤسسة بفقرة."""
+    import re as _rf
+    try:
+        snap = snap or {}
+        fp = snap.get("funding_pct")
+        sents = _rf.split(r"(?<=[.!؟])\s+", text or "")
+        out = []
+        sharp_dn = False
+        try:
+            from core.market_checks import sharp_move_level as _sml_f
+            sharp_dn = isinstance(chg, (int, float)) and chg < 0 and bool(_sml_f(chg, snap.get("atr_pct")))
+        except Exception:
+            pass
+        for sn in sents:
+            if fp is not None and fp <= 0.02 and ("Funding" in sn or "التمويل" in sn) and \
+                    any(w in sn for w in ("ازدحام", "مزدحم", "تكدّس", "تكدس")):
+                pre = "بمنهج Vanguard، " if "Vanguard" in sn else ""
+                sn = (f"{pre}يُقرأ Funding BTC عند {fp:+.4f}% كمستوى محايد دون عتبة الازدحام (0.02%) — لا رافعة مزدحمة "
+                      "في المراكز الطويلة، والهيمنة مؤشر توزيع لا رافعة.")
+            elif "هيمنة" in sn and any(w in sn for w in ("ازدحام", "مزدحم", "الرافعة")):
+                sn = ""   # جملة تربط الهيمنة بالرافعة تُحذف
+            if sharp_dn and any(w in sn for w in ("الشراء المتدرج", "شراء متدرج", "توقيت مناسب", "فرصة شراء", "فرصة للشراء", "فرصة تجميع")):
+                pre = "بمنهج BlackRock، " if "BlackRock" in sn else ""
+                sn = (f"{pre}يُقرأ الخوف ({int(fg) if isinstance(fg, (int, float)) else '—'}) مع هبوط {chg:+.2f}% خلال 24 ساعة "
+                      "كنتيجة للهبوط نفسه لا كإشارة شراء بذاتها — أي تخصيص تدريجي يُراجع بعد استقرار السعر.")
+            sn = _rf.sub(r"(EMA50[^.!؟]{0,20}?بنسبة\s*)-(\d)", r"\1\2", sn)
+            if sn:
+                out.append(sn)
+        res = " ".join(out)
+        if not all(nm in res for nm in ("BlackRock", "Vanguard", "Morningstar")):
+            return text
+        return res
     except Exception:
         return text
 
@@ -6539,7 +6892,15 @@ async def cmd_outlook(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if _ol_snap.get("ema50_gap") is not None:
                 _live_ctx_lines.append(f"بُعد سعر BTC عن EMA50: {_ol_snap['ema50_gap']:+.1f}%")
             if _ol_snap.get("funding_pct") is not None:
-                _live_ctx_lines.append(f"Funding BTC: {_ol_snap['funding_pct']:+.4f}%")
+                _fpp = _ol_snap['funding_pct']
+                _live_ctx_lines.append(f"Funding BTC: {_fpp:+.4f}% — تصنيف النظام: "
+                                       + ("مرتفع (ازدحام Longs)" if _fpp > 0.02 else "سالب (ضغط Shorts)" if _fpp < -0.01 else "محايد (لا ازدحام)"))   # batch67 (#921)
+            try:   # batch67 (#922): الحركة الحادة حقيقة إلزامية
+                from core.market_checks import sharp_move_level as _sml_p
+                if _out_btc_chg is not None and _sml_p(_out_btc_chg, _ol_snap.get("atr_pct")) and _out_btc_chg < 0:
+                    _live_ctx_lines.append("حقيقة إلزامية: هبوط حاد خلال 24 ساعة — الخوف الحالي نتيجة له وليس إشارة شراء بذاته؛ لا تصف الوقت بأنه مناسب للشراء")
+            except Exception:
+                pass
             _live_ctx = "\n".join(_live_ctx_lines)
 
             _prompt_out = (
@@ -6629,6 +6990,7 @@ async def cmd_outlook(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 if _ot4 and len(_ot4) > 30:
                                     _ot4 = _normalize_outlook_text(_ot4)
                                     _ot4 = _outlook_guard_b54(_ot4)
+                                    _ot4 = _outlook_facts_b67(_ot4, _ol_snap, _out_fg, _out_btc_chg)   # batch67
                                     if _fin4 == "length":
                                         # النص بلغ حد الرموز: نقصّه عند آخر جملة مكتملة
                                         _ot4 = _trim_incomplete_tail(_ot4)
@@ -6658,6 +7020,8 @@ async def cmd_outlook(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         try:
             _fg_s = locals().get("_out_fg"); _dom_s = locals().get("_out_btc_dom"); _chg_s = locals().get("_out_btc_chg")
+            if isinstance(_chg_s, (int, float)):
+                _ol_snap["chg24"] = _chg_s   # batch67 (#927)
             _parts_out += _outlook_snapshot_lines(_ol_snap, _fg_s, _dom_s, _chg_s)
             _sum_b54 = _outlook_summary_line_b54(_ol_snap, _fg_s)
             if _sum_b54:
@@ -7365,7 +7729,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parts += [
             f"💰 السعر: {_fmt_price(price)} ({change_sign}{change_24h:.2f}%){_mkt_tag_b41(_mkttype_an, locals().get('candles'))}",
             f"📊 RSI: {rsi_lbl} | Fear & Greed: {fear_val} ({_fgz_an_hdr(fear_val)[0]})",
-            *([_sharp_warn(change_24h)] if _sharp_warn(change_24h) else []),
+            *([_sharp_warn(change_24h, _atr_an67)] if _sharp_warn(change_24h, (_atr_an67 := (_calc_atr(locals().get("candles")) if locals().get("candles") else 0.0))) else []),   # batch67: تعريف موحّد
             # quicksignal_trend_fix: تنبيه إذا "هابط" مع ارتفاع حاد
             f"🌍 السوق: {regime_desc}" + (
                 " — ⚠️ ارتداد صاعد قصير الأجل ضمن سياق هابط كلي"
@@ -7525,7 +7889,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if "وقف الخسارة" in full: _si_an.has_sl = True
                 if "إلغاء" in full or "كسر" in full: _si_an.has_invalidation = True
                 try:  # batch14
-                    _rr_m2 = _sm_an.get("rr_real")
+                    _rr_m2 = _sm_an.get("rr_raw") or _sm_an.get("rr_real")   # batch67 (#992)
                     if _rr_m2 and float(_rr_m2) > 0:
                         _si_an.rr_ratio = float(_rr_m2)
                 except (TypeError, ValueError):
@@ -8628,7 +8992,11 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bear_buy_warning = ""
         if direction.startswith("🟢") and regime_desc and "هابط" in regime_desc:
             bear_buy_warning = "\n⚠️ *تنبيه:* إشارة شراء في سوق هابط — تحقق من تأكيد الاتجاه قبل الدخول"
-        _sw_qs = _sharp_warn(change_24h)   # عتبة موحدة 6% (core/market_checks)
+        try:
+            _atr_qs67 = _calc_atr(candles) if candles else 0.0
+        except Exception:
+            _atr_qs67 = 0.0
+        _sw_qs = _sharp_warn(change_24h, _atr_qs67)   # batch67: تعريف موحّد (6% أو 1.5×ATR؛ 🚨 بالمعيارين)
         if _sw_qs:
             bear_buy_warning += "\n" + _sw_qs
 
@@ -8640,7 +9008,7 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             _qs_risk64 = abs(entry - sl)
             _qs_rrw64 = ((0.6 * abs(tp1 - entry) + 0.4 * abs((tp2 or tp1) - entry)) / _qs_risk64) if _qs_risk64 > 0 else 0.0
-            _qs_rr_low = (sl > 0 and entry > 0 and _qs_risk64 > 0 and round(_qs_rrw64, 1) < 1.0)
+            _qs_rr_low = (sl > 0 and entry > 0 and _qs_risk64 > 0 and _qs_rrw64 < 1.0)   # batch67 (#992): بلا تقريب — 0.95 كانت تُقرَّب 1.0 فتمر
         except Exception:
             _qs_rr_low = False
             _qs_rrw64 = 0.0
@@ -8667,7 +9035,8 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🎯 *التوصية: {direction}*",
             "📌 الأساس: " + " | ".join(x for x in (
                 f"RSI {rsi:.0f}",
-                f"{_fgz_q(fear_val)[0]} ({fear_val})",
+                # batch67 (#995): Fear & Greed لا يدخل أساس توصية زوج نسبي أو أصل غير كريبتو
+                ("" if (pair_primary or _is_commodity(qs_sym) or is_tokenized_x_ticker(qs_sym)) else f"{_fgz_q(fear_val)[0]} ({fear_val})"),
                 # batch61 (#758): صياغة مقروءة بدل «تحت 0 من 4»
                 ((lambda _n: ("السعر فوق المتوسطات الأسية الأربعة (EMA 5/10/20/50)" if _n == 0 else
                               "السعر تحت المتوسطات الأسية الأربعة (EMA 5/10/20/50)" if _n == 4 else
@@ -8736,7 +9105,7 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         continue
                     _d62 = abs(price / _lv62 - 1) * 100 if _lv62 else 99
                     if _d62 <= _adj62:
-                        _tag62 = f" — ملاصق للسعر ({_d62:.1f}%)، ليس حاجزاً فعلياً"
+                        _tag62 = _fib_tight_b57(_lv62, price, float(_atr_q or 0))   # batch67 (#994): نفس وصف /signal («ملاصق» <0.5% وإلا «ضمن نصف ATR»)
                         if _nm62 == "s":
                             _sup_s += _tag62
                         else:
@@ -8817,7 +9186,7 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # FC: إضافة ATR في /quicksignal — batch31: قبل التحذيرات كي يُعرَّف الرمز قبل أن تُستخدَم نسبته (1.5×ATR)
         _atr_qs = _calc_atr(candles) if candles else 0.0
         if _atr_qs > 0:
-            lines.append(f"📊 ATR: {_atr_qs:.2f}% يومياً" if _atr_qs < 5 else f"📊 ATR: {_atr_qs:.1f}% يومياً")
+            lines.append(f"📊 ATR: {_atr_qs:.1f}% يومياً")   # batch67 (#996): منزلة واحدة كبقية الأوامر
         # batch32: تحذير الارتفاع الحاد/الشراء في سوق هابط أهم من تحذيرات R/R وSL — يُعرَض أولاً
         if bear_buy_warning:
             lines.append(bear_buy_warning)
@@ -8840,7 +9209,8 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"🟢 صاعد: إغلاق يومي فوق {_fmt_price(resistance, quote)}"
                 + (f" (السعر الحي فوقه بـ{(price / resistance - 1) * 100:.1f}% — بانتظار الإغلاق)" if (resistance and price > resistance) else "")   # batch65
                 + " ثم إعادة اختبار المستوى دون إغلاق تحته → "
-                + ("إعادة تقييم (الدخول مشروط بـ R/R ≥ 1:1 بعد الاختراق)" if locals().get("_qs_rr_low") else "دخول"),   # batch61 (#759)
+                + ("إعادة تقييم (الدخول مشروط بـ R/R ≥ 1:1 بعد الاختراق)" if locals().get("_qs_rr_low")
+                   else "دخول إن بقي R/R ≥ 1:1 وتأكدت الإشارة في /signal"),   # batch61 (#759) + batch67 (#997)
                 f"⚪ محايد: تذبذب بين الدعم والمقاومة بدون اتجاه واضح",
                 # batch65 (#854): «إغلاق يومي» صراحة + حالة السعر الحي
                 f"🔴 هابط: إغلاق يومي تحت {_fmt_price(support, quote)}"
@@ -8887,6 +9257,18 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"• ATR={_atr_q:.1f}% | RSI={rsi:.0f} — السعر انهار حديثاً"
             )
 
+        # batch67 (#993 — قرار #876 «موحّد في كل الأوامر»): سطر حدث الماكرو وسقف التعرض كما في /signal
+        try:
+            _em67, _er67 = engine.event_risk.get_exposure_multiplier()
+            if _er67:
+                _ix67 = next((i for i, l in enumerate(lines) if str(l).startswith("🎯 *التوصية")), -1)
+                _ml67 = f"📅 ماكرو: {_clean_md(_er67)} — سقف التعرض العام {_em67:.0%}"
+                if _ix67 >= 0:
+                    lines.insert(_ix67, _ml67)
+                else:
+                    lines.append(_ml67)
+        except Exception:
+            pass
         # auditing_agent: تدقيق /quicksignal قبل الإرسال
         _qs_text = _clean_md("\n".join(lines))
         _qs_approved, _qs_text = audit_content(_qs_text, source="quicksignal")

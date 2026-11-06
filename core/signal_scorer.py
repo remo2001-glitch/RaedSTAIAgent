@@ -176,7 +176,9 @@ def evaluate_signal(s: SignalInput) -> dict:
 
     # batch14: فشل G3 بقيمة معروضة "1.0" (فعلياً 0.97) كان يُظهر "1.0 < 1:1"، ويختلف الحكم بين
     # /signal و/analyze لفروق سنتات في السعر. نعتمد تسامح 0.95 ونعرض منزلتين.
-    if s.rr_ratio is not None and s.rr_ratio < 0.95:
+    # batch67 (#939/#992): المستويات مثبّتة على الشمعة المكتملة (الدفعتان 64/65) فلا تقلب لحظي بفروق السنتات —
+    # يُلغى تسامح 0.95: البوابة على القيمة غير المقرّبة < 1.0 (كانت 0.95 تمر في /quicksignal و0.94 تفشل في /signal)
+    if s.rr_ratio is not None and s.rr_ratio < 1.0:
         return _auto_fail(f"G3: R/R = 1:{s.rr_ratio:.2f} < 1:1 — لا حافة إحصائية")
 
     if s.is_synthetic and (s.volume_multiple or 1.0) < 0.3 and not s.market_open:

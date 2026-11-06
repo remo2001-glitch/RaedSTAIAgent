@@ -129,6 +129,21 @@ def last_candle_is_forming(candles: list, now: Optional[float] = None) -> bool:
     return True
 
 
+def completed_candle_dir_b67(candles: list) -> str:
+    """batch67 (#914/#944): جهة آخر شمعة مكتملة (شمعة نسبة الحجم): "up" | "down" | "".
+    حجم مرتفع في شمعة هابطة = حجم بيع — لا يدعم مسار الشراء."""
+    try:
+        c = completed_candles_b65(candles)
+        if not c:
+            return ""
+        o, cl = float(c[-1].get("open") or 0), float(c[-1].get("close") or 0)
+        if o <= 0 or cl <= 0 or abs(cl / o - 1) < 0.001:
+            return ""
+        return "up" if cl > o else "down"
+    except Exception:
+        return ""
+
+
 def completed_candles_b65(candles: list) -> list:
     """batch65 (الخيار 3): الشموع المكتملة فقط — تُسقط الشمعة الجارية حين يُعرف ذلك (طابع زمني/confirm).
     بلا معلومة زمنية تُعاد القائمة كما هي (لا افتراض)."""

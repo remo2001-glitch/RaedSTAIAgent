@@ -3534,23 +3534,78 @@ async def cmd_vfutures(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
     lines = ["⚡ *مراكز Futures الافتراضية*", "━━━━━━━━━━━━━━━━━━"]
+    _tot_m67 = _tot_n67 = 0.0
     for s_, p_ in vw.futures.items():   # batch59 (#719/#720): السعر الحالي والوقف/الهدف والصافي بعد الرسوم
         px = prices.get(s_, float(p_["entry"]))
-        _pxc = px * (0.999 if p_["side"] == "long" else 1.001)   # batch61 (#755): نفس انزلاق الإغلاق الفعلي
+        _long67 = p_["side"] == "long"
+        _pxc = px * (0.999 if _long67 else 1.001)   # batch61 (#755): نفس انزلاق الإغلاق الفعلي
         g = vw.futures_pnl(s_, _pxc)
         net = g - float(p_.get("fee_open", 0) or 0) - float(p_["qty"]) * _pxc * vw.FUT_FEE_RATE
-        pct = net / float(p_["margin"]) * 100 if p_.get("margin") else 0
+        _mg67 = float(p_.get("margin") or 0)
+        pct = net / _mg67 * 100 if _mg67 else 0
+        _tot_m67 += _mg67
+        _tot_n67 += net
         lev_ = int(p_.get("leverage", 1))
+        _ep67 = float(p_["entry"])
+        _sl67 = float(p_.get("stop_loss") or 0)
+        _tp67 = float(p_.get("take_profit") or 0)
+        _liq67 = float(p_.get("liq_price") or 0)
         lines += [
-            f"• *{s_}* {'Long' if p_['side'] == 'long' else 'Short'} {lev_}x — هامش ${float(p_['margin']):,.2f} | اسمية ${float(p_['notional']):,.2f}",
+            f"• *{s_}* {'Long' if _long67 else 'Short'} {lev_}x — هامش ${_mg67:,.2f} | اسمية ${float(p_['notional']):,.2f}"
+            + (" — مرجعي: لا عقد دائم على OKX" if s_ in _NO_PERP_B63 else ""),   # batch67 (قرار رحال #978)
             f"  الدخول {_fmt_price(p_['entry'])} | الحالي {_fmt_price(px)}",
-            f"  الوقف {_fmt_price(p_['stop_loss']) if p_.get('stop_loss') else '—'} | الهدف {_fmt_price(p_['take_profit']) if p_.get('take_profit') else '—'}"
-            + ("" if lev_ == 1 else (f" | التصفية ≈ ${round(float(p_['liq_price'])):,}" if float(p_['liq_price']) >= 100
+            f"  الوقف {_fmt_price(p_['stop_loss']) if _sl67 else '—'} | الهدف {_fmt_price(p_['take_profit']) if _tp67 else '—'}"
+            + ("" if lev_ == 1 else (f" | التصفية ≈ ${round(_liq67):,}" if _liq67 >= 100
                                      else f" | التصفية ≈ {_fmt_price(p_['liq_price'])}")),
-            f"  {'📈' if net >= 0 else '📉'} الصافي لو أُغلق الآن: {'+' if net >= 0 else '-'}${abs(net):,.2f} ({pct:+.1f}% من الهامش، بعد رسوم الفتح والإغلاق)",
-            "",
         ]
-    lines += ["🎮 تدريب فقط — هامش معزول ورسوم تقديرية 0.05%؛ الرافعة الحقيقية غير مفعّلة"]
+        # batch67 (#980/#984): خسارة الوقف كنسبة من الهامش + R/R المركز
+        try:
+            if _sl67 > 0 and _ep67 > 0:
+                _sl_d = abs(_ep67 - _sl67) / _ep67
+                _loss_sl = min(_sl_d * lev_ * 100, 100.0)
+                _rr_t = ""
+                if _tp67 > 0 and _sl_d > 0:
+                    _rr_t = f" | R/R 1:{abs(_tp67 - _ep67) / _ep67 / _sl_d:.1f}"
+                lines.append(f"  🛑 عند الوقف: −{_loss_sl:.0f}% من الهامش (المسافة {_sl_d * 100:.1f}% × {lev_}x){_rr_t}")
+        except Exception:
+            pass
+        lines.append(f"  {'📈' if net >= 0 else '📉'} الصافي لو أُغلق الآن: {'+' if net >= 0 else '-'}${abs(net):,.2f} "
+                     f"({pct:+.1f}% من الهامش، بعد الرسوم وانزلاق الإغلاق)")
+        # batch67 (#979): قرب الوقف/التصفية
+        try:
+            if px > 0:
+                _warn = []
+                if _sl67 > 0:
+                    _dsl = ((px - _sl67) if _long67 else (_sl67 - px)) / px * 100
+                    _tot_sl67 = abs(_ep67 - _sl67) / _ep67 * 100 if _ep67 > 0 else 0
+                    if 0 <= _dsl <= 0.3 * _tot_sl67:   # بقي ≤30% من مسافة الوقف
+                        _warn.append(f"الوقف على بُعد {_dsl:.1f}% فقط")
+                if lev_ > 1 and _liq67 > 0:
+                    _dlq = ((px - _liq67) if _long67 else (_liq67 - px)) / px * 100
+                    if 0 <= _dlq <= 5.0:
+                        _warn.append(f"التصفية على بُعد {_dlq:.1f}%")
+                if _warn:
+                    lines.append("  ⚠️ " + " · ".join(_warn))
+        except Exception:
+            pass
+        # batch67 (#983): مدة المركز
+        try:
+            from datetime import datetime as _dt67, timezone as _tz67
+            _op = _dt67.fromisoformat(str(p_.get("opened_at")))
+            if _op.tzinfo is None:
+                _op = _op.replace(tzinfo=_tz67.utc)
+            _hh = (_dt67.now(_tz67.utc) - _op).total_seconds() / 3600.0
+            _mh = float(p_.get("max_hold_hours") or 0) or float(getattr(vw, "LEGACY_MAX_HOLD_HOURS", 0) or 0)
+            _dur = f"{_hh:.0f} ساعة" if _hh < 48 else f"{_hh / 24:.1f} يوم"
+            lines.append(f"  ⏱️ مفتوح منذ {_dur}" + (f" (الخروج الزمني بعد {_mh / 24:.0f} أيام)" if _mh >= 24 else ""))
+        except Exception:
+            pass
+        lines.append("")
+    if len(vw.futures) > 1 and _tot_m67 > 0:   # batch67 (#982)
+        lines += [f"📊 الإجمالي: هامش ${_tot_m67:,.2f} | الصافي {'+' if _tot_n67 >= 0 else '-'}${abs(_tot_n67):,.2f} "
+                  f"({_tot_n67 / _tot_m67 * 100:+.1f}%)", ""]
+    # batch67 (#977): الرسوم 0.05% لكل جهة (قرار رحال) + انزلاق إغلاق تقديري 0.1% — كان النص يذكر الرسوم وحدها
+    lines += ["🎮 تدريب فقط — هامش معزول؛ رسوم 0.05% لكل جهة + انزلاق إغلاق تقديري 0.1%؛ الرافعة الحقيقية غير مفعّلة"]
     kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"🔴 إغلاق {s_}", callback_data=f"vfclose_{s_}")]
                                for s_ in list(vw.futures)[:8]])
     await update.message.reply_text("\n".join(lines), reply_markup=kb, parse_mode=ParseMode.MARKDOWN)   # batch59 (#718)

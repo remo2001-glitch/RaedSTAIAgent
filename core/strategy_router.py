@@ -60,11 +60,16 @@ def _tech_conflict_b56(s) -> str:
         if side == "bear" and (rsi < 45 or bb < 0.2):
             _w = (f"قرب ذروة البيع (RSI {rsi:.0f})" if rsi < 35 else
                   f"RSI منخفض نسبياً ({rsi:.0f})" if rsi < 45 else "سعر قرب حد البولنجر السفلي")
-            return f" — اتجاه هابط (ADX {adx:.0f}) تعاكسه قراءة {_w}"
+            # batch67 (#954): RSI المنخفض يوافق الهبوط — «تعاكسه» تُقال فقط لقرب ذروة البيع (احتمال ارتداد فني)
+            if rsi < 35 or bb < 0.2:
+                return f" — اتجاه هابط (ADX {adx:.0f}) مع {_w} — احتمال ارتداد فني قصير"
+            return f" — اتجاه هابط (ADX {adx:.0f}) يوافقه {_w} (زخم ضعيف)"
         if side == "bull" and (rsi > 55 or bb > 0.8):
             _w = (f"قرب ذروة الشراء (RSI {rsi:.0f})" if rsi > 65 else
                   f"RSI مرتفع نسبياً ({rsi:.0f})" if rsi > 55 else "سعر قرب حد البولنجر العلوي")
-            return f" — اتجاه صاعد (ADX {adx:.0f}) تعاكسه قراءة {_w}"
+            if rsi > 65 or bb > 0.8:
+                return f" — اتجاه صاعد (ADX {adx:.0f}) مع {_w} — احتمال تصحيح فني قصير"
+            return f" — اتجاه صاعد (ADX {adx:.0f}) يوافقه {_w} (زخم قوي)"
     except Exception:
         pass
     return ""
@@ -439,6 +444,11 @@ class SignalLayer:
         # volume_completed_fix: آخر شمعة مكتملة ÷ متوسط 20 شمعة مكتملة
         from core.indicators import volume_ratio_completed
         vol_ratio  = volume_ratio_completed(candles, window=20)
+        try:
+            from core.indicators import completed_candle_dir_b67 as _ccd67
+            _vdir67 = _ccd67(candles)
+        except Exception:
+            _vdir67 = ""
         vol_avg20  = _sma(vols, 20) or 1
 
         # تعريف مبكر لمنع NameError (#510)
@@ -596,6 +606,7 @@ class SignalLayer:
             "macd_hist":   round(macd_hist, 6),
             "bb_pos":      round(bb_pos, 3),
             "vol_ratio":   round(vol_ratio, 2),
+            "vol_dir":     _vdir67,   # batch67 (#944): جهة شمعة الحجم المكتملة
             "rsi_div":     rsi_div,
             "vol_profile": vol_profile,
             "conf_flags":  conf_flags,

@@ -141,7 +141,7 @@ def _adx_fmt_b57(adx) -> str:
     """batch57 (#660): عند حد 20/25 يُعرض بمنزلة عشرية (19.8 لا «20») كي لا يتناقض التصنيف مع الرقم المعروض."""
     try:
         a = float(adx or 0)
-        return f"{a:.1f}" if (19.5 <= a < 20.5 or 24.5 <= a < 25.5) else f"{a:.0f}"
+        return f"{a:.1f}" if (19.5 <= a < 20.5 or 24.5 <= a < 25.5 or 29.5 <= a <= 30.6) else f"{a:.0f}"   # batch67 (#972): حد 30 أيضاً
     except Exception:
         return str(adx)
 
@@ -760,7 +760,10 @@ class RegimeDetector:
                f"• الإجراء: {_action_ar('reduce_size')} (ADX={m.get('adx',0):.0f}≥40 تقلب شديد)"
                if (result.action == "trade_normal" and m.get("adx", 0) >= 40) else
                # batch38: «تداول بحجم طبيعي» لا يُقال بزخم ضعيف (ADX<25 أو حجم<1x) — تقييم بيئة لا إشارة دخول (تناقض مع /signal «مراقبة»)
-               f"• الإجراء: ✅ بيئة السوق تسمح بالتداول — الدخول من /signal فقط (لا إشارة دخول هنا)"
+               # batch67 (#913/#943): ADX<20 = لا اتجاه ⇒ «انتظار» (نفس حكم /signal)؛ وإلا «لا مانع من التصنيف» لا «✅ تسمح بالتداول»
+               (f"• الإجراء: ⏳ انتظار — لا اتجاه واضح (ADX {float(m.get('adx', 0) or 0):.0f} < 20)؛ قرار الدخول من /signal"
+                if 0 < float(m.get("adx", 0) or 0) < 20 else
+                f"• الإجراء: ⚪ التصنيف لا يمنع التداول — قرار الدخول (الثقة/التأكيدات/الجهة) من /signal فقط")
                if (result.action == "trade_normal" and (0 < m.get("adx", 0) < 25 or float(m.get("vol_ratio", 1) or 1) < 1.0)) else
                f"• الإجراء: {_action_ar(result.action)}{m.get('action_basis','')}"
                if not (result.action == "overbought_wait" and m.get("rsi", 50) < 60) else
@@ -768,6 +771,33 @@ class RegimeDetector:
             + _rsi_warning(m.get("rsi", 50), result.regime)
             + _adx_warning(m.get("adx", 0))
         )
+
+
+def strip_crypto_refs_b67(text: str, symbol: str) -> str:
+    """batch67 (#950/#975 — امتداد قرار #874): Fear & Greed وهيمنة BTC لا تخص السلع والأسهم المرمّزة —
+    كانت كتلة «حالة السوق» تعرضهما كمؤشرين للفضة/الذهب رغم وسم الترويسة."""
+    try:
+        from core.thresholds import is_commodity_token
+        from core.symbol_classify import is_tokenized_x_ticker
+        su = str(symbol or "").upper()
+        if not (is_commodity_token(su) or is_tokenized_x_ticker(su)):
+            return text
+        import re as _re
+        return _re.sub(r"\n• Fear & Greed: [^\n]*\| هيمنة BTC: [^\n]*", "", text)
+    except Exception:
+        return text
+
+
+def anchor_basis_note_b67(result) -> str:
+    """batch67 (#912/#929): سطر أساس الأرقام — التصنيف/ADX/ATR من آخر شمعة يومية مكتملة؛ RSI والسعر vs EMA50 حيّان."""
+    try:
+        m = getattr(result, "metrics", {}) or {}
+        if m.get("anchored"):
+            return ("ℹ️ التصنيف وADX وATR والحجم من آخر شمعة يومية مكتملة (إغلاق "
+                    f"{float(m.get('anchor_close') or 0):,.6g}) — RSI والسعر vs EMA50 حيّان؛ حركة اليوم لا تغيّر التصنيف حتى الإغلاق")
+    except Exception:
+        pass
+    return ""
 
 
 def _mp_ar(phase: str) -> str:
