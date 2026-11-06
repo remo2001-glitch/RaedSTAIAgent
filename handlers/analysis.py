@@ -53,6 +53,28 @@ def _pct_nz46(x):
     return "0.0" if abs(x) < 0.05 else f"{x:+.1f}"
 
 
+def _whale_line_b66(whale) -> str:
+    """batch66 (#864/#870): سطر Whale موحّد لـ/onchain و/liquidity بنفس وصف المئين في /signal
+    (OKX > 1.2 دائماً تقريباً، فالقيمة المطلقة لا تعني شيئاً — الموقع من آخر 30 يوماً هو المعنى)."""
+    w = whale if isinstance(whale, dict) else {}
+    try:
+        r = float(w.get("ratio", 0) or 0)
+    except (TypeError, ValueError):
+        r = 0.0
+    if r <= 0:
+        return "• Whale Ratio: ⚪ غير متاح الآن"
+    try:
+        if w.get("pctile") is not None:
+            p = int(w["pctile"])
+            lbl = ("🟢 ميل Long أعلى من المعتاد" if p >= 80 else
+                   "🔴 ميل Long أدنى من المعتاد" if p <= 20 else "⚪ ضمن المعتاد")
+            return (f"• Whale Ratio ({r:.2f}): {lbl} — مئين {p} مقابل آخر {int(w.get('pctile_n') or 30)} يوماً "
+                    f"(المدى {float(w.get('d30_min') or 0):.2f}–{float(w.get('d30_max') or 0):.2f}) — للعرض فقط")
+    except Exception:
+        pass
+    return f"• Whale Ratio ({r:.2f}): ⚪ بلا مرجع 30 يوماً — عيّنة حسابات OKX، للعرض فقط"
+
+
 def normalize_symbol_alias(raw: str) -> str:
     """X1: تطبيع الرموز عبر خريطة المرادفات + fuzzy match."""
     if not raw:
@@ -1077,7 +1099,7 @@ def _consistency_pass_b62(text: str) -> str:
         # ── فقرة النموذج مقابل أرقام النظام ──
         if _bear:
             # batch65 (#848): درجة جودة الإعداد تقيّم بنية شراء يمنعها النظام في الهبوط القائم
-            t = _r.sub(r"^(📊 جودة إعداد الصفقة[^\n]*?)(\s*)$",
+            t = _r.sub(r"^(\*?📊 \*?جودة إعداد الصفقة[^\n]*?)(\s*)$",   # batch66 (#872): الرأس فيه تنسيق «📊 *جودة»
                        lambda m: m.group(1) + ("" if "للعلم فقط" in m.group(1) else
                                                " — بنية شراء للعلم فقط؛ الشراء غير مسموح في الهبوط القائم"),
                        t, count=1, flags=_r.M)
@@ -1175,7 +1197,9 @@ def _move24_line_b56(chg: float, atr_pct: float) -> str:
     """batch56 (#607/#616): حركة 24س كبيرة (≥1.5×ATR) تُذكر صراحة بدل تجاهلها في القرار والفقرة."""
     try:
         chg, atr_pct = float(chg or 0), float(atr_pct or 0)
-        if atr_pct > 0 and abs(chg) >= 1.5 * atr_pct:
+        from core.market_checks import SHARP_MOVE_PCT as _smp66
+        # batch66 (#888): الحركة فوق عتبة الحدة الثابتة تظهر هنا أيضاً حتى دون 1.5×ATR (كان SOL −6.9% يظهر أسفل الرسالة فقط)
+        if atr_pct > 0 and (abs(chg) >= 1.5 * atr_pct or abs(chg) > _smp66):
             # batch61 (#745): سطر واحد للحركة الكبيرة — يضم «خطر الدخول مرتفع» (كان سطر 🚨 منفصلاً أسفل الرسالة بعتبة أخرى)
             from core.market_checks import SHARP_MOVE_PCT as _smp61
             return (f"⚡ حركة 24س {chg:+.2f}% ≈ {abs(chg) / atr_pct:.1f}×ATR — "
@@ -1217,7 +1241,8 @@ def _analyze_summary_lines(sig, meta, regime_obj) -> list:
                 if k in ex:
                     return f"{label} غير محتسب"
                 v = float(ss.get(k, 0.5) or 0.5)
-                tag = "🟢" if v >= 0.60 else "🔴" if v <= 0.40 else "⚪"
+                _vp66 = round(v * 100)   # batch66 (#878): الوسم من النسبة المعروضة كما في /signal (40.4% ⇒ «40%» 🔴)
+                tag = "🟢" if _vp66 >= 60 else "🔴" if _vp66 <= 40 else "⚪"
                 return f"{label} {v:.0%} {tag}"
             out.append("📊 المصادر: " + " | ".join([
                 _t("technical", "تقني"), _t("onchain", "On-Chain"), _t("news", "أخبار"),
@@ -1886,7 +1911,7 @@ def _entry_hint_b65(price: float, entry: float, ns: float, atr_pct: float = 0.0)
     كلما تطابق الدخولان، حتى والسعر أعلى بـ1.8% أو تحت الدعم."""
     try:
         if ns > 0 and price < ns:
-            return "دخول بعد استرداد الدعم بإغلاق فوقه فقط"
+            return ""   # batch66 (#879): وسم الدخول يقول «دخول بعد استرداده» — لا تكرار
         d = (price / entry - 1) * 100 if entry > 0 else 0.0
         if d <= max(0.5, 0.5 * float(atr_pct or 0)):
             return "السعر قريب من الدعم فادخل بعد تأكيد الارتداد فقط"
@@ -1955,6 +1980,14 @@ def _fmt_fib_lines(fib: dict, price: float, atr_pct: float = 0.0) -> list:
                             + (_x64["tag_s"] or _fib_tight_b57(ns, price, atr_pct)))
     if nr > 0: lines.append(f"• أقرب مقاومة فيبو: {_fmt_price(nr)} (Fib — يحتاج تأكيد سعري)"
                             + (_x64["tag_r"] or _fib_tight_b57(nr, price, atr_pct)))
+    # batch66 (#880/#886): الدعم المعتمد هو قاع نطاق Fib نفسه
+    try:
+        _lv0 = float((fib.get("levels") or {}).get("0.0") or 0)
+        if ns > 0 and _lv0 > 0 and abs(ns - _lv0) / _lv0 < 1e-6:
+            lines.append("⚠️ الدعم المعتمد = قاع نطاق Fib (0.0) — كسره يعني قاعاً جديداً بلا دعم Fib أدنى؛ "
+                         "الهدف التالي بمقياس ATR لا بمستوى Fib")
+    except Exception:
+        pass
     if fib.get("anchored"):   # batch64: أساس المستويات معلن
         lines.append(f"ℹ️ الدعم/المقاومة من آخر شمعة يومية مكتملة (إغلاق {_fmt_price(fib.get('anchor_close') or 0)}) — "
                      f"لا تتغير مع حركة اليوم؛ تُحدَّث عند الإغلاق (7 م بتوقيت السعودية)")
@@ -2122,9 +2155,9 @@ def _build_professional_block(
     if adx > 45:
         reasons.append(f"• ADX = {adx:.0f} → اتجاه قوي جداً — خطر الدخول مرتفع")
     if macd_hist < 0:
-        reasons.append("• MACD سالب (البائعون مسيطرون)")
+        reasons.append("• MACD سالب (البائعون مسيطرون — من آخر شمعة يومية مكتملة)")
     elif macd_hist > 0:
-        reasons.append("• MACD موجب (زخم شراء)")
+        reasons.append("• MACD موجب (زخم شراء — من آخر شمعة يومية مكتملة، لا يشمل حركة اليوم)")
     # rsi_display_rounding_fix: int() كان يبتر الكسر (70.6→"70") بينما رأس
     # الرسالة نفسها يُقرِّب .0f (70.6→"71") — فارق رقم بين الرأس والأسباب
     # لنفس القيمة. توحيد على .0f كبقية الرسالة.
@@ -3340,7 +3373,9 @@ def _build_professional_block(
         # cvd_missing_notice: كان السطر يختفي بصمت عند فشل جلب CVD فيبدو كأنه غير مدعوم
         deriv_lines.append("• CVD (آخر 500 صفقة): ⚪ غير متاح الآن (صفقات غير كافية أو تعذّر الجلب — لم يُحتسب كتأكيد)")
     if deriv_lines:
-        parts.extend(["", "*🔗 Derivatives & On-Chain*"])
+        # batch66 (#883): في Spot بيانات المشتقات من سوق العقود الدائمة — يُوسم مصدرها
+        _spot66 = isinstance(tech, dict) and str(tech.get("bb_mkt", "")).lower() == "spot"
+        parts.extend(["", "*🔗 Derivatives & On-Chain*" + (" (المشتقات من سوق العقود الدائمة — مرجع للفوري)" if _spot66 else "")])
         parts.extend(deriv_lines)
 
     # 4. Entry + TP (مع مراعاة #440: لا TP عند WAIT)
@@ -3417,11 +3452,14 @@ def _build_professional_block(
         # batch65 (#844): في الهبوط القائم لا «Aggressive/بعد تأكيد الارتداد» — مستوى مرجعي واحد للعلم
         (f"• Entry (مرجعي): {_fmt_price(entry_agg)} — {_agg_label}؛ لا شراء في الهبوط القائم — مستوى للعلم فقط"
          if (_entries_distinct and _bear62) else
-         f"• Entry 1 (Aggressive): {_fmt_price(entry_agg)} — {_agg_label}"
+         (f"• Entry 1 (Aggressive): {_fmt_price(entry_agg)} — {_agg_label}"
+          # batch66 (#885): توجيه المسافة نفسه لـ Entry 1 حين يبعد عن السعر الحي
+          + (("؛ " + _h66b) if ((_h66b := _entry_hint_b65(price, entry_agg, ns, atr_pct)) and "Limit" in _h66b) else ""))
          if _entries_distinct else
          (f"• Entry (مرجعي): {_fmt_price(entry_agg)} — {_agg_label}؛ لا شراء في الهبوط القائم — مستوى للعلم فقط"
           if _bear62 else
-          f"• Entry: {_fmt_price(entry_agg)} — {_agg_label}؛ " + _entry_hint_b65(price, entry_agg, ns, atr_pct))),
+          f"• Entry: {_fmt_price(entry_agg)} — {_agg_label}"
+          + (("؛ " + _h66) if (_h66 := _entry_hint_b65(price, entry_agg, ns, atr_pct)) else ""))),
     ]
     # batch64 (الخيار 3): تنبيه حي حين يعبر السعر مستوى مثبتاً بأكثر من ½ATR
     try:
@@ -3685,7 +3723,10 @@ def _build_professional_block(
                 if _scen_tp_ok else
                 (" → لا هدف أعلى من مستوى التفعيل ضمن الخطة الحالية" if (_conf_score >= 40 and tp1_v and tp1_v > price)
                  else " → الأهداف غير مُفعَّلة حالياً (الثقة دون حد عرضها 40%)"))),
-            (f"🔴 هابط: كسر {_fmt_price(_ns_scen)} بإغلاق 4H"
+            (f"🔴 هابط: كسر {_fmt_price(_ns_scen)}"
+             # batch66 (#880): كسر قاع النطاق كله
+             + (" (قاع نطاق Fib)" if (fib and abs(_ns_scen - float((fib.get("levels") or {}).get("0.0") or 0)) / max(_ns_scen, 1e-9) < 1e-6) else "")
+             + " بإغلاق 4H"
              + (f" (السعر الحي دونه بـ{(1 - price / _ns_scen) * 100:.1f}% — بانتظار الإغلاق)" if (_ns_scen and price < _ns_scen) else "")
              + " + حجم بيع مرتفع"
              f" → يفتح الطريق نحو {_fmt_price(_bear_tgt)} (≈ -{_bear_pct:.1f}% من مستوى الكسر"
@@ -3929,7 +3970,7 @@ def _split_long_message(text: str, limit: int = 3900) -> list:
     if len(text) <= limit:
         return [text]
     # batch64 (#840): رسالة تتجاوز الحد بقليل (ذيل أسطر قليلة) تبقى رسالة واحدة ضمن هامش أمان من حد تيليجرام 4096
-    if len(text) <= 4000 and len(text.encode("utf-16-le")) // 2 <= 4090:
+    if len(text.encode("utf-16-le")) // 2 <= 4090:   # batch66 (#877): حد تيليجرام الفعلي (وحدات UTF-16) لا 4000 حرف
         return [text]
     chunks = []
     remaining = text
@@ -4448,274 +4489,256 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
         from core.thresholds import fear_greed_zone as _fgz_oc
         fear_emoji = _fgz_oc(fear_val)[1]
 
-        lines = [
-            "🔗 *تحليل On-Chain — رائد*",
-            "━━━━━━━━━━━━━━━━━━",
-            (f"📊 إجمالي TVL: ${tvl/1e9:.2f}B" if tvl > 0
-             else "📊 إجمالي TVL: غير متاح حالياً (تعذّر جلب DeFiLlama)"),
-            *([f"📈 تغيير TVL 24h: {tvl_change:+.2f}%"] if tvl > 0 else []),
-            f"{fear_emoji} Fear & Greed: {fear_val} — {_fgz_oc(fear_val)[0]}",
-        ]
-
-        # بيانات شبكة Bitcoin
-        btc_hashrate = data.get("btc_hashrate", 0)
-        btc_tx       = data.get("btc_tx_count_24h", 0)
-        if btc_hashrate > 0 or btc_tx > 0:
-            lines += ["", "⛏️ *شبكة Bitcoin*"]
-            if btc_hashrate > 0:
-                lines.append(f"• Hashrate: {btc_hashrate/1e9:.1f} EH/s")
-            if btc_tx > 0:
-                lines.append(f"• معاملات 24h: {btc_tx:,}")
-            else:
-                lines.append("• معاملات 24h: ⚪ غير متاحة الآن")
-
-        if top_p:
-            lines += ["", "🏆 *أكبر البروتوكولات* (حسب TVL — DeFiLlama)"]
-            for i, p in enumerate(top_p, 1):
-                tvl_b = float(p.get("tvl") or 0) / 1e9
-                name  = str(p.get("name", "")).replace("_", " ")
-                lines.append(f"{i}. {name} — ${tvl_b:.2f}B")
-        else:
-            lines += ["", "⚠️ بيانات البروتوكولات غير متاحة حالياً — يُرجى المحاولة لاحقاً"]
-
-        # إصلاح #13: قسم المشتقات BTC (Funding/OI/Whale) — بيانات كانت تُجلَب ولا تُعرض
+        # batch66 (#871 — قرار رحال: «المقترح كما هو»): ترتيب جديد — الخلاصة أولاً، ثم ما تغيّر اليوم،
+        # ثم المشتقات، ثم الدورة في سطر واحد، ثم السيناريوهات، ثم التفاصيل المختصرة، ثم المصادر.
+        btc_hashrate = data.get("btc_hashrate", 0) or 0
         _fund_pct  = float((funding or {}).get("rate_pct", 0) or 0)
         _oi_chg    = float((oi or {}).get("oi_change_pct", 0) or 0)
+        _oi_ok     = (oi or {}).get("source") not in (None, "", "unknown")
         _oi_sig    = (oi or {}).get("signal", "")
         _whale_sig = (whale or {}).get("signal", "")
         _whale_r   = float((whale or {}).get("ratio", 0) or 0)
 
-        if _fund_pct or _oi_chg or _whale_sig:
-            lines += ["", "📐 *مشتقات BTC*"]
-            if _fund_pct:
-                if _fund_pct < -0.02:
-                    _fsig = "🟢 سالب جداً — ضغط Shorts (فرصة Long)"
-                elif _fund_pct < -0.005:
-                    _fsig = "🟢 سالب — فرصة Long"
-                elif _fund_pct > 0.02:
-                    _fsig = "🔴 مرتفع جداً — ضغط Longs"
-                elif _fund_pct > 0.01:
-                    _fsig = "🟡 إيجابي خفيف"
-                elif _fund_pct > 0.005:
-                    _fsig = "⚪ محايد (إيجابي طفيف)"
-                else:
-                    _fsig = "⚪ محايد"
-                lines.append(f"• Funding Rate: {_fund_pct:+.4f}% {_fsig}")
-            if _oi_chg:
-                lines.append(f"• Open Interest (آخر ساعة): {_pct_nz46(_oi_chg)}% {_oi_sig}")
-            if _whale_sig:
-                _wr_txt = f" ({_whale_r:.2f})" if _whale_r > 0 else ""
-                # whale_consistency_fix: توحيد مع /signal
-                _whale_note_on = " — قد يكون تحوطاً" if "Long" in _whale_sig else ""
-                lines.append(f"• Whale Ratio{_wr_txt}: {_whale_sig}{_whale_note_on}")
-
-        # تطوير جديد: مؤشرات BTC on-chain متقدمة من BGeometrics
-        # (MVRV Z-Score, SOPR, Exchange Netflow, Puell Multiple)
-        # CryptoQuant data display
-        if cq_data.get("available"):
-            lines += ["", "🔗 *مؤشرات CryptoQuant*"]
-            cq_mvrv = cq_data.get("mvrv", 0)
-            cq_sopr = cq_data.get("sopr", 0)
-            if cq_mvrv:
-                _mvrv_lbl = ("⚠️ مرتفع جداً" if cq_mvrv > 3.5
-                             else "🟡 مرتفع" if cq_mvrv > 2.0
-                             else "🟢 منخفض (فرصة)" if cq_mvrv < 1.0
-                             else "⚪ طبيعي")
-                lines.append(f"• MVRV Ratio: {cq_mvrv:.2f} — {_mvrv_lbl}")
-            if cq_sopr:
-                _sopr_lbl = ("📈 أرباح تُحقَّق" if cq_sopr > 1.05
-                             else "📉 دعم محتمل" if cq_sopr < 0.97
-                             else "⚪ تعادل")
-                lines.append(f"• SOPR: {cq_sopr:.3f} — {_sopr_lbl}")
-            if cq_data.get("exchange_flow_signal"):
-                lines.append(f"• Exchange Flow: {cq_data['exchange_flow_signal']}")
-            if cq_data.get("whale_tx_count", 0) > 0:
-                _wt = cq_data["whale_tx_count"]
-                lines.append(f"• معاملات كبيرة (Whale): {_wt}{' 🐋 نشاط مرتفع' if _wt > 200 else ''}")
-            if cq_data.get("nvt", 0):
-                lines.append(f"• NVT Ratio: {cq_data['nvt']:.1f}")
-            if cq_data.get("miner_outflow", 0):
-                lines.append(f"• Miner Outflow: {cq_data['miner_outflow']:,.0f} BTC")
-
-        if btc_adv.get("available"):
-            lines += ["", "📊 *مؤشرات BTC المتقدمة (BGeometrics)*"]
-            if "mvrv_zscore" in btc_adv:
-                lines.append(f"• MVRV Z-Score (يومي): {btc_adv['mvrv_zscore']} — {btc_adv['mvrv_signal']} — (العتبات: <0 قاع تاريخي · >7 قمة)")
-            if "sopr" in btc_adv:
-                lines.append(f"• SOPR (يومي): {btc_adv['sopr']} — {btc_adv['sopr_signal']} — (العتبات: >1 ربح محقَّق · <1 خسارة محقَّقة)")
-            if "exchange_netflow_btc" in btc_adv:
-                lines.append(f"• Exchange Netflow (يومي): {btc_adv['exchange_netflow_btc']:+,.1f} BTC — {btc_adv['netflow_signal']}")
-            if "puell_multiple" in btc_adv:
-                lines.append(f"• Puell Multiple (يومي): {btc_adv['puell_multiple']} — {btc_adv['puell_signal']} — (العتبات: <0.5 قاع تعدين · >4 قمة)")
-            # batch56 (#624): نقص مؤشر منفرد كان صامتاً
-            if "exchange_netflow_btc" not in btc_adv:
-                lines.append("• Exchange Netflow: ⚪ غير متاح الآن (لم يُرجعه المصدر)")
-
-        if not btc_adv.get("available") and not cq_data.get("available"):
-            lines += ["", "ℹ️ مؤشرات التدفق على البورصات وUSDT/USDC وMVRV/SOPR غير متاحة حالياً (مصادرها لم تستجب) — التفسير أدناه يعتمد على المتاح فقط."]
-
-        # تفسير وتوصية إجمالية مختصرة بناءً على البيانات المجمَّعة
-        _reco_parts = []
-        # EE3 (#2044): تفسير Fear & Greed بناءً على القيمة الفعلية (AA2)
-        # حدود موحّدة مع core.thresholds.fear_greed_zone (كان 59 «جشع» في الترويسة بلا توصية هنا)
-        if fear_val < 25:
-            _reco_parts.append("خوف شديد → فرصة تجميع تدريجي عند التأكيد")
-        elif fear_val < 45:
-            _reco_parts.append(f"خوف ({fear_val}) → ترقّب فرصة تجميع")
-        elif fear_val >= 75:
-            _reco_parts.append(f"جشع شديد ({fear_val}) → حذر من انعكاس وشيك")
-        elif fear_val >= 65:
-            _reco_parts.append(f"جشع ({fear_val}) → حذر من الانعكاس")
-        elif fear_val >= 55:
-            # batch33: 55–64 جشع خفيف قريب من الحياد — لا يُعدّ إشارة انعكاس
-            _reco_parts.append(f"جشع خفيف ({fear_val}) → لا إشارة انعكاس؛ الحذر يبدأ فوق 65")
-        if _fund_pct < -0.01:
-            _reco_parts.append("Funding سالب يدعم سيناريو الارتداد")
-        if _whale_r and _whale_r < 0.6:
-            _reco_parts.append("الحيتان تتراكم")
-        if tvl > 0 and tvl_change < -3:
-            _reco_parts.append("خروج سيولة من DeFi")
-        if btc_adv.get("mvrv_zscore") is not None:
-            if btc_adv["mvrv_zscore"] < 0:
-                _reco_parts.append("MVRV Z-Score في منطقة قاع تاريخية")
-            elif btc_adv["mvrv_zscore"] > 7:
-                _reco_parts.append("MVRV Z-Score في منطقة قمة تاريخية — حذر")
-        # batch56 (#623): الحالة الطبيعية تُذكر صراحة بدل تفسير من سطر واحد
+        # ── السعر الحي لـBTC (لأجل الخلاصة والهبوط الحاد #866) ──
+        _btc_chg_live = 0.0
         try:
-            _norm_b56 = []
-            if btc_adv.get("mvrv_zscore") is not None and 0 <= float(btc_adv["mvrv_zscore"]) <= 7:
-                _norm_b56.append("MVRV")
-            if btc_adv.get("sopr") is not None and 0.97 <= float(btc_adv["sopr"]) <= 1.05:
-                _norm_b56.append("SOPR")
-            if btc_adv.get("puell_multiple") is not None and 0.5 <= float(btc_adv["puell_multiple"]) <= 4:
-                _norm_b56.append("Puell")
-            if _norm_b56:
-                _reco_parts.append(f"{'/'.join(_norm_b56)} في النطاق الطبيعي (لا إشارة قمة أو قاع دورية)")
-            if _fund_pct and -0.01 <= _fund_pct <= 0.02:
-                _reco_parts.append("Funding محايد (لا رافعة مزدحمة)")
+            _btc_live = await engine.data_layer.get_price("BTC")
+            _btc_chg_live = float((_btc_live or {}).get("change_24h", 0) or 0)
         except Exception:
-            pass
-        if btc_adv.get("exchange_netflow_btc") is not None and btc_adv["exchange_netflow_btc"] < 0:
-            _reco_parts.append("تدفق صافٍ خارج البورصات (Hodling)")
-        elif btc_adv.get("exchange_netflow_btc") is not None and btc_adv["exchange_netflow_btc"] > 0:
-            _reco_parts.append("تدفق صافٍ إلى البورصات (ضغط بيع محتمل)")
-        try:
-            if btc_adv.get("sopr") is not None and float(btc_adv["sopr"]) < 0.97:
-                _reco_parts.append("SOPR < 1: بيع بخسارة (استسلام محتمل)")
-            if btc_adv.get("puell_multiple") is not None and float(btc_adv["puell_multiple"]) > 4:
-                _reco_parts.append("Puell مرتفع — ضغط بيع من المعدّنين")
-        except Exception:
-            pass
-        if _fund_pct > 0.02:
-            _reco_parts.append("Funding مرتفع — رافعة شرائية مزدحمة")
-        if tvl > 0 and tvl_change > 3:
-            _reco_parts.append("دخول سيولة إلى DeFi")
-        if _reco_parts:
-            lines += ["", f"💡 *التفسير*: {' · '.join(_reco_parts)}"]
+            _btc_chg_live = 0.0
 
-        # T17_fix v2: CoinGecko بديل Yahoo Finance (محظور على Railway)
+        # ── السياق الكلي (CoinGecko) — يُجلب أولاً لأن «ما تغيّر اليوم» يحتاجه ──
+        _btc_dom = 0.0
+        _mcap_chg = 0.0
+        _total_mcap = 0.0
+        _defi_dom = 0.0
+        _defi_mcap = 0.0
+        _cg_ok = False
         try:
             import urllib.request as _ur, json as _jj, ssl as _ssl
             _ctx_t17 = _ssl.create_default_context()
             _ctx_t17.check_hostname = False
             _ctx_t17.verify_mode = _ssl.CERT_NONE
-            _macro_lines = []
-            # CoinGecko global market (مجاني بلا API key)
             try:
-                _url_cg = "https://api.coingecko.com/api/v3/global"
-                _req_cg = _ur.Request(_url_cg, headers={"User-Agent":"Mozilla/5.0"})
-                # batch39: كان urlopen متزامناً داخل async فيحجب البوت كله حتى 6 ثوانٍ
-                def _cg_get(_r=_req_cg):
+                _req_cg = _ur.Request("https://api.coingecko.com/api/v3/global", headers={"User-Agent": "Mozilla/5.0"})
+                def _cg_get(_r=_req_cg):   # batch39: في executor لا داخل الحلقة
                     return _ur.urlopen(_r, context=_ctx_t17, timeout=6).read()
                 _d_cg = _jj.loads(await asyncio.get_running_loop().run_in_executor(None, _cg_get)).get("data", {})
-                # btc_dominance_single_source_fix: نفس مصدر بقية الواجهات (كاش data_layer)
-                # بدل رقم CoinGecko المباشر الذي كان يختلف عن /signal و/planmonth.
-                try:
-                    _btc_dom = float(await engine.data_layer.get_btc_dominance() or 0)
-                except Exception:
-                    _btc_dom = 0
+                _mcap_chg = float(_d_cg.get("market_cap_change_percentage_24h_usd", 0) or 0)
+                _total_mcap = float(_d_cg.get("total_market_cap", {}).get("usd", 0) or 0)
+                _cg_ok = _total_mcap > 0
                 if not _btc_dom:
-                    _btc_dom = _d_cg.get("market_cap_percentage", {}).get("btc", 0)
-                _mcap_chg = _d_cg.get("market_cap_change_percentage_24h_usd", 0)
-                _total_mcap = _d_cg.get("total_market_cap", {}).get("usd", 0)
-                if _btc_dom:
-                    _macro_lines.append(f"• هيمنة BTC: {_btc_dom:.1f}%")
-                _mcap_txt = (f'${_total_mcap/1e12:.2f}T' if _total_mcap >= 1e12 else f'${_total_mcap/1e9:.0f}B')
-                if _mcap_chg and _total_mcap:
-                    # تعارض اتجاه السوق الكلي مع BTC الحي (OKX): لا نعرض رقمين متضادين؛
-                    # نعرض الحجم فقط ونُخفي نسبة التغيّر غير الموثوقة.
-                    _mcap_conflict = False
-                    _btc_chg_live = 0.0
-                    try:
-                        _btc_live = await engine.data_layer.get_price("BTC")
-                        _btc_chg_live = float((_btc_live or {}).get("change_24h", 0) or 0)
-                        _mcap_conflict = bool(_btc_chg_live and (_btc_chg_live * _mcap_chg < 0)
-                                              and abs(_btc_chg_live - _mcap_chg) > 2.0)
-                    except Exception:
-                        pass
-                    if _mcap_conflict:
-                        _macro_lines.append(
-                            f"• إجمالي السوق: {_mcap_txt} (نسبة التغيّر 24h غير معروضة — "
-                            f"تخالف BTC الحي {_btc_chg_live:+.1f}% عبر OKX؛ قيمة CoinGecko متأخرة)")
-                    else:
-                        _macro_lines.append(
-                            f"• إجمالي السوق: {_mcap_txt} "
-                            f"({_mcap_chg:+.1f}% 24h — CoinGecko) "
-                            f"{'📈' if _mcap_chg > 0 else '📉'}")
-                elif _total_mcap:
-                    _macro_lines.append(f"• إجمالي السوق: {_mcap_txt}")
+                    _btc_dom = float(_d_cg.get("market_cap_percentage", {}).get("btc", 0) or 0)
             except Exception:
                 pass
-            # DeFi dominance كسياق إضافي
             try:
-                _url_defi = "https://api.coingecko.com/api/v3/global/decentralized_finance_defi"
-                _req_defi = _ur.Request(_url_defi, headers={"User-Agent":"Mozilla/5.0"})
+                _req_defi = _ur.Request("https://api.coingecko.com/api/v3/global/decentralized_finance_defi",
+                                        headers={"User-Agent": "Mozilla/5.0"})
                 def _defi_get(_r=_req_defi):
                     return _ur.urlopen(_r, context=_ctx_t17, timeout=6).read()
                 _d_defi = _jj.loads(await asyncio.get_running_loop().run_in_executor(None, _defi_get)).get("data", {})
                 _defi_dom = float(_d_defi.get("defi_dominance", 0) or 0)
                 _defi_mcap = float(_d_defi.get("defi_market_cap", 0) or 0)
-                # batch48 (ملاحظة 179): النسبة تُحسب من الرقمين المعروضين نفسيهما (كانت من حقل مستقل = 4.2% مقابل 119B÷2.73T=4.36%)
-                try:
-                    if _defi_mcap > 0 and _total_mcap and float(_total_mcap) > 0:
-                        _defi_dom = _defi_mcap / float(_total_mcap) * 100.0
-                except Exception:
-                    pass
-                if _defi_dom:
-                    _macro_lines.append(
-                        f"• حصة DeFi من إجمالي السوق: {_defi_dom:.1f}% "
-                        f"(رسملة ${_defi_mcap/1e9:.0f}B — CoinGecko؛ تختلف عن TVL أعلاه)"
-                    )
+                if _defi_mcap > 0 and _total_mcap > 0:   # batch48 (179): من الرقمين المعروضين
+                    _defi_dom = _defi_mcap / _total_mcap * 100.0
             except Exception:
                 pass
-            if _macro_lines:
-                lines += ["", "🌍 *السياق الكلي*"] + _macro_lines
+        except Exception:
+            pass
+        try:   # btc_dominance_single_source_fix: نفس مصدر بقية الواجهات
+            _bd = float(await engine.data_layer.get_btc_dominance() or 0)
+            if _bd:
+                _btc_dom = _bd
         except Exception:
             pass
 
-        # T17_fix: سيناريوهات بناءً على البيانات المجمَّعة
-        _bull_conditions = []
-        _bear_conditions = []
-        if fear_val < 30: _bull_conditions.append("Fear & Greed منخفض (فرصة تراكم)")
-        if _fund_pct < -0.01: _bull_conditions.append("Funding سالب (ضغط Shorts)")
+        # ── الشروط والقراءات ──
+        _bull_conditions, _bear_conditions = [], []
+        if fear_val < 30: _bull_conditions.append("Fear & Greed منخفض")
+        if _fund_pct < -0.01: _bull_conditions.append("Funding سالب")
         if tvl > 0 and tvl_change > 1: _bull_conditions.append("TVL يرتفع")
-        if fear_val > 70: _bear_conditions.append("جشع مرتفع (خطر الانعكاس)")
-        if _fund_pct > 0.02: _bear_conditions.append("Funding مرتفع (Long مزدحم)")
+        try:
+            if btc_adv.get("sopr") is not None and float(btc_adv["sopr"]) > 1.02 \
+                    and float(btc_adv.get("exchange_netflow_btc", 0) or 0) < 0:
+                _bull_conditions.append("SOPR > 1.02 مع Netflow سالب")
+        except Exception:
+            pass
+        if fear_val > 70: _bear_conditions.append("جشع مرتفع")
+        if _fund_pct > 0.02: _bear_conditions.append("Funding مرتفع")
         if tvl > 0 and tvl_change < -3: _bear_conditions.append("خروج سيولة DeFi")
+        try:
+            if btc_adv.get("sopr") is not None and float(btc_adv["sopr"]) < 0.97:
+                _bear_conditions.append("SOPR < 0.97")
+        except Exception:
+            pass
 
-        # batch56 (#625): «صاعد: TVL يرتفع» كان وصفاً للقائم لا سيناريو — شروط قابلة للقياس + ما تحقق منها الآن
-        lines += ["", "📋 *السيناريوهات (شروط قابلة للقياس)*",
-                  "🟢 صاعد إذا: SOPR > 1.02 مع Netflow سالب، أو Funding ≤ −0.01%، أو Fear & Greed < 30"
-                  + f" — المتحقق الآن: {' + '.join(_bull_conditions[:2]) if _bull_conditions else 'لا شيء'}",
-                  "🔴 هابط إذا: Funding > 0.02%، أو SOPR < 0.97، أو خروج TVL > 3% خلال 24h، أو جشع > 70"
-                  + f" — المتحقق الآن: {' + '.join(_bear_conditions[:2]) if _bear_conditions else 'لا شيء'}"]
+        _reco_parts = []
+        if fear_val < 25:
+            _reco_parts.append("خوف شديد")
+        elif fear_val < 45:
+            _reco_parts.append(f"خوف ({fear_val})")
+        elif fear_val >= 75:
+            _reco_parts.append(f"جشع شديد ({fear_val}) — حذر من انعكاس")
+        elif fear_val >= 65:
+            _reco_parts.append(f"جشع ({fear_val}) — حذر من الانعكاس")
+        elif fear_val >= 55:
+            _reco_parts.append(f"جشع خفيف ({fear_val}) — لا إشارة انعكاس")
+        if _fund_pct < -0.01:
+            _reco_parts.append("Funding سالب يدعم الارتداد")
+        elif _fund_pct > 0.02:
+            _reco_parts.append("Funding مرتفع — رافعة شرائية مزدحمة")
+        elif _fund_pct:
+            _reco_parts.append("Funding محايد (لا رافعة مزدحمة)")
+        if tvl > 0 and tvl_change < -3:
+            _reco_parts.append("خروج سيولة من DeFi")
+        elif tvl > 0 and tvl_change > 3:
+            _reco_parts.append("دخول سيولة إلى DeFi")
+        try:
+            if btc_adv.get("exchange_netflow_btc") is not None:
+                _nf = float(btc_adv["exchange_netflow_btc"])
+                if _nf < 0:
+                    _reco_parts.append("تدفق صافٍ خارج البورصات")
+                elif _nf > 0:
+                    _reco_parts.append("تدفق صافٍ إلى البورصات (ضغط بيع محتمل)")
+        except Exception:
+            pass
+
+        # حالة الدورة (MVRV/SOPR/Puell) في جملة واحدة
+        _cyc_state = ""
+        try:
+            _cyc_flags = []
+            _mz = btc_adv.get("mvrv_zscore")
+            _sp = btc_adv.get("sopr")
+            _pm = btc_adv.get("puell_multiple")
+            if _mz is not None and float(_mz) < 0: _cyc_flags.append("MVRV في منطقة قاع تاريخية")
+            if _mz is not None and float(_mz) > 7: _cyc_flags.append("MVRV في منطقة قمة تاريخية")
+            if _sp is not None and float(_sp) < 0.97: _cyc_flags.append("SOPR: بيع بخسارة")
+            if _pm is not None and float(_pm) > 4: _cyc_flags.append("Puell مرتفع: ضغط المعدّنين")
+            if _pm is not None and float(_pm) < 0.5: _cyc_flags.append("Puell في قاع تعدين")
+            if any(v is not None for v in (_mz, _sp, _pm)):
+                _cyc_state = " · ".join(_cyc_flags) if _cyc_flags else "ضمن النطاق الطبيعي — لا إشارة قمة أو قاع دورية"
+        except Exception:
+            _cyc_state = ""
+
+        # ── 🧭 الخلاصة (#865: الشرطان معاً، #866: الهبوط الحاد) ──
+        from core.market_checks import SHARP_MOVE_PCT as _smp_oc
+        _sharp_dn = _btc_chg_live <= -_smp_oc
+        _sharp_up = _btc_chg_live >= _smp_oc
+        if _bull_conditions and _bear_conditions:
+            _verdict = ("⚖️ إشارات متعارضة — شروط صاعدة (" + " + ".join(_bull_conditions[:2]) +
+                        ") وهابطة (" + " + ".join(_bear_conditions[:2]) + ") متحققة معاً؛ لا ميل واضح، انتظر تأكيداً سعرياً")
+        elif _bull_conditions:
+            _verdict = "🟢 ميل إيجابي — " + " + ".join(_bull_conditions[:2])
+        elif _bear_conditions:
+            _verdict = "🔴 ميل سلبي — " + " + ".join(_bear_conditions[:2])
+        else:
+            _verdict = "⚪ محايد — لا شرط صاعد أو هابط متحقق الآن"
+        _summary = ["🧭 *الخلاصة*", _verdict]
+        if _sharp_dn:
+            _summary.append(f"⚠️ هبوط حاد في BTC ({_btc_chg_live:+.1f}% خلال 24h): "
+                            + ("الخوف هنا نتيجة الهبوط لا إشارة شراء بذاته — " if fear_val < 45 else "")
+                            + "التجميع فقط بعد استقرار السعر (إغلاق يومي فوق قاع الهبوط)")
+        elif _sharp_up:
+            _summary.append(f"⚠️ صعود حاد في BTC ({_btc_chg_live:+.1f}% خلال 24h): لا مطاردة — انتظر تصحيحاً أو إغلاقاً يومياً يؤكد")
+        if _reco_parts:
+            _summary.append("💡 القراءة: " + " · ".join(_reco_parts))
+        if _cyc_state:
+            _summary.append("🔄 الدورة: " + _cyc_state)
+
+        # ── ⚡ ما تغيّر اليوم ──
+        _today = ["⚡ *ما تغيّر اليوم*"]
+        if _total_mcap:
+            _mcap_txt = (f'${_total_mcap/1e12:.2f}T' if _total_mcap >= 1e12 else f'${_total_mcap/1e9:.0f}B')
+            _mcap_conflict = bool(_btc_chg_live and _mcap_chg and (_btc_chg_live * _mcap_chg < 0)
+                                  and abs(_btc_chg_live - _mcap_chg) > 2.0)
+            if _mcap_chg and not _mcap_conflict:
+                _today.append(f"• إجمالي السوق: {_mcap_txt} ({_mcap_chg:+.1f}% 24h — CoinGecko) {'📈' if _mcap_chg > 0 else '📉'}")
+            elif _mcap_conflict:
+                _today.append(f"• إجمالي السوق: {_mcap_txt} (نسبة التغيّر 24h غير معروضة — تخالف BTC الحي "
+                              f"{_btc_chg_live:+.1f}% عبر OKX؛ قيمة CoinGecko متأخرة)")
+            else:
+                _today.append(f"• إجمالي السوق: {_mcap_txt}")
+        if _btc_chg_live:
+            _today.append(f"• BTC 24h: {_btc_chg_live:+.1f}% (OKX)")
+        _today.append(f"• إجمالي TVL: ${tvl/1e9:.2f}B ({tvl_change:+.2f}% 24h)" if tvl > 0
+                      else "• إجمالي TVL: غير متاح حالياً (تعذّر جلب DeFiLlama)")
+        _today.append(f"• {fear_emoji} Fear & Greed: {fear_val} — {_fgz_oc(fear_val)[0]}")
+
+        # ── 📐 مشتقات BTC ──
+        _deriv = []
+        if _fund_pct:
+            if _fund_pct < -0.02:   _fsig = "🟢 سالب جداً — ضغط Shorts"
+            elif _fund_pct < -0.005: _fsig = "🟢 سالب"
+            elif _fund_pct > 0.02:  _fsig = "🔴 مرتفع جداً — ضغط Longs"
+            elif _fund_pct > 0.01:  _fsig = "🟡 إيجابي خفيف"
+            else:                   _fsig = "⚪ محايد"
+            _deriv.append(f"• Funding: {_fund_pct:+.4f}% {_fsig}")
+        if _oi_ok:
+            # batch66 (#867): تغيّر صغير (<0.05%) كان يظهر «0.0%» — يُعرض بخانتين
+            _oi_txt = f"{_oi_chg:+.2f}" if abs(_oi_chg) < 0.05 else _pct_nz46(_oi_chg)
+            _deriv.append(f"• Open Interest (آخر ساعة): {_oi_txt}% {_oi_sig}".rstrip())
+        else:
+            _deriv.append("• Open Interest: ⚪ غير متاح الآن (OKX لم يستجب)")
+        if _whale_r > 0 or _whale_sig:
+            _deriv.append(_whale_line_b66(whale))
+        if _deriv:
+            _deriv.insert(0, "📐 *مشتقات BTC*")
+
+        # ── 🔄 الدورة (سطر قيم واحد) ──
+        _cycle = []
+        if btc_adv.get("available"):
+            _cv = []
+            if "mvrv_zscore" in btc_adv: _cv.append(f"MVRV Z {btc_adv['mvrv_zscore']}")
+            if "sopr" in btc_adv:        _cv.append(f"SOPR {btc_adv['sopr']}")
+            if "puell_multiple" in btc_adv: _cv.append(f"Puell {btc_adv['puell_multiple']}")
+            if "exchange_netflow_btc" in btc_adv:
+                _cv.append(f"Netflow {float(btc_adv['exchange_netflow_btc']):+,.1f} BTC")
+            else:
+                _cv.append("Netflow غير متاح")
+            if _cv:
+                _cycle = ["🔄 *مؤشرات الدورة (يومية — BGeometrics)*", "• " + " · ".join(_cv)]
+        if cq_data.get("available"):
+            _cq = []
+            if cq_data.get("mvrv"): _cq.append(f"MVRV {float(cq_data['mvrv']):.2f}")
+            if cq_data.get("sopr"): _cq.append(f"SOPR {float(cq_data['sopr']):.3f}")
+            if cq_data.get("exchange_flow_signal"): _cq.append(f"Flow {cq_data['exchange_flow_signal']}")
+            if cq_data.get("whale_tx_count", 0) > 0: _cq.append(f"معاملات كبيرة {cq_data['whale_tx_count']}")
+            if cq_data.get("nvt", 0): _cq.append(f"NVT {float(cq_data['nvt']):.1f}")
+            if _cq:
+                if not _cycle:
+                    _cycle = ["🔄 *مؤشرات الدورة*"]
+                _cycle.append("• CryptoQuant: " + " · ".join(_cq))
+        if not _cycle:
+            _cycle = ["ℹ️ مؤشرات الدورة (MVRV/SOPR/Netflow) غير متاحة حالياً — الخلاصة تعتمد على المتاح فقط."]
+
+        # ── 📋 السيناريوهات ──
+        _scen = ["📋 *السيناريوهات (شروط قابلة للقياس)*",
+                 "🟢 صاعد إذا: SOPR > 1.02 مع Netflow سالب، أو Funding ≤ −0.01%، أو Fear & Greed < 30"
+                 + f" — المتحقق الآن: {' + '.join(_bull_conditions[:2]) if _bull_conditions else 'لا شيء'}",
+                 "🔴 هابط إذا: Funding > 0.02%، أو SOPR < 0.97، أو خروج TVL > 3% خلال 24h، أو جشع > 70"
+                 + f" — المتحقق الآن: {' + '.join(_bear_conditions[:2]) if _bear_conditions else 'لا شيء'}"]
+
+        # ── 📎 تفاصيل مختصرة ──
+        _det = []
+        if _btc_dom: _det.append(f"هيمنة BTC {_btc_dom:.1f}%")
+        if _defi_dom: _det.append(f"حصة DeFi {_defi_dom:.1f}% (رسملة ${_defi_mcap/1e9:.0f}B؛ تختلف عن TVL)")
+        if btc_hashrate > 0: _det.append(f"Hashrate {btc_hashrate/1e9:.1f} EH/s")
+        if top_p:
+            _tp = top_p[0]
+            _det.append(f"أكبر بروتوكول {str(_tp.get('name', '')).replace('_', ' ')} ${float(_tp.get('tvl') or 0)/1e9:.2f}B")
+        _details = (["📎 *تفاصيل*", "• " + " · ".join(_det)] if _det else [])
+
+        lines = ["🔗 *تحليل On-Chain — رائد*", "━━━━━━━━━━━━━━━━━━", *_summary, "", *_today]
+        for _blk in (_deriv, _cycle, _scen, _details):
+            if _blk:
+                lines += [""] + _blk
 
         _src_list = []
         if tvl > 0 or top_p:
             _src_list.append("DeFiLlama")
-        if _fund_pct or _oi_chg or _whale_sig:
+        if _fund_pct or _oi_ok or _whale_sig or _btc_chg_live:
             _src_list.append("OKX")
-        if any("CoinGecko" in str(_l) for _l in lines):
+        if _cg_ok or _defi_dom:
             _src_list.append("CoinGecko")
         if btc_adv.get("available"):
             _src_list.append("BGeometrics")
@@ -4724,7 +4747,7 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _src = "📡 المصدر: " + (" + ".join(_src_list) if _src_list else "OKX")
         import time as _t_oc
         lines += ["", f"🕒 وقت التوليد: {_t_oc.strftime('%H:%M', _t_oc.gmtime(_t_oc.time() + 3 * 3600))} (توقيت السعودية — بعض المؤشرات يومية)"]
-        lines += ["", f"{_src} | 🤖 رائد"]
+        lines += [f"{_src} | 🤖 رائد"]
         # auditing_agent: تدقيق /onchain قبل الإرسال
         _onchain_text = "\n".join(lines)
         _oc_approved, _onchain_text = audit_content(_onchain_text, source="onchain")
@@ -6035,226 +6058,198 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.edit_text(f"⚠️ بيانات السيولة لـ {symbol} غير متاحة حالياً")
             return
 
-        # تمرير walls لـ format_ar مباشرة
+        # batch66 (#871 — قرار رحال): الخلاصة أولاً ثم التفاصيل. تُبنى الأقسام كمتغيرات ثم تُرتَّب.
         walls_safe = walls if not isinstance(walls, Exception) else None
-        text = _clean_md(engine.microstructure.format_ar(profile, walls=walls_safe))
-        # سطر المصدر كان يقع في منتصف التقرير (قبل المشتقات): نفصله ونعيده في النهاية
+        body = _clean_md(engine.microstructure.format_ar(profile, walls=walls_safe))
         _liq_src_line = ""
-        _ls = text.rstrip().split("\n")
+        _ls = body.rstrip().split("\n")
         if _ls and (_ls[-1].startswith("📡 المصدر") or _ls[-1].startswith("⚠️ المصدر")):
             _liq_src_line = _ls[-1]
-            text = "\n".join(_ls[:-1]).rstrip()
+            _ls = _ls[:-1]
+        # الترويسة (العنوان + الفاصل) تبقى أعلى الرسالة؛ الخلاصة تأتي بعدها مباشرة
+        _hdr_n = 2 if len(_ls) >= 2 and _ls[1].startswith("━") else 1
+        _hdr_lines = _ls[:_hdr_n]
+        body = "\n".join(_ls[_hdr_n:]).strip("\n")
 
-        # إصلاح #14: قسم المشتقات (Funding/OI/Whale) — كان مفقوداً تماماً
         funding = funding if isinstance(funding, dict) else {}
         oi      = oi      if isinstance(oi,      dict) else {}
         whale   = whale   if isinstance(whale,   dict) else {}
         _fund_pct  = float(funding.get("rate_pct", 0) or 0)
         _oi_chg    = float(oi.get("oi_change_pct", 0) or 0)
+        _oi_ok     = oi.get("source") not in (None, "", "unknown")
         _oi_sig    = oi.get("signal", "")
-        _whale_sig = whale.get("signal", "")
         _whale_r   = float(whale.get("ratio", 0) or 0)
 
+        # ── 📐 المشتقات ──
         deriv_lines = []
         if _fund_pct:
-            if _fund_pct < -0.02:
-                _fsig = "🟢 سالب جداً — ضغط Shorts (فرصة Long)"
-            elif _fund_pct < -0.005:
-                _fsig = "🟢 سالب — فرصة Long"
-            elif _fund_pct > 0.02:
-                _fsig = "🔴 مرتفع جداً — ضغط Longs"
-            elif _fund_pct > 0.01:
-                _fsig = "🟡 إيجابي خفيف"
-            elif _fund_pct > 0.005:
-                _fsig = "⚪ محايد (إيجابي طفيف)"
-            else:
-                _fsig = "⚪ محايد"
+            if _fund_pct < -0.02:    _fsig = "🟢 سالب جداً — ضغط Shorts"
+            elif _fund_pct < -0.005: _fsig = "🟢 سالب"
+            elif _fund_pct > 0.02:   _fsig = "🔴 مرتفع جداً — ضغط Longs"
+            elif _fund_pct > 0.01:   _fsig = "🟡 إيجابي خفيف"
+            else:                    _fsig = "⚪ محايد"
             deriv_lines.append(f"• Funding Rate: {_fund_pct:+.4f}% {_fsig}")
-        if _oi_chg:
-            deriv_lines.append(f"• Open Interest (آخر ساعة): {_pct_nz46(_oi_chg)}% {_oi_sig}")
-        if _whale_sig:
-            _wr_txt = f" ({_whale_r:.2f})" if _whale_r > 0 else ""
-            # whale_consistency_fix: توحيد التعليق مع /signal
-            _whale_note = " — قد يكون تحوطاً" if "Long" in _whale_sig else ""
-            deriv_lines.append(f"• Whale Ratio{_wr_txt}: {_whale_sig}{_whale_note}")
+        if _oi_ok:
+            _oi_txt = f"{_oi_chg:+.2f}" if abs(_oi_chg) < 0.05 else _pct_nz46(_oi_chg)   # batch66 (#867)
+            deriv_lines.append(f"• Open Interest (آخر ساعة): {_oi_txt}% {_oi_sig}".rstrip())
+        if _whale_r > 0:
+            deriv_lines.append(_whale_line_b66(whale))   # batch66 (#870): مئين 30 يوماً كـ/signal
 
-        if deriv_lines:
-            text += "\n\n📐 *مشتقات*\n" + "\n".join(deriv_lines)
-
-        # F3: Order Flow Score + توصية محسّنة
+        # ── ميزان الدفتر ──
         _imb = getattr(profile, "imbalance", 0.5)
-        _ofs = int(round(_imb * 100))  # batch48: تقريب (كان يقتطع فيظهر 52% بجانب 53%)
+        _ofs = int(round(_imb * 100))  # batch48: تقريب
         _ofs_bars = int(_ofs / 10)
         _ofs_bar  = "█" * _ofs_bars + "░" * (10 - _ofs_bars)
-        # ofs_label_consistency_fix: كان "حصة الشراء 43%" تُوصَف "ضغط بيع خفيف" في
-        # قسم Order Book و"تدفق محايد" هنا لنفس الرقم (عتبات مختلفة 48/52 مقابل 35/65).
-        # الآن تسمية واحدة مشتركة (_imbalance_label) في القسمين.
-        from core.microstructure import _imbalance_label as _imb_lbl_ofs
+        from core.microstructure import _imbalance_label as _imb_lbl_ofs, fmt_book_slip_b66 as _fbs66
         _ofs_label = _imb_lbl_ofs(_imb)
+        _balance_blk = ("📊 *ميزان الدفتر* (حصة الشراء من عمق Order Book — ليس تدفق صفقات فعلياً؛ التدفق الفعلي = CVD في /signal)"
+                        f"\n{_ofs_bar} {_ofs}% — {_ofs_label}")
 
-        # order_flow_fix: التفسير يتطابق مع _ofs_label بدقة
-        _reco = []
-        if _ofs > 65:
-            _reco.append("ضغط شراء قوي في الـ Order Book — دعم محتمل قريب")
-        elif _ofs < 35:
-            _reco.append("ضغط بيع قوي في الـ Order Book — توخَّ الحذر من شراء فوري")
-        elif _ofs < 48 or _ofs > 52:
-            _reco.append("ميل خفيف في الـ Order Book — لا يكفي وحده، انتظر اتجاهاً واضحاً")
-        else:
-            _reco.append("دفتر أوامر متوازن — انتظر اتجاهاً واضحاً")
-        if _fund_pct < -0.01:
-            _reco.append("Funding سالب يدعم سيناريو ارتداد Long")
-        elif _fund_pct > 0.02:
-            _reco.append("Funding مرتفع — خطر تصفية Longs مفرطة")
+        _bid_d = getattr(profile, "bid_depth_usd", 0) or 0
+        _ask_d = getattr(profile, "ask_depth_usd", 0) or 0
+        _spread_pct = getattr(profile, "spread_pct", 0) or 0
+        _price_liq = getattr(profile, "mid_price", 0) or getattr(profile, "bid_price", 0) or 1
 
-        text += (
-            f"\n\n📊 *ميزان الدفتر* (حصة الشراء من عمق Order Book — ليس تدفق صفقات فعلياً؛ التدفق الفعلي = CVD في /signal)"
-            f"\n{_ofs_bar} {_ofs}% — {_ofs_label}"
-        )
-        if _reco:
-            text += f"\n\n💡 *التفسير*: {' · '.join(_reco)}"
-
-        # slippage_consistency_fix (#297): كان يُستخدَم هنا صيغة منفصلة تماماً
-        # عن الصيغة الحقيقية في microstructure._build_profile_from_walls
-        # (التي تُنتج رقم "Slippage متوقع" أعلى التقرير) — الصيغة القديمة
-        # كانت تُعامل (order_size/depth) كنسبة مئوية خام مباشرة بدل ضربها
-        # بالـ spread، فتُنتج قفزات غير واقعية ($1K≈0% ← $10K≈5% ← $50K≈10%)
-        # ومتضاربة مع رقم "Slippage متوقع" الحقيقي المعروض أعلاه لنفس اللحظة.
-        # الإصلاح: نفس منهجية المحرك (نسبة استهلاك العمق × spread × 0.5)،
-        # بنفس الحد الأدنى 0.005% والحد الأقصى 2.0% المستخدَمين في المحرك —
-        # هذا يضمن تناسقاً رياضياً وتدرجاً واقعياً بين الأحجام الثلاثة.
+        # ── 📐 Slippage ──
+        _slip_blk = ""
         try:
-            # T18a_fix: استخدام mid_price (وليس price) + bid_depth_usd
-            _bid_d = getattr(profile, "bid_depth_usd", 0) or 0
-            _ask_d = getattr(profile, "ask_depth_usd", 0) or 0
-            _spread_pct = getattr(profile, "spread_pct", 0) or 0
-            _price_liq = getattr(profile, "mid_price", 0) or getattr(profile, "bid_price", 0) or 1
-
             if _ask_d > 0:
-                def _slip_for_size(_size: float) -> float:
+                def _slip_for_size(_size: float) -> float:   # slippage_consistency_fix (#297): نفس منهجية المحرك
                     _s = (_size / max(_ask_d, _size)) * _spread_pct * 0.5
                     return round(max(0.005, min(_s, 2.0)), 4)
-                _slippage_1k  = _slip_for_size(1000)
-                _slippage_10k = _slip_for_size(10000)
-                _slippage_50k = _slip_for_size(50000)
-                # حصة كل حجم من أضيق جهة في الدفتر (أول 20 مستوى): الصيغة تلتصق بالحد الأدنى
-                # لأنها تعتمد على الـSpread فقط، فنذكر الاستهلاك الفعلي للعمق بدل ادّعاء «العمق كافٍ»
                 _thin = min(x for x in (_bid_d, _ask_d) if x > 0) if (_bid_d > 0 and _ask_d > 0) else _ask_d
                 def _share(_sz):
                     return _sz / _thin if _thin > 0 else 0
-                _all_min = _slippage_1k == _slippage_10k == _slippage_50k
                 _bk49 = getattr(profile, "book_slip", None)
                 if isinstance(_bk49, dict) and _bk49:
-                    # batch49 (قرار 16): انزلاق فعلي من مسح عمق الدفتر (شراء Market عبر أول 20 مستوى بيع)
-                    _sl_lines = ["", "📐 *Slippage المتوقع* (أمر شراء Market بالقيمة المذكورة — من عمق الدفتر الفعلي عبر أول 20 مستوى)"]
+                    _sl_lines = ["📐 *Slippage المتوقع* (أمر شراء Market بالقيمة المذكورة — من عمق الدفتر الفعلي عبر أول 20 مستوى)"]
                     for _lbl, _sz in (("$1K", 1000), ("$10K", 10000), ("$50K", 50000)):
-                        _v49 = _bk49.get(_sz)
-                        _sl_lines.append(f"• {_lbl}: {'يتجاوز عمق أول 20 مستوى — انزلاق أعلى' if _v49 is None else f'{_v49:.4f}%'}")
-                    text += "\n".join(["", *_sl_lines])
+                        _sl_lines.append(f"• {_lbl}: {_fbs66(_bk49.get(_sz))}")
                 else:
-                    _sl_lines = ["", "📐 *Slippage المتوقع* (أمر Market بالقيمة المذكورة — تقدير مبني على الـSpread، أول 20 مستوى)"]
-                    for _lbl, _sz, _sv in (("$1K", 1000, _slippage_1k), ("$10K", 10000, _slippage_10k), ("$50K", 50000, _slippage_50k)):
+                    _s1, _s10, _s50 = _slip_for_size(1000), _slip_for_size(10000), _slip_for_size(50000)
+                    _all_min = _s1 == _s10 == _s50
+                    _sl_lines = ["📐 *Slippage المتوقع* (أمر Market بالقيمة المذكورة — تقدير مبني على الـSpread، أول 20 مستوى)"]
+                    for _lbl, _sz, _sv in (("$1K", 1000, _s1), ("$10K", 10000, _s10), ("$50K", 50000, _s50)):
                         _sh = _share(_sz)
                         _note = f" — يستهلك {_sh:.0%} من أضيق جهة في الدفتر" if _sh >= 0.2 else ""
-                        _pre = "≈" if _all_min else "~"
-                        _sl_lines.append(f"• {_lbl}: {_pre}{_sv:.4f}%{_note}")
+                        _sl_lines.append(f"• {_lbl}: {'≈' if _all_min else '~'}{_sv:.4f}%{_note}")
                     if _all_min and _share(50000) >= 0.2:
                         _sl_lines.append("  ⚠️ الحد الأدنى للصيغة لا يعكس الانزلاق الفعلي للأحجام الكبيرة — قد يتجاوزه التنفيذ")
-                    text += "\n".join(["", *_sl_lines])
-
-            # Volume Profile تقريبي من candles
-            try:
-                _liq_candles = await asyncio.wait_for(
-                    engine.data_layer.get_ohlcv_1h(symbol, 24),
-                    timeout=6.0)
-                if isinstance(_liq_candles, list) and len(_liq_candles) >= 10:
-                    # batch38: توزيع حجم حقيقي: كل شمعة تضيف حجمها على السعر النموذجي (H+L+C)/3 في صناديق سعرية
-                    _vp = [(((float(c.get("high", 0)) + float(c.get("low", 0)) + float(c.get("close", 0))) / 3),
-                            float(c.get("volume", 0) or 0)) for c in _liq_candles if c.get("close")]
-                    _vp = [(px, v) for px, v in _vp if px > 0 and v > 0]
-                    if len(_vp) >= 10:
-                        _lo = min(float(c.get("low", 0)) for c in _liq_candles if c.get("low"))
-                        _hi = max(float(c.get("high", 0)) for c in _liq_candles)
-                        _nb = 24
-                        _w = (_hi - _lo) / _nb if _hi > _lo else 0
-                        if _w > 0:
-                            _bins = [0.0] * _nb
-                            for px, v in _vp:
-                                _bins[min(_nb - 1, int((px - _lo) / _w))] += v
-                            _pi = _bins.index(max(_bins))
-                            _poc = _lo + (_pi + 0.5) * _w
-                            _tot = sum(_bins)
-                            _a = _b = _pi
-                            _acc = _bins[_pi]
-                            while _acc < 0.7 * _tot and (_a > 0 or _b < _nb - 1):
-                                _up = _bins[_b + 1] if _b < _nb - 1 else -1
-                                _dn = _bins[_a - 1] if _a > 0 else -1
-                                if _up >= _dn:
-                                    _b += 1; _acc += _bins[_b]
-                                else:
-                                    _a -= 1; _acc += _bins[_a]
-                            _val = _lo + _a * _w
-                            _vah = _lo + (_b + 1) * _w
-                            # batch56 (#630): POC منتصف صندوق عرضه _w — لا سنتات زائفة للأسعار الكبيرة
-                            _vpd = 0 if _poc >= 1000 else _price_decimals(_poc)
-                            text += (
-                                f"\n\n📊 *توزيع الحجم — آخر {len(_liq_candles)} شمعة ساعية (1س)*"
-                                f"\n• أعلى تركّز للحجم (POC): ${_poc:,.{_vpd}f}"
-                                f"\n• نطاق 70% من الحجم: ${_val:,.{_vpd}f} – ${_vah:,.{_vpd}f}"
-                                f"\n• السعر الحالي {'داخل' if _val <= _price_liq <= _vah else 'خارج'} هذا النطاق"
-                                + (f" (عند {((_price_liq-_val)/(_vah-_val)*100):.0f}% من عرضه من الأسفل)" if _vah > _val and _val <= _price_liq <= _vah else "")
-                                + (f"\n• السعر {'فوق' if _price_liq > _poc else 'تحت'} POC بنحو {abs(_price_liq-_poc)/_poc*100:.2f}%" if _poc > 0 else "")
-                                + ("\n  ⚠️ السعر خارج نطاق الحجم الأخير — مستويات POC/النطاق قد لا تعمل كدعم/مقاومة قريبة"
-                                   if not (_val <= _price_liq <= _vah) else "")
-                                + "\n  (تقدير من شموع ساعية وليس Volume Profile من الصفقات)"
-                            )
-            except Exception:
-                pass
-
-            # T18b_fix v2: قرار يراعي is_tradeable + liquidity_score
-            _liq_score_raw = getattr(profile, "liquidity_score", 0) or 0
-            _liq_score = _liq_score_raw * 100  # 0.81 → 81
-            _is_tradeable = getattr(profile, "is_tradeable", True)
-            _liq_decision = []
-
-            if not _is_tradeable:
-                # microstructure قرر عدم التداول → لا تناقض مع T18b
-                _liq_decision.append("⛔ غير موصى بالتداول — سيولة غير كافية")
-            elif _liq_score >= 60:
-                pass  # الحكم أعلى التقرير يغطي «قابل للتداول» — لا نكرره
-            elif _liq_score >= 40:
-                _liq_decision.append("🟡 سيولة متوسطة — قلل الحجم")
-            else:
-                _liq_decision.append("🔴 سيولة منخفضة — خطر Slippage")
-
-            if _is_tradeable:
-                if _ofs > 60 and _liq_score >= 50:
-                    _liq_decision.append("دعم: ارتداد محتمل")
-                elif _ofs < 40:
-                    _liq_decision.append("التنفيذ سهل لكن الدفتر يميل للبيع — لا تدخل ضد الضغط البيعي")
-
-            if _liq_decision:
-                text += f"\n\n🎯 *ملخص:* {' · '.join(_liq_decision)} (قراءة لحظية للدفتر)"
-
+                _slip_blk = "\n".join(_sl_lines)
         except Exception as _t18e:
-            logger.debug(f"T18_fix: {_t18e}")
+            logger.debug(f"T18_fix slip: {_t18e}")
 
-        # batch56 (#631): وقت لقطة الدفتر (يتغيّر كل ثانية)
+        # ── 📊 توزيع الحجم (24 شمعة ساعية) ──
+        _vp_blk = ""
+        _vp_pos = ""     # موقع السعر من نطاق الحجم للخلاصة (#869)
         try:
+            _liq_candles = await asyncio.wait_for(engine.data_layer.get_ohlcv_1h(symbol, 24), timeout=6.0)
+            if isinstance(_liq_candles, list) and len(_liq_candles) >= 10:
+                # batch38: كل شمعة تضيف حجمها على السعر النموذجي (H+L+C)/3 في صناديق سعرية
+                _vp = [(((float(c.get("high", 0)) + float(c.get("low", 0)) + float(c.get("close", 0))) / 3),
+                        float(c.get("volume", 0) or 0)) for c in _liq_candles if c.get("close")]
+                _vp = [(px, v) for px, v in _vp if px > 0 and v > 0]
+                if len(_vp) >= 10:
+                    _lo = min(float(c.get("low", 0)) for c in _liq_candles if c.get("low"))
+                    _hi = max(float(c.get("high", 0)) for c in _liq_candles)
+                    _nb = 24
+                    _w = (_hi - _lo) / _nb if _hi > _lo else 0
+                    if _w > 0:
+                        _bins = [0.0] * _nb
+                        for px, v in _vp:
+                            _bins[min(_nb - 1, int((px - _lo) / _w))] += v
+                        _pi = _bins.index(max(_bins))
+                        _poc = _lo + (_pi + 0.5) * _w
+                        _tot = sum(_bins)
+                        _a = _b = _pi
+                        _acc = _bins[_pi]
+                        while _acc < 0.7 * _tot and (_a > 0 or _b < _nb - 1):
+                            _up = _bins[_b + 1] if _b < _nb - 1 else -1
+                            _dn = _bins[_a - 1] if _a > 0 else -1
+                            if _up >= _dn:
+                                _b += 1; _acc += _bins[_b]
+                            else:
+                                _a -= 1; _acc += _bins[_a]
+                        _val = _lo + _a * _w
+                        _vah = _lo + (_b + 1) * _w
+                        _vpd = 0 if _poc >= 1000 else _price_decimals(_poc)   # batch56 (#630)
+                        _inside = _val <= _price_liq <= _vah
+                        if _price_liq < _val:
+                            _vp_pos = (f"السعر تحت نطاق 70% من حجم آخر 24 ساعة (${_val:,.{_vpd}f}–${_vah:,.{_vpd}f}) "
+                                       f"بنحو {(_val - _price_liq) / _val * 100:.2f}% — البائعون دفعوه خارج منطقة القبول؛ "
+                                       f"العودة فوق ${_val:,.{_vpd}f} شرط لاعتبار الهبوط مرفوضاً")
+                        elif _price_liq > _vah:
+                            _vp_pos = (f"السعر فوق نطاق 70% من حجم آخر 24 ساعة (${_val:,.{_vpd}f}–${_vah:,.{_vpd}f}) "
+                                       f"بنحو {(_price_liq - _vah) / _vah * 100:.2f}% — المشترون خارج منطقة القبول؛ "
+                                       f"الثبات فوق ${_vah:,.{_vpd}f} شرط لاستمرار الصعود")
+                        else:
+                            _vp_pos = (f"السعر داخل نطاق 70% من حجم آخر 24 ساعة — توازن؛ "
+                                       f"{'فوق' if _price_liq > _poc else 'تحت'} POC ${_poc:,.{_vpd}f}")
+                        _vp_blk = (
+                            f"📊 *توزيع الحجم — آخر {len(_liq_candles)} شمعة ساعية (1س)*"
+                            f"\n• أعلى تركّز للحجم (POC): ${_poc:,.{_vpd}f}"
+                            f"\n• نطاق 70% من الحجم: ${_val:,.{_vpd}f} – ${_vah:,.{_vpd}f}"
+                            f"\n• السعر الحالي {'داخل' if _inside else 'خارج'} هذا النطاق"
+                            + (f" (عند {((_price_liq-_val)/(_vah-_val)*100):.0f}% من عرضه من الأسفل)" if _vah > _val and _inside else "")
+                            + (f"\n• السعر {'فوق' if _price_liq > _poc else 'تحت'} POC بنحو {abs(_price_liq-_poc)/_poc*100:.2f}%" if _poc > 0 else "")
+                            + ("\n  ⚠️ السعر خارج نطاق الحجم الأخير — مستويات POC/النطاق قد لا تعمل كدعم/مقاومة قريبة"
+                               if not _inside else "")
+                            + "\n  (تقدير من شموع ساعية وليس Volume Profile من الصفقات)"
+                        )
+        except Exception:
+            pass
+
+        # ── 🎯 الخلاصة ──
+        _summary = []
+        try:
+            _liq_score = (getattr(profile, "liquidity_score", 0) or 0) * 100
+            _is_tradeable = getattr(profile, "is_tradeable", True)
+            if not _is_tradeable:
+                _summary.append("⛔ التنفيذ: غير موصى بالتداول — سيولة غير كافية")
+            elif _liq_score >= 60:
+                _summary.append("✅ التنفيذ: سيولة كافية — الانزلاق ليس عائقاً بالأحجام المعتادة")
+            elif _liq_score >= 40:
+                _summary.append("🟡 التنفيذ: سيولة متوسطة — قلّل الحجم")
+            else:
+                _summary.append("🔴 التنفيذ: سيولة منخفضة — خطر Slippage")
+            if _ofs > 65:
+                _summary.append(f"📗 الدفتر: ضغط شراء قوي ({_ofs}%) — دعم محتمل قريب")
+            elif _ofs < 35:
+                _summary.append(f"📕 الدفتر: ضغط بيع قوي ({_ofs}%) — توخَّ الحذر من شراء فوري")
+            elif _ofs < 48 or _ofs > 52:
+                _summary.append(f"📘 الدفتر: {_ofs_label} ({_ofs}%) — لا يكفي وحده، انتظر اتجاهاً واضحاً")
+            else:
+                _summary.append(f"📘 الدفتر: متوازن ({_ofs}%) — انتظر اتجاهاً واضحاً")
+            if _vp_pos:
+                _summary.append("📍 " + _vp_pos)
+            if _fund_pct < -0.01:
+                _summary.append("💡 Funding سالب يدعم سيناريو ارتداد Long")
+            elif _fund_pct > 0.02:
+                _summary.append("💡 Funding مرتفع — خطر تصفية Longs مفرطة")
+        except Exception as _t18e:
+            logger.debug(f"T18_fix summary: {_t18e}")
+        _sum_blk = ("🎯 *الخلاصة* (قراءة لحظية للدفتر)\n" + "\n".join(_summary)) if _summary else ""
+
+        _parts = ["\n".join(_hdr_lines)]
+        if _sum_blk:
+            _parts.append(_sum_blk)
+        _parts.append(body)
+        _parts.append(_balance_blk)
+        if deriv_lines:
+            _parts.append("📐 *مشتقات*\n" + "\n".join(deriv_lines))
+        if _slip_blk:
+            _parts.append(_slip_blk)
+        if _vp_blk:
+            _parts.append(_vp_blk)
+        try:   # batch56 (#631): وقت لقطة الدفتر
             import datetime as _dt_lq
             _ts_lq = float(getattr(profile, "snapshot_ts", 0) or 0) or __import__("time").time()
-            text += f"\n\n🕒 لقطة الدفتر: {_dt_lq.datetime.utcfromtimestamp(_ts_lq + 3 * 3600).strftime('%H:%M:%S')} (توقيت السعودية)"
+            _parts.append(f"🕒 لقطة الدفتر: {_dt_lq.datetime.utcfromtimestamp(_ts_lq + 3 * 3600).strftime('%H:%M:%S')} (توقيت السعودية)")
         except Exception:
             pass
         if _liq_src_line:
-            text += f"\n\n{_liq_src_line}"
-        # auditing_agent: تدقيق /liquidity قبل الإرسال
-        _liq_approved, text = audit_content(text, source="liquidity")
-        if not _liq_approved:
-            logger.warning("auditing_agent: /liquidity مرفوض → fallback")
-        _liq_approved, text = audit_content(text, source="liquidity")
-        if not _liq_approved:
-            logger.warning("auditing_agent: /liquidity مرفوض → fallback")
+            _parts.append(_liq_src_line)
+        text = "\n\n".join(p for p in _parts if p)
         _liq_approved, text = audit_content(text, source="liquidity")
         if not _liq_approved:
             logger.warning("auditing_agent: /liquidity مرفوض")
@@ -8779,9 +8774,14 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _qs_warns.append(
                 f"⚠️ هدف 1 فوق المقاومة ({_fmt_price(resistance, quote)}) بـ"
                 f"{(tp1 / resistance - 1) * 100:.1f}% — يتطلب اختراقها أولاً")
+        elif resistance > 0 and entry > 0 and tp1 > entry and tp1 > resistance:
+            # batch66 (#889): الهدف 1 فوق المقاومة بأقل من 0.5% — يُذكر أن الهدفين بعدها
+            _qs_warns.append(
+                f"ℹ️ هدف 1 فوق المقاومة ({_fmt_price(resistance, quote)}) بقليل "
+                f"({(tp1 / resistance - 1) * 100:.1f}%) — الهدفان كلاهما بعد المقاومة")
         # tp2_above_resistance: هدف 2 فوق المقاومة (SOL: +3.1%) كان بلا تنبيه
         if (resistance > 0 and entry > 0 and tp2 > entry and tp2 > resistance * 1.02
-                and not (tp1 > resistance * 1.005)):
+                and not (tp1 > resistance)):
             _qs_warns.append(
                 f"⚠️ هدف 2 فوق المقاومة ({_fmt_price(resistance, quote)}) بـ"
                 f"{(tp2 / resistance - 1) * 100:.1f}% — يتطلب اختراقها")
@@ -8789,14 +8789,17 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _qs_sl_pct = abs(entry - sl) / entry * 100
             _qs_tp_pct = _qs_rrw64 * _qs_sl_pct if _qs_rrw64 else abs(tp1 - entry) / entry * 100   # batch64: العائد المرجّح
             # batch63 (#826): R/R < 1 له سطر ⛔ واحد (العنوان يذكره أصلاً) — لا سطر «ضعيف» مكرر
-            if _qs_sl_pct > 0 and 1.0 <= _qs_tp_pct / _qs_sl_pct < 2.0:
+            # batch66 (#887): مقياس واحد للبوابة والتحذير والعرض — نفس تقريب منزلة واحدة المستخدم في /signal (G3)
+            _qrr66 = (_qs_tp_pct / _qs_sl_pct) if _qs_sl_pct > 0 else 0.0
+            _qrr66_s = (f"{_qrr66:.2f}" if 0.9 <= _qrr66 < 1.05 else _fmt_rr(_qrr66))
+            if _qs_sl_pct > 0 and not _qs_rr_low and _qrr66 < 2.0:
                 _qs_warns.append(
-                    f"⚠️ R/R = 1:{_fmt_rr(_qs_tp_pct/_qs_sl_pct)} "
+                    f"⚠️ R/R = 1:{_qrr66_s} "
                     + ("ضعيف" if _qs_tp_pct/_qs_sl_pct < 1.5 else "مقبول لكن دون 2.0")
                     + " (يُفضَّل ≥ 2.0) — مرجّح: 60% الهدف 1 + 40% الهدف 2")
             # qs_rr_below_one: R/R < 1 (XKORU 0.7) = خسارة متوقعة سالبة هيكلياً
-            if _qs_sl_pct > 0 and _qs_tp_pct / _qs_sl_pct < 1.0:
-                _qs_warns.append(f"⛔ R/R المرجّح = 1:{_fmt_rr(_qs_tp_pct/_qs_sl_pct)} (< 1؛ 60% الهدف 1 + 40% الهدف 2) — المخاطرة أكبر من العائد المتوقع: لا يُنصح بالدخول بهذا الإعداد")
+            if _qs_sl_pct > 0 and _qs_rr_low:
+                _qs_warns.append(f"⛔ R/R المرجّح = 1:{_qrr66_s} (< 1؛ 60% الهدف 1 + 40% الهدف 2) — المخاطرة أكبر من العائد المتوقع: لا يُنصح بالدخول بهذا الإعداد")
             # qs_target_vs_atr: هدف أبعد من ~4×ATR غير واقعي في المدى القصير (XSPY: هدف 4.5% وATR 0.7%)
             try:
                 _atr_chk_qs = _calc_atr(candles) if candles else 0.0

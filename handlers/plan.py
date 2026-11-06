@@ -782,7 +782,8 @@ def _format_forecast_ar(symbol: str, price: float, fc: dict, days: int = 30, reg
                 # إصلاح #1076: لا نُظهر الدعم إذا كان أعلى من السعر الحالي
                 *(([f"  🛡️ دعم 1 (0.382 من مدى 30 يوماً — يختلف عن جدول Fib في /signal): {p_fmt(fc.get('fib_s1',0))}"]
                    if fc.get('fib_s1',0) < price else []) +
-                  ([f"  🛡️ دعم 2 (0.618 من مدى 30 يوماً — يختلف عن جدول Fib في /signal): {p_fmt(fc.get('fib_s2',0))}"]
+                  ([f"  🛡️ دعم {'2' if fc.get('fib_s1',0) < price else '1'} (0.618 من مدى 30 يوماً — يختلف عن جدول Fib في /signal): {p_fmt(fc.get('fib_s2',0))}"   # batch66 (#875)
+                    + ("" if fc.get('fib_s1',0) < price else f" — مستوى 0.382 ({p_fmt(fc.get('fib_s1',0))}) كُسر وصار فوق السعر")]
                    if fc.get('fib_s2',0) < price else [])),
             ] if fc.get('trend_dir') not in ('down', 'bearish')
             else [
@@ -791,7 +792,8 @@ def _format_forecast_ar(symbol: str, price: float, fc: dict, days: int = 30, reg
                 # batch44: كان القسم يظهر فارغاً حين يكون السعر دون مستويي الدعم (هبوط) — نذكر قاع النطاق بدل الفراغ
                 *((([f"  🛡️ دعم 1 (0.382 من مدى 30 يوماً — يختلف عن جدول Fib في /signal): {p_fmt(fc.get('fib_s1',0))}"]
                     if fc.get('fib_s1',0) < price else []) +
-                   ([f"  🛡️ دعم 2 (0.618 من مدى 30 يوماً — يختلف عن جدول Fib في /signal): {p_fmt(fc.get('fib_s2',0))}"]
+                   ([f"  🛡️ دعم {'2' if fc.get('fib_s1',0) < price else '1'} (0.618 من مدى 30 يوماً — يختلف عن جدول Fib في /signal): {p_fmt(fc.get('fib_s2',0))}"   # batch66 (#875)
+                    + ("" if fc.get('fib_s1',0) < price else f" — مستوى 0.382 ({p_fmt(fc.get('fib_s1',0))}) كُسر وصار فوق السعر")]
                     if fc.get('fib_s2',0) < price else []))
                   or ([f"  ⚠️ السعر دون مستويي دعم فيبوناتشي (0.382/0.618 من مدى 30 يوماً — يختلف عن جدول Fib في /signal) — أقرب قاع في آخر 30 يوم: {p_fmt(fc.get('recent_low',0))}"]
                       if fc.get('recent_low', 0) else
@@ -3031,9 +3033,11 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _pw_decision = (f"⏸️ *لا أصل للتحليل* — {', '.join(sorted(set(_excluded_syms_pw)))} مستبعد لوجود مركز مفتوح "
                             f"(انظر إدارة المراكز أعلاه)")
         elif _pw_qualified_count == 0:
-            if fear_val <= 20 and "هابط" in _regime_ar:
+            # batch66 (#874، قرار رحال): Fear & Greed مؤشر كريبتو — لا يدخل في قرار قائمة كلها غير كريبتو
+            _fg_ok66 = not (symbols and all(_non_crypto_sym(str(_s).upper()) for _s in symbols))
+            if _fg_ok66 and fear_val <= 20 and "هابط" in _regime_ar:
                 _pw_decision = "🚨 *لا دخول* — خوف شديد + سوق هابط"
-            elif fear_val <= 30 and "هابط" in _regime_ar:
+            elif _fg_ok66 and fear_val <= 30 and "هابط" in _regime_ar:
                 _pw_decision = "⚠️ *تقليل التعرض* — سوق هابط + خوف"
             else:
                 _btc_only_pw = (len(symbols) == 1 and str(symbols[0]).upper() == "BTC")

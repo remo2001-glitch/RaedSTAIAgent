@@ -53,7 +53,8 @@ def collect_confirmation_flags(
         if cvd_signal and cvd_pct >= 20.0:
             flags.append(f"CVD شراء ({cvd_pct:+.1f}%) ✓")
         if bb_pos is not None and bb_pos < 0.15:
-            flags.append("BB تحت الحد السفلي ✓")
+            # batch66 (#882): نفس وصف قسم الهيكلة (تحت 0.1 «تحت الحد»، 0.1–0.15 «قرب الحد»)
+            flags.append(("BB تحت الحد السفلي" if bb_pos < 0.1 else "BB قرب الحد السفلي") + " ✓")
     except Exception:
         pass
     return flags

@@ -16,6 +16,20 @@ import aiohttp
 logger = logging.getLogger(__name__)
 
 
+def fmt_book_slip_b66(v) -> str:
+    """batch66 (#868): انزلاق من مسح الدفتر. القيمة 0 صحيحة (الحجم كله يُنفَّذ عند أفضل سعر بيع)
+    لكن «0.0000%» كانت توحي بخطأ — تُكتب صراحة. None = يتجاوز عمق أول 20 مستوى."""
+    if v is None:
+        return "يتجاوز عمق أول 20 مستوى — انزلاق أعلى"
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return "غير متاح"
+    if f < 0.00005:
+        return "≈0% — يُنفَّذ كاملاً عند أفضل سعر بيع (المستوى الأول يكفي)"
+    return f"{f:.4f}%"
+
+
 def _imbalance_label(imb: float) -> str:
     """تسمية موحَّدة لاختلال السيولة — تُستخدم في 'الاختلال' و'الضغط'
     لضمان عدم تعارضهما (إصلاح: 54% كان يُعرض '🟢خفيف' و'⚪متوازن' معاً)."""
@@ -545,7 +559,7 @@ class MicrostructureLayer:
         # batch56 (#628): رقم الأعلى كان من صيغة الـSpread ويناقض جدول الدفتر الفعلي أسفل التقرير (0.005% مقابل 0.0000%)
         _bk56 = getattr(profile, "book_slip", None)
         if isinstance(_bk56, dict) and _bk56.get(10000) is not None:
-            lines.append(f"• Slippage متوقع (شراء $10K من الدفتر): {float(_bk56[10000]):.4f}%")
+            lines.append(f"• Slippage متوقع (شراء $10K من الدفتر): {fmt_book_slip_b66(_bk56[10000])}")
         else:
             lines.append(f"• Slippage متوقع (تقدير من الـSpread): {profile.estimated_slippage_pct:.3f}%")
 

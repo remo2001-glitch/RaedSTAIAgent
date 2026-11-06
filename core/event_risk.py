@@ -31,7 +31,7 @@ SEVERITY_AR = {
 SEVERITY_EXPOSURE = {
     EventSeverity.LOW:      0.80,   # تقليل 20%
     EventSeverity.MEDIUM:   0.50,   # تقليل 50%
-    EventSeverity.HIGH:     0.25,   # تقليل 75%
+    EventSeverity.HIGH:     0.50,   # batch66 (#876، قرار رحال): تقليل 50% أثناء نافذة الحدث الكبير (كان 75%)
     EventSeverity.CRITICAL: 0.00,   # لا تداول
 }
 
@@ -181,11 +181,12 @@ class EventRiskFilter:
                 return EventRiskState(
                     active_events=[],
                     max_severity=None,
+                    # batch66 (#876، قرار رحال): خارج نافذة الحدث يبقى السقف 70% موحّداً؛ 50% أثناء النافذة فقط
                     exposure_multiplier=0.7,
                     trading_allowed=True,
                     next_clear_time=self._next_event_window(all_events, now),
                     message_ar=(
-                        f"⚠️ حدث عالي المخاطر قادم خلال {hrs_away:.0f} ساعة:\n"
+                        f"⚠️ حدث عالي المخاطر قادم خلال {_hours_ar_b66(hrs_away)}:\n"
                         f"• {soonest.name_ar}\n"
                         f"💡 تقليل الحجم والمخاطرة حتى انتهاء الحدث"
                     ),
@@ -238,9 +239,9 @@ class EventRiskFilter:
                 _ln = [l.strip() for l in (state.message_ar or "").split("\n")]
                 _nm = next((l[1:].strip() for l in _ln if l.startswith("•")), "")
                 import re as _re_ev
-                _hh = _re_ev.search(r"خلال (\d+) ساعة", state.message_ar or "")
+                _hh = _re_ev.search(r"خلال ([^:\n]+?):", state.message_ar or "")
                 if _nm:
-                    reason = f"حدث عالي المخاطر قادم: {_nm}" + (f" (خلال {_hh.group(1)} ساعة)" if _hh else "")
+                    reason = f"حدث عالي المخاطر قادم: {_nm}" + (f" (خلال {_hh.group(1)})" if _hh else "")
             except Exception:
                 reason = ""
         return state.exposure_multiplier, reason
@@ -558,20 +559,38 @@ def _next_occurrence_of_weekday(weekday: int, hour_utc: int = 12,
     return target.timestamp()
 
 
+def _hours_ar_b66(h: float) -> str:
+    """batch66 (#873): عدد الساعات بالعربية («6 ساعات» لا «6 ساعة»)."""
+    try:
+        n = int(round(float(h)))
+    except (TypeError, ValueError):
+        return f"{h} ساعة"
+    if n <= 0:
+        return "أقل من ساعة"
+    if n == 1:
+        return "ساعة"
+    if n == 2:
+        return "ساعتين"
+    if 3 <= n <= 10:
+        return f"{n} ساعات"
+    return f"{n} ساعة"
+
+
 def _event_recommendation(severity: EventSeverity, in_hours: float) -> str:
     """توصية إجرائية حسب شدة الحدث والوقت المتبقي."""
+    # batch66 (#876، قرار رحال): التوصية تطابق المضاعف المطبَّق فعلاً في كل الأوامر —
+    # سقف 70% قبل الحدث الكبير، و50% أثناء نافذته (ساعتان قبله حتى ساعة بعده)، ولا تداول للحرج
+    if severity == EventSeverity.CRITICAL and in_hours <= 2:
+        return "لا تداول أثناء نافذة الحدث الحرج"
     if in_hours <= 2:
-        if severity in (EventSeverity.HIGH, EventSeverity.CRITICAL):
-            return "أغلق المراكز المفتوحة الآن"
-        return "لا تفتح مراكز جديدة"
-    elif in_hours <= 6:
         if severity == EventSeverity.HIGH:
-            return "قلّل حجم المراكز 50% قبل الحدث"
-        elif severity == EventSeverity.MEDIUM:
-            return "قلّل حجم المراكز 30% قبل الحدث"
+            return "نافذة الحدث: سقف التعرض 50% — لا مراكز جديدة بحجم كامل"
+        return "لا تفتح مراكز جديدة"
     elif in_hours <= 24:
         if severity == EventSeverity.HIGH:
-            return "استعد بتقليل التعرض قبل 6 ساعات من الحدث"
+            return "سقف التعرض 70% الآن، ثم 50% في نافذة الحدث (من ساعتين قبله حتى ساعة بعده)"
+        elif severity == EventSeverity.MEDIUM and in_hours <= 6:
+            return "قلّل حجم المراكز 30% قبل الحدث"
     return ""
 
 
