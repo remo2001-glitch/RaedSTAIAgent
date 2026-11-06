@@ -993,10 +993,9 @@ class RaedEngine:
                 _auto_line68 = (f"🤖 التداول الآلي الافتراضي (منطق /signal المجمّد): فُحصت {_sum68['scanned']} عملة — "
                                 f"نُفّذ شراء {_sum68.get('long', 0)} / Short {_sum68.get('short', 0)} — /autostats")
 
-            # 4b. إشعار المستخدمين الحقيقيين بزرَّي تأكيد/رفض
-            _sfn = getattr(self, "_send_fn", None)
-            if strong_signals and _sfn:
-                await self._notify_real_users(strong_signals, regime, _sfn)
+            # 4b. batch68: أُوقف إشعار «فرصة تداول — موافقة مطلوبة» — كان مبنياً على ثقة ≥65% (لا حكم /signal)،
+            # وزرّه «✅ نفّذ» ينفّذ شراءً افتراضياً بمنطق قديم (حتى لإشارة بيع) فيُربك القياس الآلي.
+            # التنفيذ الحقيقي يبقى يدوياً عبر /trade فقط (نفس قرار /signal) حتى تُستوفى شروط العبور.
 
             # 5. بناء التقرير
             if not strong_signals and not executed:

@@ -2098,7 +2098,7 @@ async def cmd_autotrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"الباقة: {tier_name}\n\n"
                 "📊 *نشط في:*\n"
                 "🎮 المحفظة الافتراضية: ✅ — /vtrades للمتابعة\n"
-                f"💰 حقيقي: {'✅ ' + ex_info['name'].upper() + ' — /trades للمتابعة' if has_live else '❌ غير مربوط — /live للربط'}\n\n"
+                f"💰 حقيقي: {'مربوط ' + ex_info['name'].upper() + ' — يدوي عبر /trade فقط (لا تنفيذ آلي حقيقي)' if has_live else '❌ غير مربوط — /live للربط'}\n\n"
                 "⏰ *جدول المسح*\n"
                 "01:00 · 05:00 · 09:00 · 13:00 · 17:00 · 21:00 KSA\n\n"
                 "🧭 *المنطق:* حكم /signal الكامل لأكبر 20 عملة — شراء Spot، وShort Futures 1x افتراضي؛ "
@@ -2132,10 +2132,11 @@ async def cmd_autotrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 + (
                     "📊 *نشط في:*\n"
                     "🎮 افتراضي: ✅ — /vtrades للمتابعة\n"
-                    f"💰 حقيقي: {'✅ ' + _live_name if _has_live_st else '❌ غير مربوط'}\n\n"
+                    f"💰 حقيقي: {('مربوط ' + _live_name + ' — يدوي عبر /trade فقط (لا تنفيذ آلي حقيقي)') if _has_live_st else '❌ غير مربوط'}\n\n"
                     if is_on else ""
                 )
                 + f"{schedule_text}"
+                + ("🧭 المنطق: حكم /signal الكامل (مجمّد b68) — 📊 /autostats\n\n" if is_on else "")
                 + f"{'للإيقاف: /autotrade off' if is_on else 'للتفعيل: /autotrade on'}",
                 parse_mode=ParseMode.MARKDOWN)
 
@@ -3754,6 +3755,13 @@ async def cb_autotrade_decision(update, context):
     """معالجة قرار المستخدم: نفّذ أو تجاهل الصفقات الآلية."""
     query  = update.callback_query
     await query.answer()
+    # batch68: أزرار الإشعارات القديمة (قبل التجميد) لا تنفّذ شيئاً — التنفيذ الآلي = حكم /signal فقط
+    if str(getattr(query, "data", "") or "").startswith("autotrade_confirm_"):
+        await query.edit_message_text(
+            "ℹ️ هذا الإشعار من النظام السابق ولم يعد ينفّذ صفقات.\n"
+            "🤖 التداول الآلي الافتراضي يعمل وحده بحكم /signal — /autostats للنتائج\n"
+            "💰 الحقيقي: يدوياً عبر /trade فقط")
+        return
     engine = _eng(context)
     if not engine:
         await query.edit_message_text("⚠️ النظام لم يُهيَّأ")
