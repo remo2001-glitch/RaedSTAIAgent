@@ -2101,6 +2101,9 @@ async def cmd_autotrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"💰 حقيقي: {'✅ ' + ex_info['name'].upper() + ' — /trades للمتابعة' if has_live else '❌ غير مربوط — /live للربط'}\n\n"
                 "⏰ *جدول المسح*\n"
                 "01:00 · 05:00 · 09:00 · 13:00 · 17:00 · 21:00 KSA\n\n"
+                "🧭 *المنطق:* حكم /signal الكامل لأكبر 20 عملة — شراء Spot، وShort Futures 1x افتراضي؛ "
+                "الحجم 5% × حجم /signal × سقف التعرض؛ خروج TP1 60% / TP2 40% / وقف / 5 أيام (فحص كل 5 دقائق)\n"
+                "📊 القياس: /autostats\n\n"
                 "للإيقاف الفوري: /autotrade off",
                 parse_mode=ParseMode.MARKDOWN)
 
@@ -2139,6 +2142,20 @@ async def cmd_autotrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"cmd_autotrade: {e}")
         await update.message.reply_text("❌ خطأ في التداول الآلي")
+
+
+async def cmd_autostats_b68(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """batch68: نتائج القياس الآلي (منطق /signal المجمّد) مقابل شروط العبور إلى تجربة حقيقية صغيرة."""
+    try:
+        from core.auto_trader_b68 import ledger_get, auto_stats_b68, format_auto_stats_b68
+        uid = update.effective_user.id
+        txt = format_auto_stats_b68(auto_stats_b68(ledger_get(uid)))
+        if not _sm.is_autotrade_on(uid):
+            txt += "\n\n⚠️ التداول الآلي مُوقَف لحسابك — /autotrade on لبدء القياس"
+        await update.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
+    except Exception as e:
+        logger.error(f"cmd_autostats_b68: {e}")
+        await update.message.reply_text("❌ تعذّر عرض القياس")
 
 
 @require_tier("killswitch")
@@ -3688,6 +3705,7 @@ def register(app):
     app.add_handler(CallbackQueryHandler(cb_vclose,       pattern=r"^vclose_"))
     app.add_handler(CallbackQueryHandler(cb_vfclose,      pattern=r"^vfclose_"))   # batch58
     app.add_handler(CommandHandler("vfutures",      cmd_vfutures))                  # batch58
+    app.add_handler(CommandHandler("autostats",     cmd_autostats_b68))             # batch68: قياس التداول الآلي
     app.add_handler(CallbackQueryHandler(cb_rclose,       pattern=r"^rclose_"))
     app.add_handler(CallbackQueryHandler(cb_goto_vtrades, pattern=r"^goto_vtrades$"))
     app.add_handler(CallbackQueryHandler(cb_goto_trades,  pattern=r"^goto_trades$"))

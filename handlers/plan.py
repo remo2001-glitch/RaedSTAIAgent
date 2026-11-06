@@ -1648,7 +1648,7 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     pass
                 if _use_futures_pm and (cand or {}).get("strong_bear"):   # batch63 (#832)
                     line += ("\n    ℹ️ الهبوط القائم مجال Short في Futures (متاح في المحفظة الافتراضية فقط؛ "
-                             "لا تقييم Short في رائد بعد)")
+                             "تقييم Short الافتراضي 1x في /signal بسوق Futures — والتداول الآلي ينفّذه)")
                 if sym_p in _g4_blocked_pm:
                     line += f"\n    {_g4_blocked_pm[sym_p]}"
                 elif sym_p in _g4_notes_pm:
@@ -2794,7 +2794,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     from core.regime_detector import _strong_bear_b58 as _sb63
                     if _use_futures_pw and _sb63(_reg_a):
                         _pw_extra.append("  ℹ️ الهبوط القائم مجال Short في Futures (متاح في المحفظة الافتراضية فقط؛ "
-                                         "لا تقييم Short في رائد بعد) — الشروط أدناه للشراء فقط")
+                                         "تقييم Short الافتراضي 1x في /signal بسوق Futures) — الشروط أدناه للشراء فقط")
                 except Exception:
                     pass
                 try:

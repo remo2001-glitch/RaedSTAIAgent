@@ -141,7 +141,8 @@ class VirtualWallet:
     # ── شراء ───────────────────────────────────────────────────────────────
 
     def buy(self, symbol: str, price: float, amount_usd: float,
-            signal_id: str | None = None, setup_type: str | None = None) -> dict:
+            signal_id: str | None = None, setup_type: str | None = None,
+            fee_rate: float = 0.0, extra: dict | None = None) -> dict:
         """
         تنفيذ أمر شراء وهمي
         symbol: مثل BTCUSDT
@@ -176,7 +177,8 @@ class VirtualWallet:
                 )
             }
 
-        quantity = amount_usd / price
+        # batch68: رسوم الشراء (التداول الآلي 0.1% Spot) تُخصم من الكمية — التكلفة تبقى المبلغ المدفوع كاملاً
+        quantity = amount_usd * (1 - max(0.0, float(fee_rate or 0))) / price
 
         # إنشاء مركز جديد (الوصول هنا يضمن عدم وجود مركز مسبقاً)
         self.positions[symbol] = {
@@ -193,6 +195,10 @@ class VirtualWallet:
             "signal_id":  signal_id,
             "setup_type": setup_type,
         }
+        if extra:   # batch68: حقول التداول الآلي (الإصدار، الهدفان، النظام، الرسوم)
+            self.positions[symbol].update(extra)
+            if fee_rate:
+                self.positions[symbol]["fee_rate"] = float(fee_rate)
 
         self.balance  -= amount_usd
         self.invested += amount_usd
@@ -245,7 +251,7 @@ class VirtualWallet:
         # حساب الأرباح/الخسائر — نستخدم pos["cost"] كمرجع وليس avg_price*qty
         # لتجنب تراكم أخطاء التقريب وضمان توافق invested مع الواقع
         cost_basis  = pos["cost"] if qty_to_sell >= pos["quantity"] else pos["avg_price"] * qty_to_sell
-        sale_value  = price * qty_to_sell
+        sale_value  = price * qty_to_sell * (1 - float(pos.get("fee_rate", 0) or 0))   # batch68: رسوم البيع للآلي
         pnl         = sale_value - cost_basis
         pnl_pct     = (pnl / cost_basis * 100) if cost_basis > 0 else 0
 
@@ -277,6 +283,10 @@ class VirtualWallet:
             "signal_id":  pos.get("signal_id"),
             "setup_type": pos.get("setup_type"),
         }
+        if pos.get("logic_ver"):   # batch68: سجل القياس
+            trade.update({"logic_ver": pos.get("logic_ver"), "pos_id": pos.get("pos_id"), "side": "long",
+                          "regime": pos.get("regime", ""), "entry": pos.get("avg_price"),
+                          "partial": symbol in self.positions})
         self.history.append(trade)
 
         return {
@@ -308,7 +318,7 @@ class VirtualWallet:
 
     def open_futures(self, symbol: str, side: str, price: float, margin_usd: float,
                      leverage: int = 1, stop_loss: float = 0.0, take_profit: float = 0.0,
-                     max_hold_hours: float = 0.0) -> dict:
+                     max_hold_hours: float = 0.0, extra: dict | None = None) -> dict:
         """يفتح مركز Futures افتراضياً (Long/Short) بهامش معزول. margin_usd = الهامش المحجوز من الرصيد."""
         symbol = symbol.upper().replace("USDT", "") or symbol.upper()
         side = "long" if str(side).lower() in ("long", "buy", "flong") else "short"
@@ -345,6 +355,8 @@ class VirtualWallet:
             "stop_loss": round(float(stop_loss or 0), 8), "take_profit": round(float(take_profit or 0), 8),
             "opened_at": _now(), "max_hold_hours": float(max_hold_hours or 0),
         }
+        if extra:   # batch68
+            self.futures[symbol].update(extra)
         self.history.append({"type": "fut_open", "symbol": symbol, "side": side, "leverage": lev,
                              "price": price, "margin": round(margin_usd, 2), "notional": round(notional, 2),
                              "fee": round(fee, 4), "time": _now()})
@@ -392,6 +404,34 @@ class VirtualWallet:
             pass
         return ""
 
+    def reduce_futures(self, symbol: str, price: float, frac: float, reason: str = "tp1") -> dict:
+        """batch68: إغلاق جزئي لمركز Futures (TP1 = 60%) — الربح والرسوم والهامش بنسبة الجزء المغلق."""
+        symbol = symbol.upper().replace("USDT", "") or symbol.upper()
+        pos = self.futures.get(symbol)
+        if not pos or price <= 0 or not (0 < frac < 1):
+            return {"ok": False, "msg": "invalid"}
+        q = float(pos["qty"]) * frac
+        m = float(pos["margin"]) * frac
+        d = (price - pos["entry"]) if pos["side"] == "long" else (pos["entry"] - price)
+        gross = max(d * q, -m)
+        fee_open_part = float(pos.get("fee_open", 0) or 0) * frac
+        fee_close = q * price * self.FUT_FEE_RATE
+        pnl = gross - fee_open_part - fee_close
+        self.balance += max(m + gross - fee_close, 0.0)
+        self.profit += pnl
+        pos["qty"] = round(float(pos["qty"]) - q, 10)
+        pos["margin"] = round(float(pos["margin"]) - m, 2)
+        pos["notional"] = round(float(pos["notional"]) * (1 - frac), 2)
+        pos["fee_open"] = round(float(pos.get("fee_open", 0) or 0) - fee_open_part, 4)
+        trade = {"type": "sell", "futures": True, "symbol": symbol, "side": pos["side"], "leverage": pos["leverage"],
+                 "price": price, "entry": pos["entry"], "quantity": round(q, 10), "amount": round(q * price, 2),
+                 "pnl": round(pnl, 2), "pnl_pct": round(pnl / m * 100 if m > 0 else 0, 2),
+                 "fees": round(fee_open_part + fee_close, 4), "reason": reason, "time": _now(),
+                 "logic_ver": pos.get("logic_ver"), "pos_id": pos.get("pos_id"), "regime": pos.get("regime", ""),
+                 "partial": True}
+        self.history.append(trade)
+        return {"ok": True, "trade": trade}
+
     def close_futures(self, symbol: str, price: float, reason: str = "manual") -> dict:
         symbol = symbol.upper().replace("USDT", "") or symbol.upper()
         pos = self.futures.get(symbol)
@@ -421,6 +461,9 @@ class VirtualWallet:
             "fees": round(float(pos.get("fee_open", 0) or 0) + fee_close, 4),
             "reason": reason, "time": _now(),
         }
+        if pos.get("logic_ver"):   # batch68
+            trade.update({"logic_ver": pos.get("logic_ver"), "pos_id": pos.get("pos_id"),
+                          "regime": pos.get("regime", ""), "partial": False})
         self.history.append(trade)
         _r_ar = {"liquidation": "💥 تصفية", "sl": "🛑 وقف الخسارة", "tp": "🎯 الهدف",
                  "time": "⏰ انتهاء المدة", "manual": "إغلاق يدوي"}.get(reason, reason)

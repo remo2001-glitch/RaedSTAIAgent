@@ -333,6 +333,8 @@ class RaedEngine:
                 _vw = _VW_f(_wd)
                 _notes = []
                 for sym in list(_vw.futures):
+                    if (_vw.futures.get(sym) or {}).get("logic_ver"):   # batch68: تُدار في check_auto_exits_b68
+                        continue
                     if sym not in _px_cache:
                         pd = await self.data_layer.get_price(sym)
                         _px_cache[sym] = float((pd or {}).get("price") or 0)
@@ -379,6 +381,8 @@ class RaedEngine:
                 for sym in list(_vw.positions.keys()):
                     pos = _vw.positions.get(sym)
                     if not pos:
+                        continue
+                    if pos.get("logic_ver"):   # batch68: مراكز القياس الآلي تُدار في check_auto_exits_b68 (TP1/TP2 + سجل القياس)
                         continue
                     try:
                         pd    = await self.data_layer.get_price(sym.replace("USDT",""))
@@ -973,149 +977,21 @@ class RaedEngine:
             # المرفوضة (نفس دورة الفحص كل 4 ساعات، لا جدولة منفصلة جديدة)
             await self._evaluate_rejected_signals()
 
-            # 4. تنفيذ آلي للإشارات القوية
+            # 4. تنفيذ آلي — batch68 (قرار رحال 2026-11-06): حكم /signal الكامل نفسه لأكبر 20 عملة،
+            # Spot للشراء وFutures 1x لـShort، حجم 5% × حجم /signal × سقف التعرض، وسجل قياس منفصل.
+            # (كان: ثقة ≥65% فقط، وقف −2%/هدف +4% ثابتان، وإشارة Short تُنفَّذ شراءً)
             executed = []
-            # إصلاح #569: نتحقق من state_manager بدلاً من self.auto_trade_enabled
-            from core.state_manager import state_manager as _sm_chk
-            _has_autotrade_users = bool(_sm_chk.get_autotrade_users())
-            if _has_autotrade_users and strong_signals:
-                from core.risk_engine import RiskDecision
-                for s in strong_signals[:2]:
-                    try:
-                        ev_mult, _ = self.event_risk.get_exposure_multiplier()
-                        if ev_mult == 0:
-                            continue
-                        risk = self.risk_engine.assess(
-                            s["symbol"], s["direction"],
-                            s["confidence"], s["price"],
-                            3.0, regime.regime.value,
-                            open_positions={}   # حدود الصفقات تُفرض لكل مستخدم على محفظته
-                        )
-                        if risk.decision == RiskDecision.REJECT:
-                            continue
-                        self.audit_logger.log_trade(
-                            symbol=s["symbol"], direction=s["direction"],
-                            size=risk.approved_size, confidence=s["confidence"],
-                            regime=regime.regime.value, reason="auto_4h_scan",
-                        )
-                        trade_rec = {
-                            **s,
-                            "size":        risk.approved_size,
-                            "stop_loss":   risk.stop_loss_pct,
-                            "take_profit": risk.take_profit_pct,
-                        }
-
-                        # ── Virtual Wallet: تنفيذ فوري لكل مستخدم autotrade ──
-                        from core.virtual_wallet import VirtualWallet as _VW
-                        from core.state_manager  import state_manager as _sm_vw
-                        # Q1-Q5: تحديد نوع المسح حسب توقيت الجلسة الفعلي
-                        # ksa_hour و session مُمرَّران من الـ Scheduler
-                        # الجلسة الصباحية (9-13 KSA) = weekly scan
-                        # الجلسة الأمريكية (22-01 KSA) = monthly scan
-                        # باقي الجلسات = daily scan
-                        if 9 <= ksa_hour < 13:
-                            _scan_type = "weekly"
-                        elif ksa_hour >= 22 or ksa_hour < 1:
-                            _scan_type = "monthly"
-                        else:
-                            _scan_type = "daily"
-                        logger.info(f"scan_type={_scan_type} | session={session} | ksa_hour={ksa_hour}")
-
-                        _autotrade_uids = _sm_vw.get_autotrade_users()
-                        if not _autotrade_uids:
-                            logger.info("Virtual trade: لا يوجد مستخدمون autotrade نشطون")
-                        for _uid in _autotrade_uids:
-                            try:
-                                # تحميل المحفظة من Redis
-                                _wdata = _sm_vw.get_virtual_wallet(_uid)
-                                if not _wdata:
-                                    _wdata = {"balance": 10000.0, "invested": 0.0,
-                                              "profit": 0.0, "positions": {}, "history": []}
-                                _vw = _VW(_wdata)
-
-                                # Q1-Q5+BUG-B: فحص القيود بالنوع الصحيح
-                                _can, _buy_amt, _limit_reason = _sm_vw.can_auto_execute(
-                                    _uid, s["symbol"], _vw.total_value, _vw.positions,
-                                    scan_type=_scan_type)
-                                if not _can:
-                                    logger.info(f"Auto skip {s['symbol']}: {_limit_reason}")
-                                    continue
-                                _buy_amt = min(_buy_amt, _vw.balance * 0.95)
-                                _buy_amt = max(_buy_amt, 50)
-
-                                _result = _vw.buy(
-                                    symbol     = s["symbol"],
-                                    price      = s["price"],
-                                    amount_usd = _buy_amt,
-                                )
-                                if _result.get("ok"):
-                                    # perf_funnel_fix: كانت صفقات المسح التلقائي بلا signal_id
-                                    # فلا تظهر في /performance أبداً (0 مغلقة). نسجّل إشارة
-                                    # لكل مستخدم بعد نجاح الشراء فقط ونربطها بالمركز.
-                                    try:
-                                        _sg = s.get("signal")
-                                        _tech_sg = (getattr(_sg, "technicals", {}) or {}) if _sg else {}
-                                        _pos_sg = _vw.positions.get(s["symbol"].upper(), {})
-                                        _sid_auto = self.signal_tracker.log_signal(
-                                            symbol=s["symbol"], setup_type=s["direction"],
-                                            direction=s["direction"],
-                                            confidence_pct=s["confidence"] * 100,
-                                            confirmations_met=int(_tech_sg.get("plan_confirmations", 0) or 0),
-                                            entry_price=s["price"],
-                                            sl_price=float(_pos_sg.get("stop_loss", 0) or 0),
-                                            tp1_price=float(_pos_sg.get("take_profit", 0) or 0),
-                                            rsi_1d=_tech_sg.get("rsi"),
-                                            regime=regime.regime.value, user_id=_uid)
-                                        if _sid_auto and s["symbol"].upper() in _vw.positions:
-                                            _vw.positions[s["symbol"].upper()]["signal_id"] = _sid_auto
-                                            _vw.positions[s["symbol"].upper()]["setup_type"] = s["direction"]
-                                            self.signal_tracker.mark_executed(_sid_auto)
-                                        elif not _sid_auto:
-                                            logger.warning(
-                                                f"signal_tracker: تعذّر تسجيل إشارة {s['symbol']} "
-                                                f"uid={_uid} (Redis غير متاح؟) — الصفقة لن تظهر في /performance")
-                                    except Exception as _sbe:
-                                        logger.warning(f"signal_tracker bind auto {s['symbol']}: {_sbe}")
-                                    _sm_vw.save_virtual_wallet(_uid, _vw.to_dict())
-                                    # Q1-Q5: تسجيل الصفقة
-                                    _sm_vw.record_auto_trade(_uid, s["symbol"], _scan_type, _buy_amt)
-                                    trade_rec["virtual_executed"] = True
-                                    logger.info(
-                                        f"✅ Virtual buy: {s['symbol']} "
-                                        f"${_buy_amt:,.0f} [{_scan_type}] for user {_uid}")
-                                    # إشعار تأكيد للمستخدم (#608)
-                                    _sfn_notify = getattr(self, "_send_fn", None)
-                                    if _sfn_notify:
-                                        _dir_ar = "🟢 شراء" if s["direction"] == "long" else "🔴 بيع"
-                                        _confirm_msg = (
-                                            "✅ *تم تنفيذ صفقة افتراضية*\n\n"
-                                            f"• العملة: {s['symbol']} {_dir_ar}\n"
-                                            f"• السعر: ${s['price']:,.2f}\n"
-                                            f"• المبلغ: ${_buy_amt:,.0f}\n"
-                                            f"• الرصيد المتبقي: ${_vw.balance:,.0f}\n\n"
-                                            "🎮 محفظتك الافتراضية — /portfolio للتفاصيل"
-                                        )
-                                        try:
-                                            await _sfn_notify(
-                                                _confirm_msg,
-                                                user_id=_uid,
-                                                parse_mode="Markdown"
-                                            )
-                                        except Exception:
-                                            pass
-                                else:
-                                    logger.warning(
-                                        f"Virtual buy rejected {s['symbol']} "
-                                        f"user {_uid}: {_result.get('msg','')}")
-                            except Exception as ve:
-                                logger.warning(
-                                    f"Virtual wallet {s['symbol']} uid={_uid}: {ve}")
-                        trade_rec["virtual_executed"] = True
-
-                        executed.append(trade_rec)
-
-                    except Exception as e:
-                        logger.warning(f"Auto execute {s['symbol']}: {e}")
+            try:
+                from core.auto_trader_b68 import run_auto_cycle_b68 as _rac68
+                _sum68 = await _rac68(self, getattr(self, "_send_fn", None), getattr(self, "_bot_data_b68", None))
+            except Exception as _e68:
+                _sum68 = {}
+                logger.warning(f"auto_b68 cycle: {_e68}")
+            # كل صفقة آلية تصل بإشعار مستقل؛ التقرير يذكر الملخص فقط
+            _auto_line68 = ""
+            if _sum68.get("scanned"):
+                _auto_line68 = (f"🤖 التداول الآلي الافتراضي (منطق /signal المجمّد): فُحصت {_sum68['scanned']} عملة — "
+                                f"نُفّذ شراء {_sum68.get('long', 0)} / Short {_sum68.get('short', 0)} — /autostats")
 
             # 4b. إشعار المستخدمين الحقيقيين بزرَّي تأكيد/رفض
             _sfn = getattr(self, "_send_fn", None)
@@ -1140,7 +1016,8 @@ class RaedEngine:
                         f"لا فرص قوية حالياً (الحد: {_SCAN_STRONG_CONF:.0%} مع اتجاه شراء/بيع واضح)\n"
                         f"أفضل إشارة: {b['symbol']} {b['confidence']:.0%} — {_dir_scan}\n"
                         f"العملات الممسوحة: {len(all_signals)}\n"
-                        f"{self.scheduler.next_scan_ar()}\n\n"
+                        + (f"{_auto_line68}\n" if _auto_line68 else "")
+                        + f"{self.scheduler.next_scan_ar()}\n\n"
                         f"{_DISC_SCAN}"
                     )
                 return ""
@@ -1153,6 +1030,8 @@ class RaedEngine:
                 "",
             ]
 
+            if _auto_line68:
+                lines += [_auto_line68, ""]
             if executed:
                 lines.append("✅ *صفقات مُنفَّذة تلقائياً*")
                 for e in executed:

@@ -436,6 +436,7 @@ async def post_init(app: Application):
 
     await engine.start(send_fn=broadcast_fn)
     app.bot_data["raed_engine"] = engine
+    engine._bot_data_b68 = app.bot_data   # batch68: /signal الداخلي للتداول الآلي يحتاج bot_data (المناطق الزمنية/الاشتراكات)
 
     # ── تشغيل Scheduler مع ربطه بالمحرك ─────────────────────
     try:
@@ -626,6 +627,11 @@ def build_app() -> Application:
         first=60,
     )
 
+    # ── batch68: خروج مراكز القياس الآلي (TP1 60% / TP2 / وقف / مدة) كل 5 دقائق ──
+    app.job_queue.run_repeating(auto_exit_job_b68, interval=300, first=90)
+    # ── batch68: تقرير القياس الأسبوعي (الاثنين 1 ظهراً بتوقيت السعودية) ──
+    app.job_queue.run_repeating(auto_weekly_report_job_b68, interval=1800, first=300)
+
     # ── مسح خفيف كل ساعة — تنبيه عند ثقة >= 80% ──
     app.job_queue.run_repeating(
         hourly_alert_job,
@@ -634,6 +640,41 @@ def build_app() -> Application:
     )
 
     return app
+
+
+async def auto_exit_job_b68(context: ContextTypes.DEFAULT_TYPE):
+    engine = context.bot_data.get("raed_engine")
+    if not engine:
+        return
+    try:
+        from core.auto_trader_b68 import check_auto_exits_b68
+        await check_auto_exits_b68(engine, getattr(engine, "_send_fn", None))
+    except Exception as e:
+        logger.warning(f"auto_exit_job_b68: {e}")
+
+
+async def auto_weekly_report_job_b68(context: ContextTypes.DEFAULT_TYPE):
+    """يرسل تقرير القياس مرة واحدة أسبوعياً (الاثنين 13:00–13:59 KSA)."""
+    try:
+        import datetime as _dtw
+        from core.state_manager import state_manager as _smw
+        from core.auto_trader_b68 import ledger_get, auto_stats_b68, format_auto_stats_b68
+        now = _dtw.datetime.now(_dtw.timezone.utc) + _dtw.timedelta(hours=3)
+        if now.weekday() != 0 or now.hour != 13:
+            return
+        wk = now.strftime("%G-W%V")
+        for uid in _smw.get_autotrade_users():
+            k = f"autoweekly_b68:{uid}"
+            if _smw.kv_get(k, "") == wk:
+                continue
+            txt = "🗓️ *التقرير الأسبوعي للقياس*\n\n" + format_auto_stats_b68(auto_stats_b68(ledger_get(uid)))
+            try:
+                await context.bot.send_message(chat_id=uid, text=txt, parse_mode="Markdown")
+                _smw.kv_set(k, wk)
+            except Exception:
+                pass
+    except Exception as e:
+        logger.warning(f"auto_weekly_report_job_b68: {e}")
 
 
 async def hourly_alert_job(context: ContextTypes.DEFAULT_TYPE):
@@ -719,56 +760,9 @@ async def hourly_alert_job(context: ContextTypes.DEFAULT_TYPE):
                 except Exception:
                     pass
 
-            # تنفيذ Virtual Wallet لمستخدمي autotrade
-            for uid in _sm_h.get_autotrade_users():
-                try:
-                    _wdata = _sm_h.get_virtual_wallet(uid)
-                    if not _wdata:
-                        _wdata = {"balance": 10000.0, "invested": 0.0,
-                                  "profit": 0.0, "positions": {}, "history": []}
-                    _vw_h = _VW_h(_wdata)
-
-                    _executed_syms = []
-                    for sig_info in strong_signals_data:
-                        if sig_info["confidence"] < 0.80:
-                            continue
-                        # K2+K3+BUG-B: الفحص الموحد بالنوع الصحيح
-                        _sym_q = sig_info["symbol"]
-                        _can, _buy_amt, _reason = _sm_h.can_auto_execute(
-                            uid, _sym_q, _vw_h.total_value, _vw_h.positions,
-                            scan_type=_h_scan_type)
-                        if not _can:
-                            logger.info(f"Auto skip {_sym_q}: {_reason}")
-                            continue
-                        _buy_amt = min(_buy_amt, _vw_h.balance * 0.95)
-                        _buy_amt = max(_buy_amt, 50)
-                        _result  = _vw_h.buy(
-                            symbol     = sig_info["symbol"],
-                            price      = sig_info["price"],
-                            amount_usd = _buy_amt,
-                        )
-                        if _result.get("ok"):
-                            # Q1-Q5: تسجيل الصفقة بالنوع الصحيح (BUG-F مُصلَح)
-                            _sm_h.record_auto_trade(uid, _sym_q, _h_scan_type, _buy_amt)
-                            _executed_syms.append(
-                                f"• {sig_info['symbol']} ${_buy_amt:,.0f}")
-
-                    if _executed_syms:
-                        _sm_h.save_virtual_wallet(uid, _vw_h.to_dict())
-                        _confirm = (
-                            "✅ *تم تنفيذ صفقات افتراضية تلقائياً*\n\n" +
-                            "\n".join(_executed_syms) +
-                            f"\n\n💰 رصيدك: ${_vw_h.balance:,.0f}"
-                            "\n🎮 /portfolio للتفاصيل"
-                        )
-                        try:
-                            await context.bot.send_message(
-                                chat_id=uid, text=_confirm,
-                                parse_mode=ParseMode.MARKDOWN)
-                        except Exception:
-                            pass
-                except Exception as _ve:
-                    logger.warning(f"Virtual exec uid={uid}: {_ve}")
+            # batch68 (قرار رحال 2026-11-06): أُلغي التنفيذ الآلي هنا — كان يشتري بثقة ≥80% من مسار generate
+            # مختلف عن /signal وبوقف/هدف ثابتين (ويشتري حتى لإشارة بيع). التنفيذ الآلي الوحيد الآن:
+            # core/auto_trader_b68 (حكم /signal الكامل) ضمن المسح الرباعي. التنبيه أعلاه يبقى للعلم.
 
             logger.info(f"⚡ تنبيه ساعي: {len(alerts)} إشارة >= 80%")
     except Exception as e:

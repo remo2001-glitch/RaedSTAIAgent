@@ -944,7 +944,7 @@ def _bear_wording_b56(text: str, regime_obj) -> str:
     _fut59 = "📉 Futures" in t[:900] or "· Futures" in t[:900]
     t = t.replace("الاتجاه غير مؤكد: لا جهة واضحة للصفقة",
                   (f"اتجاه هابط قائم (ADX {adx:.0f}): لا شراء (Long) — الهبوط القائم مجال Short في Futures "
-                   f"(متاح في المحفظة الافتراضية فقط؛ لا تقييم Short في رائد بعد)") if _fut59
+                   f"(تقييم Short الافتراضي 1x في قسم 🔻 أدناه)") if _fut59
                   else f"اتجاه هابط قائم (ADX {adx:.0f}): لا شراء في Spot")
     t = t.replace("الحجم: 0% — الاتجاه غير مؤكد، انتظر وضوح الجهة", "الحجم: 0% — اتجاه هابط قائم، لا شراء")
     t = _r.sub(r"• الاتجاه غير مؤكد: لا إشارة شراء/بيع قبل ثقة (\d+)%[^\n]*",
@@ -1522,7 +1522,7 @@ def _is_us_listed_symbol(sym: str) -> bool:
 SIGNAL_DECISION_TTL_B58 = 1800   # /trade يقبل قرار /signal خلال 30 دقيقة فقط
 
 
-def _save_signal_decision_b58(user_id, symbol, mkttype, meta: dict, score: dict) -> dict:
+def _save_signal_decision_b58(user_id, symbol, mkttype, meta: dict, score: dict, auto: bool = False) -> dict:
     """batch58 (#682–#684): يحفظ قرار /signal المعروض للمستخدم (الحكم، الحجم، الدخول/الوقف/الأهداف)
     ليستخدمه /trade كما هو. عرض/تخزين فقط — لا يغيّر /signal."""
     import json as _js58, time as _tm58, re as _re58
@@ -1543,12 +1543,50 @@ def _save_signal_decision_b58(user_id, symbol, mkttype, meta: dict, score: dict)
         "atr_pct": float(meta.get("atr_pct") or 0),
         "confidence": float(meta.get("confidence_pct") or 0) / 100.0,
         "rr": float(meta.get("rr_real") or 0),
+        "short": meta.get("short_b68") or None,   # batch68: تقييم Short (Futures) لتنفيذه آلياً كما هو
+        "regime_bucket": ("هابط" if "هابط" in str(meta.get("regime_desc", "")) else "صاعد" if "صاعد" in str(meta.get("regime_desc", ""))
+                          else "جانبي" if str(meta.get("regime_desc", "")) else ""),
     }
     try:
-        _sm.kv_set(f"sigdec:{int(user_id)}:{rec['symbol']}", _js58.dumps(rec))
+        # batch68: تشغيل /signal الداخلي للتداول الآلي يُحفظ في مفتاح منفصل — لا يمسّ قرار /trade اليدوي للمستخدم
+        _k68 = "sigdec_auto" if auto else "sigdec"
+        _sm.kv_set(f"{_k68}:{int(user_id)}:{rec['symbol']}:{rec['mkt']}" if auto else f"sigdec:{int(user_id)}:{rec['symbol']}",
+                   _js58.dumps(rec))
     except Exception:
         pass
     return rec
+
+
+async def headless_signal_b68(engine, symbol: str, mkttype: str, user_id: int, bot_data: dict = None,
+                              timeout: float = 150.0) -> dict:
+    """batch68 (قرار رحال: «التنفيذ الآلي = /signal نفسه»): يشغّل /signal كاملاً دون رسالة ويُرجع القرار المحفوظ
+    (الحكم، الجهة، الحجم، الدخول/الوقف/الهدفان، وتقييم Short في Futures). لا منطق دخول مستقل في المسح."""
+    import types as _ty, json as _js
+    class _M:
+        async def reply_text(self, *a, **k): return self
+        async def edit_text(self, *a, **k): return self
+        async def delete(self, *a, **k): return True
+        async def reply_photo(self, *a, **k): return self
+    _m = _M()
+    upd = _ty.SimpleNamespace(effective_user=_ty.SimpleNamespace(id=int(user_id), first_name="auto", username=None),
+                              message=_m, effective_message=_m, callback_query=None,
+                              effective_chat=_ty.SimpleNamespace(id=int(user_id)))
+    bd = dict(bot_data or {})
+    bd["raed_engine"] = engine
+    ctx = _ty.SimpleNamespace(args=[str(symbol).upper()], user_data={"_mkttype": mkttype, "_headless_b68": True},
+                              bot_data=bd, bot=None, job_queue=None)
+    key = f"sigdec_auto:{int(user_id)}:{str(symbol).upper()}:{'futures' if mkttype == 'futures' else 'spot'}"
+    try:
+        _sm.kv_set(key, "")
+    except Exception:
+        pass
+    fn = getattr(cmd_signal, "__wrapped__", cmd_signal)
+    await asyncio.wait_for(fn(upd, ctx), timeout=timeout)
+    try:
+        raw = _sm.kv_get(key, "") or ""
+        return _js.loads(raw) if raw else {}
+    except Exception:
+        return {}
 
 
 def _meta_decision_wait(meta: dict) -> bool:
@@ -4014,7 +4052,29 @@ def _build_professional_block(
     # التحليل — لوحظ في XMU/XSPY/XSPCX/BGB (تطابق BTC كان صدفة رياضية لأن
     # pro_entry≈entry_agg هناك تحديداً). الإصلاح: تمرير نسخة entry_agg
     # المتسقة مع العرض الفعلي، لضمان تطابق R/R وSL% أينما ظهرا في الرسالة.
+    # batch68 (قرار رحال 2026-11-06 «مرآة شروط الشراء»): تقييم Short في Futures فقط، حين لا شراء مؤكد
+    _short_ev68 = None
+    try:
+        if str(tech.get("bb_mkt", "")).lower() == "futures" and not (direction == "long" and conf >= 0.65):
+            from core.short_eval_b68 import short_flags_b68, evaluate_short_b68, format_short_block_b68
+            _sfl68 = short_flags_b68(
+                rsi=rsi, vol_ratio=_vol_ratio, vol_dir=locals().get("_vdir67b", ""),
+                cvd_ok=bool(_cvd_oc_f.get("cvd_signal")) if isinstance(_cvd_oc_f, dict) else False,
+                cvd_pct=locals().get("_cvd_pct_f", 0.0), fund_pct=locals().get("_fund_pct", 0.0),
+                fund_excluded=bool(locals().get("_gold_fund_ex", False)), oi_chg=locals().get("_oi_chg", 0.0),
+                bb_pos=locals().get("_bb_pos_v"))
+            _short_ev68 = evaluate_short_b68(
+                price=price, conf=conf, rsi=rsi, atr_pct=atr_pct, nr=float(nr or 0),
+                fib_levels=(fib or {}).get("levels") if isinstance(fib, dict) else None,
+                regime_desc=getattr(regime, "description_ar", "") if regime is not None else "",
+                flags=_sfl68)
+            parts.append(format_short_block_b68(_short_ev68, _fmt_price))
+    except Exception as _se68:
+        logger.debug(f"short eval b68: {_se68}")
+        _short_ev68 = None
     _signal_meta = {
+        "short_b68": ({k: v for k, v in _short_ev68.items() if k != "checks"} if isinstance(_short_ev68, dict) else None),
+        "regime_desc": getattr(regime, "description_ar", "") if regime is not None else "",
         "pro_entry": entry_agg, "pro_sl": pro_sl, "pro_tp": tp1_v,
         "entry_agg": entry_agg, "entry_cons": entry_cons,
         "tp1_v": tp1_v, "tp2_v": tp2_v,
@@ -5874,7 +5934,8 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _score_result = evaluate_signal(_si)
                 # batch58 (#682): سجل قرار /signal المعروض — /trade ينفّذ هذا القرار نفسه لا منطقاً مستقلاً
                 try:
-                    _save_signal_decision_b58(user_id, symbol, _mkt_arg_sig, _sm_sig, _score_result)
+                    _save_signal_decision_b58(user_id, symbol, _mkt_arg_sig, _sm_sig, _score_result,
+                                              auto=bool(context.user_data.get("_headless_b68")))
                 except Exception as _sd58:
                     logger.debug(f"signal decision save: {_sd58}")
                 _scorer_header = f"\n{_score_result['header']}\n"
@@ -5977,6 +6038,8 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # الفعلية من _build_professional_block) — أدق من تقريب /planmonth.
         _sig_id_signal = None
         try:
+            if context.user_data.get("_headless_b68"):
+                raise RuntimeError("headless")   # batch68: المسح الآلي يسجّل صفقاته المنفّذة فقط
             _sig_id_signal = engine.signal_tracker.log_signal(
                 symbol=symbol, setup_type=_sig_meta.get("direction") or "neutral",
                 direction=_sig_meta.get("direction") or "neutral",
@@ -5991,7 +6054,8 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 user_id=update.effective_user.id if update.effective_user else None,
             )
         except Exception as _ste_sig:
-            logger.warning(f"signal_tracker.log_signal (signal): {_ste_sig}")
+            if str(_ste_sig) != "headless":
+                logger.warning(f"signal_tracker.log_signal (signal): {_ste_sig}")
 
         # الزر يظهر فقط عند استيفاء نفس بوابة التأكيدات المعروضة فعلياً
         # (≥2/4) — بما يتسق مع فلسفة "حجم 0% حتى اكتمال الشروط" المُتعمَّدة
