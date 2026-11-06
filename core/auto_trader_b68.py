@@ -380,9 +380,59 @@ async def _notify(send_fn, uid, text):
 
 
 # ── الخروج (كل 5 دقائق) ─────────────────────────────────────────────────
+async def _minute_bars_b68(engine, sym: str, since_ts: float) -> list:
+    """batch68f: شموع الدقيقة من العقد الدائم منذ آخر فحص — [(ts, high, low)] تصاعدياً.
+    تكشف لمس الهدف/الوقف بين فحصين (ذيول الشموع) بدل السعر اللحظي وحده."""
+    try:
+        from core.data_layer import _fetch
+        n = int(max(2, min(300, (time.time() - float(since_ts)) / 60 + 2)))
+        url = f"https://www.okx.com/api/v5/market/candles?instId={str(sym).upper()}-USDT-SWAP&bar=1m&limit={n}"
+        data = await _fetch(engine.data_layer.session, url, headers={"User-Agent": "Mozilla/5.0"}, retries=1)
+        rows = (data or {}).get("data") if isinstance(data, dict) else None
+        out = []
+        for r in rows or []:
+            ts = float(r[0]) / 1000.0
+            if ts + 60 > float(since_ts):
+                out.append((ts, float(r[2]), float(r[3])))
+        return sorted(out)
+    except Exception:
+        return []
+
+
+def walk_exits_b68(side: str, bars: list, sl: float, tp1: float, tp2: float, tp1_done: bool) -> list:
+    """batch68f: يمرّ على الشموع بالترتيب ويُرجع أحداث الخروج [(kind, level)].
+    قرار رحال 2026-11-06: بعد تحقق الهدف 1 يصبح سعر الهدف 1 نفسه هو الوقف الجديد للباقي.
+    تحفظ القياس: إن لمست شمعة الوقف والهدف معاً يُحتسب الوقف أولاً (لا يُعرف الترتيب داخل الدقيقة)."""
+    ev = []
+    long = side != "short"
+    for _ts, hi, lo in bars:
+        hit_sl = sl > 0 and ((lo <= sl) if long else (hi >= sl))
+        hit_t1 = (not tp1_done) and tp1 > 0 and ((hi >= tp1) if long else (lo <= tp1))
+        hit_t2 = tp2 > 0 and ((hi >= tp2) if long else (lo <= tp2))
+        if hit_sl:
+            ev.append(("sl" if not tp1_done else "sl_tp1", sl))
+            return ev
+        if hit_t1:
+            ev.append(("tp1", tp1))
+            tp1_done = True
+            sl = tp1
+            if hit_t2:
+                ev.append(("tp2", tp2))
+                return ev
+            continue
+        if tp1_done and hit_t2:
+            ev.append(("tp2", tp2))
+            return ev
+    return ev
+
+
 async def check_auto_exits_b68(engine, send_fn=None) -> int:
+    """كل 5 دقائق: خروج مراكز القياس الآلي من شموع الدقيقة منذ آخر فحص (لا السعر اللحظي وحده).
+    الهدف 1 يُغلق 60% بسعره (أمر محدد)، ثم يصبح سعر الهدف 1 وقفاً للباقي؛ الهدف 2 يُغلق الباقي بسعره؛
+    الوقف يُنفَّذ بسعره ناقص انزلاق 0.1% (أمر سوق)؛ الخروج الزمني بعد 5 أيام بالسعر الحالي."""
     from core.virtual_wallet import VirtualWallet
     closed = 0
+    now = time.time()
     for uid in (_sm().get_autotrade_users() or []):
         try:
             wd = _sm().get_virtual_wallet(uid) or {}
@@ -390,61 +440,67 @@ async def check_auto_exits_b68(engine, send_fn=None) -> int:
                 continue
             vw = VirtualWallet(wd)
             notes, changed = [], False
-            for sym in [s for s, p in vw.positions.items() if p.get("logic_ver")]:
-                pos = vw.positions[sym]
-                pd = await engine.data_layer.get_price(sym)
-                px = float((pd or {}).get("price") or 0)
-                if px <= 0:
+            books = [("spot", s) for s, p in vw.positions.items() if p.get("logic_ver")] + \
+                    [("fut", s) for s, p in vw.futures.items() if p.get("logic_ver")]
+            for book, sym in books:
+                pos = (vw.positions if book == "spot" else vw.futures).get(sym)
+                if not pos:
                     continue
-                xp = px * (1 - AUTO_SLIP)
-                sl, tp1, tp2 = float(pos.get("stop_loss") or 0), float(pos.get("tp1") or 0), float(pos.get("tp2") or 0)
-                why = ("sl" if sl > 0 and px <= sl else "tp2" if tp2 > 0 and px >= tp2 else
-                       "tp1" if (tp1 > 0 and px >= tp1 and not pos.get("tp1_done")) else
-                       "time" if vw.is_hold_expired(sym) else "")
-                if not why:
-                    continue
-                qty = float(pos["quantity"]) * 0.6 if why == "tp1" else None
-                r = vw.sell(sym, xp, qty)
-                if r.get("ok"):
-                    changed = True
-                    t = r.get("trade", {})
-                    if why == "tp1" and sym in vw.positions:
-                        vw.positions[sym]["tp1_done"] = True
-                    _ledger_close(uid, t, why, final=(sym not in vw.positions))
-                    if sym not in vw.positions:
-                        _track_close_b68(engine, pos.get("signal_id"), xp, why)
-                    closed += 1
-                    notes.append(_close_msg(sym, "long", why, t))
-            for sym in [s for s, p in vw.futures.items() if p.get("logic_ver")]:
-                pos = vw.futures[sym]
+                side = "long" if book == "spot" else pos.get("side", "long")
+                short = side == "short"
+                try:
+                    _op = datetime.fromisoformat(str(pos.get("opened_at")))
+                    _op_ts = (_op if _op.tzinfo else _op.replace(tzinfo=timezone.utc)).timestamp()
+                except Exception:
+                    _op_ts = now - 300
+                since = float(pos.get("last_chk_ts") or _op_ts)
+                bars = await _minute_bars_b68(engine, sym, since)
                 pd = await engine.data_layer.get_price(sym, mkttype="futures")
                 px = float((pd or {}).get("price") or 0)
-                if px <= 0:
-                    continue
-                short = pos["side"] == "short"
-                xp = px * (1 + AUTO_SLIP) if short else px * (1 - AUTO_SLIP)
+                if not bars and px > 0:
+                    bars = [(now, px, px)]   # احتياط: السعر الحالي إن تعذّرت شموع الدقيقة
                 sl, tp1, tp2 = float(pos.get("stop_loss") or 0), float(pos.get("tp1") or 0), float(pos.get("tp2") or 0)
-                hit = (lambda lv, up: lv > 0 and ((px >= lv) if up else (px <= lv)))
-                why = ("sl" if hit(sl, short) else "tp2" if hit(tp2, not short) else
-                       "tp1" if (hit(tp1, not short) and not pos.get("tp1_done")) else "")
-                if not why:
-                    why = "time" if vw.futures_exit_reason(sym, px) == "time" else ""
-                if not why:
-                    continue
-                if why == "tp1":
-                    r = vw.reduce_futures(sym, xp, 0.6, "tp1")
-                    if r.get("ok"):
-                        vw.futures[sym]["tp1_done"] = True
-                else:
-                    r = vw.close_futures(sym, xp, {"tp2": "tp"}.get(why, why))
-                if r.get("ok"):
+                events = walk_exits_b68(side, bars, sl, tp1, tp2, bool(pos.get("tp1_done")))
+                if not events:
+                    expired = vw.is_hold_expired(sym) if book == "spot" else (vw.futures_exit_reason(sym, px) == "time" if px > 0 else False)
+                    if expired and px > 0:
+                        events = [("time", px)]
+                for kind, lvl in events:
+                    if kind in ("sl", "sl_tp1"):
+                        xp = lvl * (1 + AUTO_SLIP) if short else lvl * (1 - AUTO_SLIP)
+                    elif kind == "time":
+                        xp = lvl * (1 + AUTO_SLIP) if short else lvl * (1 - AUTO_SLIP)
+                    else:
+                        xp = lvl   # الهدف = أمر محدد بسعره
+                    if book == "spot":
+                        qty = float(vw.positions[sym]["quantity"]) * 0.6 if kind == "tp1" else None
+                        r = vw.sell(sym, xp, qty)
+                        live = vw.positions
+                    elif kind == "tp1":
+                        r = vw.reduce_futures(sym, xp, 0.6, "tp1")
+                        live = vw.futures
+                    else:
+                        r = vw.close_futures(sym, xp, {"tp2": "tp", "sl_tp1": "sl"}.get(kind, kind))
+                        live = vw.futures
+                    if not r.get("ok"):
+                        break
                     changed = True
                     t = r.get("trade", {})
-                    _ledger_close(uid, t, why, final=(sym not in vw.futures))
-                    if sym not in vw.futures:
-                        _track_close_b68(engine, pos.get("signal_id"), xp, why)
+                    if kind == "tp1" and sym in live:
+                        live[sym]["tp1_done"] = True
+                        live[sym]["stop_loss"] = tp1   # قرار رحال: الوقف الجديد = سعر الهدف 1
+                    final = sym not in live
+                    _ledger_close(uid, t, kind, final=final)
+                    if final:
+                        _track_close_b68(engine, pos.get("signal_id"), xp, kind)
                     closed += 1
-                    notes.append(_close_msg(sym, pos["side"], why, t))
+                    notes.append(_close_msg(sym, side, kind, t))
+                    if final:
+                        break
+                _book = vw.positions if book == "spot" else vw.futures
+                if sym in _book:
+                    _book[sym]["last_chk_ts"] = now
+                    changed = True
             if changed:
                 _sm().save_virtual_wallet(uid, vw.to_dict())
                 for n in notes:
@@ -461,7 +517,9 @@ def _ledger_close(uid, t: dict, why: str, final: bool):
 
 
 def _close_msg(sym, side, why, t) -> str:
-    _w = {"sl": "🛑 وقف الخسارة", "tp1": "🎯 الهدف 1 (60%)", "tp2": "🎯 الهدف 2 (الباقي)", "time": "⏰ الخروج الزمني"}.get(why, why)
+    _w = {"sl": "🛑 وقف الخسارة", "tp1": "🎯 الهدف 1 (60%) — الوقف الجديد للباقي = سعر الهدف 1",
+          "tp2": "🎯 الهدف 2 (الباقي)", "sl_tp1": "🔒 الوقف المنقول إلى سعر الهدف 1 (الباقي 40%)",
+          "time": "⏰ الخروج الزمني"}.get(why, why)
     p = float(t.get("pnl") or 0)
     return (f"🤖 *إغلاق آلي افتراضي* — {sym} {'Long' if side == 'long' else 'Short'}\n"
             f"• السبب: {_w}\n• الصافي: {'+' if p >= 0 else '-'}${abs(p):,.2f} (بعد الرسوم والانزلاق)\n"

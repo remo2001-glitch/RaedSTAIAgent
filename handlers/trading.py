@@ -2103,7 +2103,7 @@ async def cmd_autotrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "01:00 · 05:00 · 09:00 · 13:00 · 17:00 · 21:00 KSA\n\n"
                 "🧭 *المنطق:* حكم /signal الكامل لأكبر 20 عملة + النفط BZ والفضة XAG والذهب XAU و10 أسهم مرمّزة — "
                 "كلها في Futures 1x افتراضي للجهتين (شراء وShort)؛ "
-                "الحجم 5% × حجم /signal × سقف التعرض؛ خروج TP1 60% / TP2 40% / وقف / 5 أيام (فحص كل 5 دقائق)\n"
+                "الحجم 5% × حجم /signal × سقف التعرض؛ خروج TP1 60% ثم الوقف إلى سعر TP1 / TP2 40% / 5 أيام (شموع الدقيقة كل 5 دقائق)\n"
                 "📊 القياس: /autostats\n\n"
                 "للإيقاف الفوري: /autotrade off",
                 parse_mode=ParseMode.MARKDOWN)

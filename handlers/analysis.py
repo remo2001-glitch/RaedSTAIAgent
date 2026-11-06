@@ -3287,7 +3287,7 @@ def _build_professional_block(
         if tp3_v else
         "TP1 (50%) ← TP2 (30%) ← الباقي (20%) بوقف متحرك Trailing بعد TP1"
         if _use_trailing else
-        "TP1 (60%) ← TP2 (40%) مع Hard SL"
+        "TP1 (60%) ← TP2 (40%) مع Hard SL — بعد TP1 يُنقل الوقف إلى سعر TP1 (قرار رحال 2026-11-06)"
     )
     # batch30 stop_type_consistency: «Hard Stop» ثم «Trailing Stop» معاً كان متناقضاً في نفس الكتلة
     if _use_trailing and str(sl_type_ar).startswith("Hard Stop"):
