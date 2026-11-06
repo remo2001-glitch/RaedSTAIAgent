@@ -5300,7 +5300,12 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # تطوير #209: اكتشاف تلقائي للأصول المُرمَّزة (ماسي+ فقط)
     # إصلاح #248: _is_perp_sig هو المصدر الوحيد (لا استدعاء مكرر)
     _is_perp_sig = False
-    if tier2 in ("diamond", "admin") and not ((not _use_futures) and is_tokenized_x_ticker(raw_arg)):
+    # batch68h: المسح الآلي قياس على مستوى النظام لقائمة رحال الثابتة — لا قيود باقة (كانت تُفشل 19 أصلاً لحسابين غير ماسيين)
+    try:
+        _hl68 = bool((context.user_data or {}).get("_headless_b68"))
+    except Exception:
+        _hl68 = False
+    if (tier2 in ("diamond", "admin") or _hl68) and not ((not _use_futures) and is_tokenized_x_ticker(raw_arg)):
         try:
             _is_perp_sig = (await engine.data_layer.is_tokenized_stock(symbol)) and not _is_commodity(symbol)   # batch59: XAG سلعة لا سهم
         except Exception:
@@ -5329,7 +5334,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"⬆️ للترقية: /upgrade",
                 parse_mode="Markdown"); return
     # إصلاح #1683: diamond/admin يصل لأي عملة بدون قيود
-    elif tier2 in ("diamond", "admin"):
+    elif tier2 in ("diamond", "admin") or _hl68:
         pass  # ماسي+ = وصول كامل لجميع العملات
     elif tier2 in ("gold",) and symbol.upper() in _ALWAYS_ALLOWED:
         pass  # ذهبي: القائمة الموسّعة مسموحة
