@@ -123,6 +123,18 @@ def _long_factor(rec: dict, tier: str) -> float:
     return min(1.0, float(rec.get("size_pct") or 0) / mx)
 
 
+# batch68d (قرار رحال 2026-11-06): أصول إضافية ثابتة — النفط برنت والفضة والذهب (عقود دائمة فقط) والأسهم المرمّزة
+AUTO_EXTRA = ["BZ", "XAG", "XAU", "SPCX", "MSTR", "CRCL", "SNDK", "TSLA", "INTC", "GOOGL", "QQQ", "MU", "NVDA"]
+
+
+def _perp_only(sym: str) -> bool:
+    try:
+        from core.data_layer import _PERP_ONLY_COMMODITY
+        return str(sym).upper() in _PERP_ONLY_COMMODITY
+    except Exception:
+        return str(sym).upper() in ("XAG", "XAU", "BZ")
+
+
 # batch68b: قائمة احتياطية حين يتعذّر CoinGecko (كان طلب limit=40 مباشرة بعد طلب المسح يُرفض 429 فلا يُفحص شيء)
 FALLBACK_TOP = ["BTC", "ETH", "XRP", "BNB", "SOL", "TRX", "DOGE", "ADA", "HYPE", "LINK",
                 "BCH", "XLM", "SUI", "AVAX", "LTC", "HBAR", "TON", "DOT", "UNI", "AAVE"]
@@ -172,6 +184,7 @@ async def run_auto_cycle_b68(engine, send_fn=None, bot_data=None) -> dict:
         summary["skipped"]["event"] = ev_reason
         return summary
     syms = await _universe(engine)
+    syms += [x for x in AUTO_EXTRA if x not in syms]   # batch68d
     summary["universe"] = len(syms)
     for uid in uids:
         try:
@@ -190,14 +203,24 @@ async def run_auto_cycle_b68(engine, send_fn=None, bot_data=None) -> dict:
             if sym in vw.positions or sym in vw.futures:
                 continue
             summary["scanned"] += 1
+            # batch68d: الأصول ذات العقد الدائم فقط (BZ/XAG/XAU) تُحلَّل وتُنفَّذ في Futures 1x للجهتين؛
+            # الأسهم: Spot أولاً، وإن تعذّر تحليلها Spot (لا سوق فوري لها) فـFutures 1x
+            _fut_long = _perp_only(sym)
+            rec = {}
             try:
-                rec = await headless_signal_b68(engine, sym, "spot", uid, bot_data)
+                rec = await headless_signal_b68(engine, sym, "futures" if _fut_long else "spot", uid, bot_data)
             except Exception as e:
-                summary["errors"] += 1
-                logger.warning(f"auto_b68 {sym}: /signal spot فشل — {type(e).__name__}: {e}")
-                continue
+                logger.warning(f"auto_b68 {sym}: /signal فشل — {type(e).__name__}: {e}")
+                rec = {}
+            if not rec and not _fut_long and sym in AUTO_EXTRA:
+                try:
+                    rec = await headless_signal_b68(engine, sym, "futures", uid, bot_data)
+                    _fut_long = bool(rec)
+                except Exception:
+                    rec = {}
             if not rec:
                 summary["errors"] += 1
+                continue
             try:
                 pd = await engine.data_layer.get_price(sym)
                 px = float((pd or {}).get("price") or 0)
@@ -221,26 +244,36 @@ async def run_auto_cycle_b68(engine, send_fn=None, bot_data=None) -> dict:
                              "tp1": float(rec["tp1"]), "tp2": float(rec.get("tp2") or rec["tp1"]), "tp1_done": False,
                              "max_hold_hours": AUTO_HOLD_HOURS, "regime": rec.get("regime_bucket", ""),
                              "rr_entry": round(rr, 3), "conf_entry": float(rec.get("confidence") or 0)}
-                    r = vw.buy(sym, epx, amt, fee_rate=AUTO_SPOT_FEE, extra=extra)
+                    if _fut_long:   # batch68d: شراء عبر Futures 1x (لا Spot للأصل)
+                        _ex_f = {k: v for k, v in extra.items() if k not in ("stop_loss", "take_profit", "max_hold_hours")}
+                        r = vw.open_futures(sym, "long", epx, amt, 1, stop_loss=_sl_use,
+                                            take_profit=float(rec.get("tp2") or rec["tp1"]), max_hold_hours=AUTO_HOLD_HOURS,
+                                            extra=_ex_f)
+                    else:
+                        r = vw.buy(sym, epx, amt, fee_rate=AUTO_SPOT_FEE, extra=extra)
                     if r.get("ok"):
                         _sid = _track_open_b68(engine, uid, sym, "long", epx, extra, rec.get("confidence"), 0)
-                        if _sid:
-                            vw.positions[sym]["signal_id"] = _sid
-                            vw.positions[sym]["setup_type"] = "auto_long_b68"
+                        _book = vw.futures if _fut_long else vw.positions
+                        if _sid and sym in _book:
+                            _book[sym]["signal_id"] = _sid
+                            _book[sym]["setup_type"] = "auto_long_b68"
                         _sm().save_virtual_wallet(uid, vw.to_dict())
                         summary["long"] += 1
-                        _ledger_open(uid, sym, "long", epx, amt, extra)
-                        await _notify(send_fn, uid, _open_msg(sym, "long", epx, amt, extra, rr, ev_mult))
+                        _ledger_open(uid, sym, "long", epx, amt, {**extra, "mkt": "futures" if _fut_long else "spot"})
+                        await _notify(send_fn, uid, _open_msg(sym, "long_fut" if _fut_long else "long", epx, amt, extra, rr, ev_mult))
                 continue
             # Short: فقط حين يميل /signal للهبوط بوضوح (ثقة الشراء ≤ 35% = ميل هبوط ≥ 65%)
             if float(rec.get("confidence") or 1) > 0.35:
                 summary["waits"] += 1 if rec else 0
                 continue
-            try:
-                recf = await headless_signal_b68(engine, sym, "futures", uid, bot_data)
-            except Exception as e:
-                logger.info(f"auto_b68 {sym}: /signal futures فشل — {type(e).__name__}")
-                continue
+            if _fut_long:
+                recf = rec   # تحليل Futures موجود أصلاً (أصل بلا Spot)
+            else:
+                try:
+                    recf = await headless_signal_b68(engine, sym, "futures", uid, bot_data)
+                except Exception as e:
+                    logger.info(f"auto_b68 {sym}: /signal futures فشل — {type(e).__name__}")
+                    continue
             sh = (recf or {}).get("short") or {}
             ok2, why2, rr2 = short_gate_b68(sh, px)
             if not ok2:
@@ -307,7 +340,8 @@ def scan_line_b68(sm: dict) -> str:
         return f"🤖 التداول الآلي: لا دخول الآن — {sm['skipped']['event']} (سقف التعرض 0%)"
     if not sm.get("universe"):
         return "⚠️ التداول الآلي: تعذّر جلب قائمة العملات — لم يُفحص شيء في هذه الدورة"
-    t = (f"🤖 التداول الآلي (حكم /signal الكامل — مجمّد b68): فُحصت {sm.get('scanned', 0)} من أكبر {sm['universe']} عملة — "
+    t = (f"🤖 التداول الآلي (حكم /signal الكامل — مجمّد b68): فُحص {sm.get('scanned', 0)} من {sm['universe']} أصلاً "
+         f"(أكبر 20 عملة + النفط والذهب والفضة و10 أسهم مرمّزة) — "
          f"شراء {sm.get('long', 0)} / Short {sm.get('short', 0)}")
     if not (sm.get("long") or sm.get("short")):
         t += " — لا عملة استوفت حكم «دخول» الآن"
@@ -328,7 +362,7 @@ def _ledger_open(uid, sym, side, px, amt, extra):
 def _open_msg(sym, side, px, amt, extra, rr, ev_mult) -> str:
     from handlers.analysis import _fmt_price
     return ("🤖 *صفقة آلية افتراضية* (منطق /signal المجمّد — b68)\n"
-            f"• {sym} {'🟢 شراء Spot' if side == 'long' else '🔴 Short Futures 1x'} عند {_fmt_price(px)} — ${amt:,.0f}\n"
+            f"• {sym} {'🟢 شراء Spot' if side == 'long' else '🟢 شراء Futures 1x (لا Spot للأصل)' if side == 'long_fut' else '🔴 Short Futures 1x'} عند {_fmt_price(px)} — ${amt:,.0f}\n"
             f"• الوقف {_fmt_price(extra.get('stop_loss'))} | TP1 {_fmt_price(extra.get('tp1'))} (60%) | TP2 {_fmt_price(extra.get('tp2'))} (40%)\n"
             f"• R/R المرجّح عند التنفيذ 1:{rr:.2f}" + (f" | سقف التعرض {ev_mult:.0%}" if ev_mult < 1 else "") + "\n"
             "🎮 افتراضي — /autostats لنتائج القياس")
@@ -486,7 +520,7 @@ def format_auto_stats_b68(st: dict) -> str:
         _pf = "∞" if st["pf"] == float("inf") else f"{st['pf']:.2f}"
         L.append(f"• عامل الربح: {_pf} | أقصى تراجع: ${st['dd']:,.2f} ({st['dd_pct']:.1f}%)")
         for sd, b in st["by_side"].items():
-            L.append(f"  ↳ {'Long Spot' if sd == 'long' else 'Short Futures 1x'}: {b['n']} صفقة، "
+            L.append(f"  ↳ {'Long' if sd == 'long' else 'Short Futures 1x'}: {b['n']} صفقة، "
                      f"ربح {b['w']}/{b['n']}، صافي {'+' if b['pnl'] >= 0 else '-'}${abs(b['pnl']):,.2f}")
     L += ["", "🎯 *شروط العبور إلى تجربة حقيقية صغيرة*"]
     for lbl, ok, val in st["criteria"]:

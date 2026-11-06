@@ -184,7 +184,8 @@ def _perp_only_msg_b59(base: str) -> str:
     try:
         from core.data_layer import _PERP_ONLY_COMMODITY
         if str(base).upper() in _PERP_ONLY_COMMODITY:
-            return (f"ℹ️ {str(base).upper()} = الفضة — متاحة على OKX كعقد دائم (Futures) فقط.\n"
+            _nm68 = {"XAG": "الفضة", "XAU": "الذهب", "BZ": "النفط (برنت)"}.get(str(base).upper(), str(base).upper())
+            return (f"ℹ️ {str(base).upper()} = {_nm68} — متاح على OKX كعقد دائم (Futures) فقط.\n"
                     f"التنفيذ الحقيقي في رائد Spot فقط، فلا تنفيذ. للتحليل: /signal {str(base).upper()}؛ "
                     f"للتدريب: /execute {str(base).upper()} buy 100 ← Futures ← 🎮 افتراضي")
     except Exception:

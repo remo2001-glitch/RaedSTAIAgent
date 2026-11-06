@@ -119,7 +119,7 @@ def neutral_direction_reason(conf) -> str:
 
 
 # ── batch34: رموز مدعومة بسلعة (ذهب) — ليست عملات كريبتو تقليدية ─────────────
-_COMMODITY_TOKENS = {"XAUT": "الذهب", "PAXG": "الذهب", "XAG": "الفضة"}
+_COMMODITY_TOKENS = {"XAUT": "الذهب", "PAXG": "الذهب", "XAG": "الفضة", "XAU": "الذهب", "BZ": "النفط (برنت)"}
 
 
 def is_commodity_token(sym) -> bool:
@@ -132,6 +132,10 @@ def commodity_note(sym: str) -> str:
     name = _COMMODITY_TOKENS.get(str(sym or "").upper().replace("-USDT", ""))
     if not name:
         return ""
+    _b68 = str(sym or "").upper().replace("-USDT", "")
+    if _b68 in ("XAU", "BZ"):   # batch68d
+        return (f"ℹ️ {_b68} = {name} (عقد OKX الدائم {_b68}-USDT-SWAP) — ليس سهماً مُرمَّزاً ولا عملة كريبتو: "
+                f"Fear & Greed وTVL وهيمنة BTC مرجعية للسوق الرقمي فقط، وحركته مرتبطة بسعر {name}.")
     if str(sym or "").upper().replace("-USDT", "") == "XAG":   # batch59 (#692/#700)
         return ("ℹ️ XAG = الفضة (عقد OKX الدائم XAG-USDT-SWAP) — ليس سهماً مُرمَّزاً ولا عملة كريبتو: "
                 "Fear & Greed وTVL وهيمنة BTC مرجعية للسوق الرقمي فقط، وحركته مرتبطة بسعر الفضة.")

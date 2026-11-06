@@ -21,7 +21,8 @@ symbol_classify_fix: كانت القاعدة "الرمز يبدأ بـX وطول
 REAL_CRYPTO_X_TICKERS = frozenset({"XRP", "XLM", "XMR", "XTZ", "XEM", "XDC", "XAUT"})
 # batch58→59 (#692/#699، قرار رحال 2026-11-04): XAG = الفضة دائماً (عقد OKX الدائم XAG-USDT-SWAP)،
 # لا سهم «AG» المُرمَّز بنمط X (كان Spot يحلّل First Majestic بسعر $14.96 وFutures يحلّل الفضة بـ$51.98).
-COMMODITY_X_TICKERS = frozenset({"XAG"})
+# batch68d (قرار رحال 2026-11-06): XAU = الذهب (عقد OKX الدائم XAU-USDT-SWAP) — لا سهم «AU» مُرمَّز
+COMMODITY_X_TICKERS = frozenset({"XAG", "XAU"})
 
 _QUOTE_SUFFIXES = ("USDT", "USDC", "BUSD", "USD")
 

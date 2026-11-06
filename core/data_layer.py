@@ -35,11 +35,11 @@ logger = logging.getLogger(__name__)
 # قاموس الأسهم المُرمَّزة: رمز المستخدم → {okx_spot, okx_futures, yahoo, base}
 # T13_fix: رموز السلع على OKX — Futures فقط
 _COMMODITY_SYMBOLS = {
-    "CL", "NL", "GC", "SI", "HG", "NG", "WTI", "BRENT", "XAG",
+    "CL", "NL", "GC", "SI", "HG", "NG", "WTI", "BRENT", "XAG", "XAU", "BZ",
 }
 # batch59 (#692/#699): سلع لا سوق Spot لها على OKX بهذا الرمز (XAG-USDT Spot = سهم AG المُرمَّز) —
 # السعر والشموع من العقد الدائم دائماً مهما كان نوع السوق المطلوب.
-_PERP_ONLY_COMMODITY = {"XAG"}
+_PERP_ONLY_COMMODITY = {"XAG", "XAU", "BZ"}   # batch68d: الذهب XAU والنفط برنت BZ عقود دائمة فقط (قرار رحال)
 
 _TOKENIZED_STOCK_MAP = {
     # الأسهم الأمريكية الكبرى
@@ -69,6 +69,15 @@ _TOKENIZED_STOCK_MAP = {
     "XMSTR": {"okx_spot": "XMSTR",  "okx_futures": "MSTR",  "yahoo": "MSTR",  "base": "MSTR", "is_stock": True},
     "SPCX":  {"okx_spot": "XSPCX",  "okx_futures": "SPCX",  "yahoo": "SPY",   "base": "SPCX", "yahoo_proxy": True, "is_stock": True},
     "XSPCX": {"okx_spot": "XSPCX",  "okx_futures": "SPCX",  "yahoo": "SPY",   "base": "SPCX", "yahoo_proxy": True, "is_stock": True},
+    # batch68d (قرار رحال 2026-11-06): أصول التداول الآلي — عقود OKX الدائمة للأسهم (CRCL/SNDK/MU/QQQ)
+    "CRCL":  {"okx_spot": "XCRCL",  "okx_futures": "CRCL",  "yahoo": "CRCL",  "base": "CRCL", "is_stock": True},
+    "XCRCL": {"okx_spot": "XCRCL",  "okx_futures": "CRCL",  "yahoo": "CRCL",  "base": "CRCL", "is_stock": True},
+    "SNDK":  {"okx_spot": "XSNDK",  "okx_futures": "SNDK",  "yahoo": "SNDK",  "base": "SNDK", "is_stock": True},
+    "XSNDK": {"okx_spot": "XSNDK",  "okx_futures": "SNDK",  "yahoo": "SNDK",  "base": "SNDK", "is_stock": True},
+    "MU":    {"okx_spot": "XMU",    "okx_futures": "MU",    "yahoo": "MU",    "base": "MU",   "is_stock": True},
+    "XMU":   {"okx_spot": "XMU",    "okx_futures": "MU",    "yahoo": "MU",    "base": "MU",   "is_stock": True},
+    "QQQ":   {"okx_spot": "XQQQ",   "okx_futures": "QQQ",   "yahoo": "QQQ",   "base": "QQQ",  "is_stock": True},
+    "XQQQ":  {"okx_spot": "XQQQ",   "okx_futures": "QQQ",   "yahoo": "QQQ",   "base": "QQQ",  "is_stock": True},
     # أسهم إضافية
     "BABA":  {"okx_spot": "XBABA",  "okx_futures": "BABA",  "yahoo": "BABA",  "base": "BABA", "is_stock": True},
     "XBABA": {"okx_spot": "XBABA",  "okx_futures": "BABA",  "yahoo": "BABA",  "base": "BABA", "is_stock": True},
