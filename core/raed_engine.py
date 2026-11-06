@@ -988,10 +988,11 @@ class RaedEngine:
                 _sum68 = {}
                 logger.warning(f"auto_b68 cycle: {_e68}")
             # كل صفقة آلية تصل بإشعار مستقل؛ التقرير يذكر الملخص فقط
-            _auto_line68 = ""
-            if _sum68.get("scanned"):
-                _auto_line68 = (f"🤖 التداول الآلي الافتراضي (منطق /signal المجمّد): فُحصت {_sum68['scanned']} عملة — "
-                                f"نُفّذ شراء {_sum68.get('long', 0)} / Short {_sum68.get('short', 0)} — /autostats")
+            try:   # batch68b: السطر يظهر دائماً (كان يختفي حين لا تُفحص أي عملة فيبدو المسح القديم وحده)
+                from core.auto_trader_b68 import scan_line_b68 as _sl68
+                _auto_line68 = _sl68(_sum68)
+            except Exception:
+                _auto_line68 = ""
 
             # 4b. batch68: أُوقف إشعار «فرصة تداول — موافقة مطلوبة» — كان مبنياً على ثقة ≥65% (لا حكم /signal)،
             # وزرّه «✅ نفّذ» ينفّذ شراءً افتراضياً بمنطق قديم (حتى لإشارة بيع) فيُربك القياس الآلي.
@@ -1012,9 +1013,9 @@ class RaedEngine:
                         f"━━━━━━━━━━━━━━━━━━\n"
                         f"السوق: {regime.description_ar}\n"
                         f"Fear & Greed: {fear_val} ({_fgz_scan(fear_val)[0]})\n\n"
-                        f"لا فرص قوية حالياً (الحد: {_SCAN_STRONG_CONF:.0%} مع اتجاه شراء/بيع واضح)\n"
+                        f"📡 المسح السريع (أكبر 5 — للعلم فقط، لا ينفّذ): لا إشارة ≥ {_SCAN_STRONG_CONF:.0%} مع اتجاه واضح\n"
                         f"أفضل إشارة: {b['symbol']} {b['confidence']:.0%} — {_dir_scan}\n"
-                        f"العملات الممسوحة: {len(all_signals)}\n"
+                        f"عملات المسح السريع: {len(all_signals)}\n"
                         + (f"{_auto_line68}\n" if _auto_line68 else "")
                         + f"{self.scheduler.next_scan_ar()}\n\n"
                         f"{_DISC_SCAN}"

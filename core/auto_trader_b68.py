@@ -120,11 +120,20 @@ def _long_factor(rec: dict, tier: str) -> float:
     return min(1.0, float(rec.get("size_pct") or 0) / mx)
 
 
+# batch68b: قائمة احتياطية حين يتعذّر CoinGecko (كان طلب limit=40 مباشرة بعد طلب المسح يُرفض 429 فلا يُفحص شيء)
+FALLBACK_TOP = ["BTC", "ETH", "XRP", "BNB", "SOL", "TRX", "DOGE", "ADA", "HYPE", "LINK",
+                "BCH", "XLM", "SUI", "AVAX", "LTC", "HBAR", "TON", "DOT", "UNI", "AAVE"]
+
+
 async def _universe(engine) -> list:
-    try:
-        coins = await engine.data_layer.get_top_coins(limit=40) or []
-    except Exception:
-        coins = []
+    coins = []
+    for lim in (150, 30, 40):   # نفس مفاتيح كاش المسح الرباعي أولاً (بلا طلب جديد)
+        try:
+            coins = await engine.data_layer.get_top_coins(limit=lim) or []
+        except Exception:
+            coins = []
+        if len(coins) >= AUTO_UNIVERSE:
+            break
     out = []
     for c in coins:
         s = str((c or {}).get("symbol") or "").upper()
@@ -132,6 +141,12 @@ async def _universe(engine) -> list:
             out.append(s)
         if len(out) >= AUTO_UNIVERSE:
             break
+    if len(out) < AUTO_UNIVERSE:
+        for s_ in FALLBACK_TOP:
+            if s_ not in out:
+                out.append(s_)
+            if len(out) >= AUTO_UNIVERSE:
+                break
     return out
 
 
@@ -139,18 +154,22 @@ async def run_auto_cycle_b68(engine, send_fn=None, bot_data=None) -> dict:
     """دورة دخول واحدة لكل مستخدمي التداول الآلي. تُرجع ملخصاً للسجل."""
     from core.virtual_wallet import VirtualWallet
     from handlers.analysis import headless_signal_b68
-    summary = {"scanned": 0, "long": 0, "short": 0, "skipped": {}}
+    summary = {"scanned": 0, "long": 0, "short": 0, "skipped": {}, "universe": 0, "users": 0,
+               "waits": 0, "errors": 0, "ev_mult": 1.0}
     uids = _sm().get_autotrade_users() or []
+    summary["users"] = len(uids)
     if not uids:
         return summary
     try:
         ev_mult, ev_reason = engine.event_risk.get_exposure_multiplier()
     except Exception:
         ev_mult, ev_reason = 1.0, ""
+    summary["ev_mult"] = ev_mult
     if ev_mult <= 0:
         summary["skipped"]["event"] = ev_reason
         return summary
     syms = await _universe(engine)
+    summary["universe"] = len(syms)
     for uid in uids:
         try:
             tier = _sm().get_tier(uid)
@@ -171,8 +190,11 @@ async def run_auto_cycle_b68(engine, send_fn=None, bot_data=None) -> dict:
             try:
                 rec = await headless_signal_b68(engine, sym, "spot", uid, bot_data)
             except Exception as e:
-                logger.info(f"auto_b68 {sym}: /signal spot فشل — {type(e).__name__}")
+                summary["errors"] += 1
+                logger.warning(f"auto_b68 {sym}: /signal spot فشل — {type(e).__name__}: {e}")
                 continue
+            if not rec:
+                summary["errors"] += 1
             try:
                 pd = await engine.data_layer.get_price(sym)
                 px = float((pd or {}).get("price") or 0)
@@ -209,6 +231,7 @@ async def run_auto_cycle_b68(engine, send_fn=None, bot_data=None) -> dict:
                 continue
             # Short: فقط حين يميل /signal للهبوط بوضوح (ثقة الشراء ≤ 35% = ميل هبوط ≥ 65%)
             if float(rec.get("confidence") or 1) > 0.35:
+                summary["waits"] += 1 if rec else 0
                 continue
             try:
                 recf = await headless_signal_b68(engine, sym, "futures", uid, bot_data)
@@ -218,6 +241,7 @@ async def run_auto_cycle_b68(engine, send_fn=None, bot_data=None) -> dict:
             sh = (recf or {}).get("short") or {}
             ok2, why2, rr2 = short_gate_b68(sh, px)
             if not ok2:
+                summary["waits"] += 1
                 continue
             mg = size_usd_b68(vw.total_value, float(sh.get("size_factor") or 0), ev_mult)
             mg = min(mg, vw.balance * 0.95)
@@ -269,6 +293,26 @@ def _track_close_b68(engine, sid, px, why):
             engine.signal_tracker.close_signal(sid, px, {"sl": "closed_sl", "time": "expired"}.get(why, "closed_tp"))
     except Exception as e:
         logger.debug(f"auto_b68 tracker close: {e}")
+
+
+def scan_line_b68(sm: dict) -> str:
+    """سطر تقرير المسح: ما فعله التداول الآلي في هذه الدورة (يظهر دائماً، حتى بلا صفقات)."""
+    sm = sm or {}
+    if not sm.get("users"):
+        return "🤖 التداول الآلي: غير مُفعَّل لأي حساب — /autotrade on"
+    if sm.get("skipped", {}).get("event"):
+        return f"🤖 التداول الآلي: لا دخول الآن — {sm['skipped']['event']} (سقف التعرض 0%)"
+    if not sm.get("universe"):
+        return "⚠️ التداول الآلي: تعذّر جلب قائمة العملات — لم يُفحص شيء في هذه الدورة"
+    t = (f"🤖 التداول الآلي (حكم /signal الكامل — مجمّد b68): فُحصت {sm.get('scanned', 0)} من أكبر {sm['universe']} عملة — "
+         f"شراء {sm.get('long', 0)} / Short {sm.get('short', 0)}")
+    if not (sm.get("long") or sm.get("short")):
+        t += " — لا عملة استوفت حكم «دخول» الآن"
+    if sm.get("errors"):
+        t += f" (تعذّر تحليل {sm['errors']})"
+    if float(sm.get("ev_mult", 1) or 1) < 1:
+        t += f" | سقف التعرض {float(sm['ev_mult']):.0%}"
+    return t + " — /autostats"
 
 
 def _ledger_open(uid, sym, side, px, amt, extra):
