@@ -178,7 +178,8 @@ async def run_auto_cycle_b68(engine, send_fn=None, bot_data=None) -> dict:
     from core.virtual_wallet import VirtualWallet
     from handlers.analysis import headless_signal_b68
     summary = {"scanned": 0, "long": 0, "short": 0, "skipped": {}, "universe": 0, "users": 0,
-               "waits": 0, "errors": 0, "ev_mult": 1.0}
+               "waits": 0, "errors": 0, "ev_mult": 1.0, "scanned_syms": [], "err_syms": []}
+    _rec_cache = {}   # batch68g: (الباقة، الأصل) → قرار /signal — لا يُعاد التحليل لكل حساب بنفس الباقة
     uids = _sm().get_autotrade_users() or []
     summary["users"] = len(uids)
     if not uids:
@@ -211,17 +212,26 @@ async def run_auto_cycle_b68(engine, send_fn=None, bot_data=None) -> dict:
             if sym in vw.positions or sym in vw.futures:
                 continue
             summary["scanned"] += 1
+            if sym not in summary["scanned_syms"]:
+                summary["scanned_syms"].append(sym)
             # batch68e (قرار رحال 2026-11-06): كل الأصول — العملات الرقمية والأسهم المرمّزة والذهب والفضة والنفط —
             # تُحلَّل وتُنفَّذ في Futures 1x للجهتين (شراء وبيع). /signal بسوق Futures مرة واحدة يعطي حكم الشراء وتقييم Short معاً.
             _fut_long = True
             rec = {}
-            try:
-                rec = await headless_signal_b68(engine, sym, "futures", uid, bot_data)
-            except Exception as e:
-                logger.warning(f"auto_b68 {sym}: /signal futures فشل — {type(e).__name__}: {e}")
-                rec = {}
+            _ck = (tier, sym)
+            if _ck in _rec_cache:
+                rec = _rec_cache[_ck]
+            else:
+                try:
+                    rec = await headless_signal_b68(engine, sym, "futures", uid, bot_data)
+                except Exception as e:
+                    logger.warning(f"auto_b68 {sym}: /signal futures فشل — {type(e).__name__}: {e}")
+                    rec = {}
+                _rec_cache[_ck] = rec
             if not rec:
                 summary["errors"] += 1
+                if sym not in summary["err_syms"]:
+                    summary["err_syms"].append(sym)
                 continue
             try:
                 pd = await engine.data_layer.get_price(sym, mkttype="futures")   # batch68e: سعر العقد الدائم
@@ -342,12 +352,19 @@ def scan_line_b68(sm: dict) -> str:
         return f"🤖 التداول الآلي: لا دخول الآن — {sm['skipped']['event']} (سقف التعرض 0%)"
     if not sm.get("universe"):
         return "⚠️ التداول الآلي: تعذّر جلب قائمة العملات — لم يُفحص شيء في هذه الدورة"
-    t = (f"🤖 التداول الآلي (حكم /signal الكامل — مجمّد b68): فُحص {sm.get('scanned', 0)} من {sm['universe']} أصلاً "
-         f"(أكبر 20 عملة + النفط والذهب والفضة و10 أسهم مرمّزة — كلها Futures 1x للجهتين) — "
+    # batch68g: العدّ بالأصول لا بالحساب×الأصل (كان «فُحص 98 من 33» مع 3 حسابات مفعّلة)
+    _ns = len(sm.get("scanned_syms") or []) or sm.get("scanned", 0)
+    _nu = int(sm.get("users") or 1)
+    t = (f"🤖 التداول الآلي (حكم /signal الكامل — مجمّد b68): فُحص {_ns} من {sm['universe']} أصلاً"
+         + (f" لـ{_nu} حسابات" if _nu > 1 else "")
+         + " (أكبر 20 عملة + النفط والذهب والفضة و10 أسهم مرمّزة — كلها Futures 1x للجهتين) — "
          f"شراء {sm.get('long', 0)} / Short {sm.get('short', 0)}")
     if not (sm.get("long") or sm.get("short")):
-        t += " — لا عملة استوفت حكم «دخول» الآن"
-    if sm.get("errors"):
+        t += " — لا أصل استوفى حكم «دخول» الآن"
+    _es = sm.get("err_syms") or []
+    if _es:
+        t += f" (تعذّر تحليل {len(_es)}: {'، '.join(_es[:12])})"
+    elif sm.get("errors"):
         t += f" (تعذّر تحليل {sm['errors']})"
     if float(sm.get("ev_mult", 1) or 1) < 1:
         t += f" | سقف التعرض {float(sm['ev_mult']):.0%}"
