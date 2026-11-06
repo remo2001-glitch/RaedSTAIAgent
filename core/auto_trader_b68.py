@@ -6,7 +6,7 @@ core/auto_trader_b68.py — التداول الآلي الافتراضي بمن�
     لا منطق دخول/وقف مستقل في المسح (كان: ثقة ≥65% فقط ووقف −2%/هدف +4% ثابتان).
   • المستويات: دخول/وقف/هدفان 60/40 من /signal، وخروج زمني 5 أيام.
   • النطاق: أكبر 20 عملة (بلا العملات المستقرة)، 6 مرات يومياً مع المسح الرباعي.
-  • السوق: الشراء في الفوري؛ Short في Futures افتراضي برافعة 1x (تقييم Short في /signal بسوق Futures).
+  • السوق (batch68e — قرار رحال): كل الأصول في Futures افتراضي برافعة 1x للجهتين — شراء وShort (حكم /signal بسوق Futures).
   • الحجم: 5% من المحفظة × (حجم /signal ÷ أقصى حجم للباقة) × سقف التعرض (70%/50% حول الأحداث الكبيرة).
   • القياس: سجل منفصل autoledger_b68 — المراكز القديمة تبقى كما هي ولا تدخل القياس.
   • الرسوم والانزلاق: Spot 0.1% لكل جهة، Futures 0.05% لكل جهة، وانزلاق 0.1% عند الدخول والخروج.
@@ -127,6 +127,14 @@ def _long_factor(rec: dict, tier: str) -> float:
 AUTO_EXTRA = ["BZ", "XAG", "XAU", "SPCX", "MSTR", "CRCL", "SNDK", "TSLA", "INTC", "GOOGL", "QQQ", "MU", "NVDA"]
 
 
+AUTO_STOCKS = ["SPCX", "MSTR", "CRCL", "SNDK", "TSLA", "INTC", "GOOGL", "QQQ", "MU", "NVDA"]
+
+
+def _futures_only_b68(sym: str) -> bool:
+    """قرار رحال 2026-11-06: الذهب والفضة والنفط والأسهم الأمريكية المرمّزة — تنفيذ Futures فقط (شراء وبيع، 1x)."""
+    return _perp_only(sym) or str(sym).upper() in AUTO_STOCKS
+
+
 def _perp_only(sym: str) -> bool:
     try:
         from core.data_layer import _PERP_ONLY_COMMODITY
@@ -203,26 +211,20 @@ async def run_auto_cycle_b68(engine, send_fn=None, bot_data=None) -> dict:
             if sym in vw.positions or sym in vw.futures:
                 continue
             summary["scanned"] += 1
-            # batch68d: الأصول ذات العقد الدائم فقط (BZ/XAG/XAU) تُحلَّل وتُنفَّذ في Futures 1x للجهتين؛
-            # الأسهم: Spot أولاً، وإن تعذّر تحليلها Spot (لا سوق فوري لها) فـFutures 1x
-            _fut_long = _perp_only(sym)
+            # batch68e (قرار رحال 2026-11-06): كل الأصول — العملات الرقمية والأسهم المرمّزة والذهب والفضة والنفط —
+            # تُحلَّل وتُنفَّذ في Futures 1x للجهتين (شراء وبيع). /signal بسوق Futures مرة واحدة يعطي حكم الشراء وتقييم Short معاً.
+            _fut_long = True
             rec = {}
             try:
-                rec = await headless_signal_b68(engine, sym, "futures" if _fut_long else "spot", uid, bot_data)
+                rec = await headless_signal_b68(engine, sym, "futures", uid, bot_data)
             except Exception as e:
-                logger.warning(f"auto_b68 {sym}: /signal فشل — {type(e).__name__}: {e}")
+                logger.warning(f"auto_b68 {sym}: /signal futures فشل — {type(e).__name__}: {e}")
                 rec = {}
-            if not rec and not _fut_long and sym in AUTO_EXTRA:
-                try:
-                    rec = await headless_signal_b68(engine, sym, "futures", uid, bot_data)
-                    _fut_long = bool(rec)
-                except Exception:
-                    rec = {}
             if not rec:
                 summary["errors"] += 1
                 continue
             try:
-                pd = await engine.data_layer.get_price(sym)
+                pd = await engine.data_layer.get_price(sym, mkttype="futures")   # batch68e: سعر العقد الدائم
                 px = float((pd or {}).get("price") or 0)
             except Exception:
                 px = 0.0
@@ -244,7 +246,7 @@ async def run_auto_cycle_b68(engine, send_fn=None, bot_data=None) -> dict:
                              "tp1": float(rec["tp1"]), "tp2": float(rec.get("tp2") or rec["tp1"]), "tp1_done": False,
                              "max_hold_hours": AUTO_HOLD_HOURS, "regime": rec.get("regime_bucket", ""),
                              "rr_entry": round(rr, 3), "conf_entry": float(rec.get("confidence") or 0)}
-                    if _fut_long:   # batch68d: شراء عبر Futures 1x (لا Spot للأصل)
+                    if _fut_long:   # batch68e: كل الشراء الآلي عبر Futures 1x
                         _ex_f = {k: v for k, v in extra.items() if k not in ("stop_loss", "take_profit", "max_hold_hours")}
                         r = vw.open_futures(sym, "long", epx, amt, 1, stop_loss=_sl_use,
                                             take_profit=float(rec.get("tp2") or rec["tp1"]), max_hold_hours=AUTO_HOLD_HOURS,
@@ -341,7 +343,7 @@ def scan_line_b68(sm: dict) -> str:
     if not sm.get("universe"):
         return "⚠️ التداول الآلي: تعذّر جلب قائمة العملات — لم يُفحص شيء في هذه الدورة"
     t = (f"🤖 التداول الآلي (حكم /signal الكامل — مجمّد b68): فُحص {sm.get('scanned', 0)} من {sm['universe']} أصلاً "
-         f"(أكبر 20 عملة + النفط والذهب والفضة و10 أسهم مرمّزة) — "
+         f"(أكبر 20 عملة + النفط والذهب والفضة و10 أسهم مرمّزة — كلها Futures 1x للجهتين) — "
          f"شراء {sm.get('long', 0)} / Short {sm.get('short', 0)}")
     if not (sm.get("long") or sm.get("short")):
         t += " — لا عملة استوفت حكم «دخول» الآن"
@@ -362,7 +364,7 @@ def _ledger_open(uid, sym, side, px, amt, extra):
 def _open_msg(sym, side, px, amt, extra, rr, ev_mult) -> str:
     from handlers.analysis import _fmt_price
     return ("🤖 *صفقة آلية افتراضية* (منطق /signal المجمّد — b68)\n"
-            f"• {sym} {'🟢 شراء Spot' if side == 'long' else '🟢 شراء Futures 1x (لا Spot للأصل)' if side == 'long_fut' else '🔴 Short Futures 1x'} عند {_fmt_price(px)} — ${amt:,.0f}\n"
+            f"• {sym} {'🟢 شراء Spot' if side == 'long' else '🟢 شراء Futures 1x' if side == 'long_fut' else '🔴 Short Futures 1x'} عند {_fmt_price(px)} — ${amt:,.0f}\n"
             f"• الوقف {_fmt_price(extra.get('stop_loss'))} | TP1 {_fmt_price(extra.get('tp1'))} (60%) | TP2 {_fmt_price(extra.get('tp2'))} (40%)\n"
             f"• R/R المرجّح عند التنفيذ 1:{rr:.2f}" + (f" | سقف التعرض {ev_mult:.0%}" if ev_mult < 1 else "") + "\n"
             "🎮 افتراضي — /autostats لنتائج القياس")
@@ -415,7 +417,7 @@ async def check_auto_exits_b68(engine, send_fn=None) -> int:
                     notes.append(_close_msg(sym, "long", why, t))
             for sym in [s for s, p in vw.futures.items() if p.get("logic_ver")]:
                 pos = vw.futures[sym]
-                pd = await engine.data_layer.get_price(sym)
+                pd = await engine.data_layer.get_price(sym, mkttype="futures")
                 px = float((pd or {}).get("price") or 0)
                 if px <= 0:
                     continue
