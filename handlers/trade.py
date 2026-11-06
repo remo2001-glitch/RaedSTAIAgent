@@ -406,8 +406,9 @@ def _proposal_text(p: dict) -> str:
         f"🎯 *نقاط الصفقة:*\n"
         f"• الدخول: {_fmt_price(p['price'])}\n"
         f"• وقف الخسارة: {_fmt_price(p['sl'])} (-{p['sl_pct']:.1f}%)\n"
-        f"• الهدف: {_fmt_price(p['tp1'])} (+{p['tp1_pct']:.1f}%)\n"
-        f"• هدف 2 (مرجعي): {_fmt_price(p['tp2'])} (+{p['tp2_pct']:.1f}%)\n"
+        f"• الهدف 1: {_fmt_price(p['tp1'])} (+{p['tp1_pct']:.1f}%) — يُباع 60%\n"
+        f"• الهدف 2: {_fmt_price(p['tp2'])} (+{p['tp2_pct']:.1f}%) — الـ40% الباقية\n"
+        f"• بعد الهدف 1 يصبح الوقف = سعر الهدف 1 (ربح مضمون للباقي)\n"
         f"• R/R عند السعر الحالي: 1:{p.get('rr', 0):.2f}\n"
         f"• SL/TP يوضعان على المنصة نفسها متى دعمت ذلك\n\n"
         f"📡 المصدر: قرار /signal قبل {_age_ar_b60(p.get('sig_age_min', 0))}"
@@ -586,7 +587,10 @@ async def _execute_trade(engine, user_id: int, p: dict, context,
     # نفس نسب SL/TP المعروضة تُطبَّق على السعر الفعلي لتنفيذ المنصة
     trade = await om.open_trade(
         symbol=base, side="Buy", size_usd=p["size"], entry_price=live,
-        stop_loss_pct=p["sl_pct"], take_profit_pct=p["tp1_pct"],
+        # batch68f (قرار رحال): المنصة تحمل الوقف والهدف 2؛ عند الهدف 1 يُباع 60% ويرتفع الوقف إلى سعره
+        stop_loss_pct=p["sl_pct"],
+        take_profit_pct=(p["tp2_pct"] if p.get("tp2_pct", 0) > p["tp1_pct"] else p["tp1_pct"]),
+        tp1_pct=(p["tp1_pct"] if p.get("tp2_pct", 0) > p["tp1_pct"] else 0.0),
         order_type="MARKET", user_id=user_id,
         auto_protect=_get_tier(engine, user_id) in ("gold", "diamond", "admin"))
 
@@ -604,7 +608,9 @@ async def _execute_trade(engine, user_id: int, p: dict, context,
         + (f" — المتاح بعد رسوم المنصة: {_qb58(trade.qty)}"
            if (getattr(trade, 'qty_gross', 0) or 0) - trade.qty > 1e-12 else "") + "\n"
         f"🛑 وقف الخسارة: {_fmt_price(trade.stop_loss)}\n"
-        f"🎯 الهدف: {_fmt_price(trade.take_profit)}\n"
+        + (f"🎯 الهدف 1: {_fmt_price(trade.tp1)} — يُباع 60% ثم يرتفع الوقف إلى هذا السعر\n"
+           f"🎯 الهدف 2: {_fmt_price(trade.take_profit)} — الـ40% الباقية\n"
+           if getattr(trade, "tp1", 0) else f"🎯 الهدف: {_fmt_price(trade.take_profit)}\n") +
         f"{trade.prot_note}\n"
         f"📋 رقم الأمر: {trade.order_id}\n\n"
         f"⚠️ هذا تنفيذ حقيقي — راقب صفقتك"
@@ -614,7 +620,7 @@ async def _execute_trade(engine, user_id: int, p: dict, context,
     try:
         _history_add(user_id, {
             "symbol": p["symbol"], "price": trade.entry_price, "sl": trade.stop_loss,
-            "tp1": trade.take_profit, "tp2": p["tp2"], "source": source,
+            "tp1": (getattr(trade, "tp1", 0) or trade.take_profit), "tp2": p["tp2"], "source": source,
             "time": datetime.now(timezone.utc).isoformat(),
             "order_id": trade.order_id, "size": trade.size_usd,
         })

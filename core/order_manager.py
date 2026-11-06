@@ -24,6 +24,7 @@ CLOSE_REASON_AR = {
     "manual":          "إغلاق يدوي",
     "stop_loss":       "وقف الخسارة",
     "stop_loss_auto":  "وقف الخسارة (حماية تلقائية)",
+    "stop_at_tp1":     "الوقف المرفوع إلى الهدف 1 (ربح مضمون للـ40% الباقية)",
     "take_profit":     "هدف الربح",
     "trailing_stop":   "Trailing Stop",
     "exchange_tp":     "هدف الربح (أمر على المنصة)",
@@ -88,6 +89,11 @@ class LiveTrade:
     fee_close_usd:     float = 0.0    # رسوم البيع بالدولار
     fee_estimated:     bool  = False  # الرسوم مقدَّرة (المنصة لم تُعِدها)
     dust_note:         str   = ""     # بقايا لا تُباع (أقل من الحد الأدنى)
+    # ── الدفعة 68f (قرار رحال 2026-11-06): الهدف 1 جزئي 60% ثم الوقف = سعر الهدف 1 ──────────
+    tp1:               float = 0.0    # سعر الهدف 1 (0 = هدف واحد كما قبل)
+    tp1_done:          bool  = False
+    realized_partial_usd: float = 0.0 # صافي الجزء المغلق عند الهدف 1
+    cost_initial_usd:  float = 0.0    # تكلفة الصفقة كاملة (لنسبة الربح الإجمالية)
 
 
 _LT_FIELDS = {f.name for f in fields(LiveTrade)}
@@ -236,11 +242,11 @@ class OrderManager:
                       "limit_price", "trailing_pct", "trailing_stop_pct",
                       "trailing_stop_price", "highest_price", "remind_at",
                       "profit_target_50pct", "sl_pct", "tp_pct", "prot_sl",
-                      "last_prot_sync"):
+                      "last_prot_sync", "tp1", "realized_partial_usd", "cost_initial_usd"):
                 if k in clean:
                     clean[k] = _num(clean[k])
             for k in ("trailing_activated", "auto_protect", "remind_sent",
-                      "fill_unconfirmed", "ex_pending"):
+                      "fill_unconfirmed", "ex_pending", "tp1_done"):
                 if k in clean:
                     v = clean[k]
                     clean[k] = (str(v).lower() in ("true", "1")) if isinstance(v, str) else bool(v)
@@ -543,7 +549,8 @@ class OrderManager:
                           order_type: str = "MARKET",
                           user_id: int = 0,
                           limit_price: float = 0.0,
-                          auto_protect: bool = False) -> Optional[LiveTrade]:
+                          auto_protect: bool = False,
+                          tp1_pct: float = 0.0) -> Optional[LiveTrade]:
         """
         يفتح صفقة حقيقية ويُسجّلها. عند الفشل يُعيد None ويضع السبب في last_error.
         """
@@ -652,6 +659,10 @@ class OrderManager:
             fill_unconfirmed=unconfirmed,
             om_scope=self.scope,
         )
+        # batch68f: هدفان — المنصة تحمل الوقف والهدف 2 للكمية كاملة، والبوت يبيع 60% عند الهدف 1 ثم يرفع الوقف إليه
+        if tp1_pct and 0 < float(tp1_pct) < float(take_profit_pct):
+            trade.tp1 = avg * (1 + float(tp1_pct) / 100)
+        trade.cost_initial_usd = gross * avg + (fee_open_usd if gross - net_qty <= 1e-15 else 0.0)
         await self._place_protection(trade)
         self._trades[trade_id] = trade
         self._save_trade_to_redis(trade)
@@ -723,6 +734,8 @@ class OrderManager:
         """يُنهي الصفقة (بعد تأكيد الخروج فعلياً)."""
         if exit_price <= 0:
             exit_price = trade.entry_price
+        if trade.tp1_done and reason in ("stop_loss", "stop_loss_auto", "exchange_sl"):
+            reason = "stop_at_tp1"   # batch68f
         if trade.side.lower() in ("buy", "long"):
             # batch58 (#689): صافٍ بعد رسوم الشراء والبيع، بالكمية الفعلية المباعة والتكلفة الفعلية المدفوعة
             if not (trade.fee_close_usd or 0) > 0:
@@ -732,6 +745,10 @@ class OrderManager:
             _fee_open_quote = trade.fee_open_usd if self._gross(trade) - float(trade.qty or 0) <= 1e-15 else 0.0
             pnl_usd = (float(trade.qty or 0) * exit_price - trade.fee_close_usd) - (_cost + _fee_open_quote)
             pnl_pct = pnl_usd / _cost * 100 if _cost > 0 else 0.0
+            if trade.tp1_done:   # batch68f: يُضاف صافي الجزء المغلق عند الهدف 1، والنسبة من التكلفة الأصلية كاملة
+                pnl_usd += float(trade.realized_partial_usd or 0)
+                _ci = float(trade.cost_initial_usd or 0) or (_cost + _fee_open_quote)
+                pnl_pct = pnl_usd / _ci * 100 if _ci > 0 else 0.0
         else:
             pnl_pct = (trade.entry_price - exit_price) / trade.entry_price * 100 if trade.entry_price else 0.0
             pnl_usd = (trade.entry_price - exit_price) * trade.qty
@@ -760,6 +777,65 @@ class OrderManager:
                 + (f"• {trade.dust_note}\n" if trade.dust_note else "")
                 + "\n/trades لمراجعة الصفقات")
         return trade
+
+    TP1_FRACTION = 0.6
+
+    async def _take_tp1(self, trade: LiveTrade, price: float) -> bool:
+        """batch68f (قرار رحال 2026-11-06): عند بلوغ الهدف 1 يُباع 60% بسعر السوق، ويصبح الوقف = سعر الهدف 1
+        للكمية الباقية (40%) مع بقاء الهدف 2، وتُعاد أوامر SL/TP على المنصة بالكمية الجديدة. يعيد True إن تمّ."""
+        if trade.tp1 <= 0 or trade.tp1_done or trade.status != "OPEN":
+            return False
+        async with self._lock_for(trade.trade_id):
+            if trade.tp1_done or trade.status != "OPEN":
+                return False
+            st = await self._drop_protection(trade)
+            if st in ("tp", "sl"):
+                info = await self.exchange.protection_status(trade.symbol, trade.prot) if trade.prot else {}
+                px = float((info or {}).get("price") or 0) or await self._ticker(trade.symbol)
+                trade.prot = {}
+                await self._finalize(trade, px, "exchange_tp" if st == "tp" else "exchange_sl")
+                return True
+            if st == "fail":
+                return False
+            qty_before = float(trade.qty or 0)
+            sell_qty = qty_before * self.TP1_FRACTION
+            result = await self.exchange.place_order(symbol=trade.symbol, side="Sell", qty=sell_qty, order_type="MARKET")
+            if not result.success:
+                logger.warning(f"tp1 partial {trade.trade_id}: {result.error}")
+                await self._place_protection(trade)      # أعد الحماية كما كانت
+                self._save_trade_to_redis(trade)
+                return False
+            fill = await self._confirm_fill(result, trade.symbol)
+            sold = float(fill.get("filled") or 0) or float(result.qty or sell_qty)
+            sold = min(sold, qty_before)
+            px = fill.get("avg") or price
+            frac = sold / qty_before if qty_before > 0 else self.TP1_FRACTION
+            fee = abs(float(fill.get("fee", 0) or 0))
+            _c = str(fill.get("fee_ccy", "") or "").upper()
+            fee_usd = (fee if _c in ("USDT", "USD", "USDC", "") else fee * px) if fee > 0 else sold * px * self.EST_FEE_RATE
+            _cost_all = self._gross(trade) * trade.entry_price + (
+                trade.fee_open_usd if self._gross(trade) - qty_before <= 1e-15 else 0.0)
+            part_pnl = sold * px - fee_usd - _cost_all * frac
+            trade.realized_partial_usd = float(trade.realized_partial_usd or 0) + part_pnl
+            if not trade.cost_initial_usd:
+                trade.cost_initial_usd = _cost_all
+            # الكمية والتكلفة الباقية
+            trade.qty = qty_before - sold
+            if trade.qty_gross:
+                trade.qty_gross = float(trade.qty_gross) * (1 - frac)
+            trade.fee_open_usd = float(trade.fee_open_usd or 0) * (1 - frac)
+            trade.size_usd = float(trade.size_usd or 0) * (1 - frac)
+            trade.tp1_done = True
+            trade.stop_loss = max(trade.stop_loss, trade.tp1)   # الوقف الجديد = سعر الهدف 1
+            await self._place_protection(trade)
+            self._save_trade_to_redis(trade)
+            await self._notify(
+                trade.user_id,
+                f"🎯 *الهدف 1 تحقق — {trade.symbol}*\n\n"
+                f"• بيع 60%: {sold:g} بسعر ${px:,.6g} — صافي {_usd_b58(part_pnl)}\n"
+                f"• الباقي 40%: الوقف الجديد = سعر الهدف 1 ${trade.tp1:,.6g} (ربح مضمون)، والهدف 2 ${trade.take_profit:,.6g}\n"
+                f"{trade.prot_note}")
+            return True
 
     async def close_trade(self, trade_id: str,
                            reason: str = "manual") -> Optional[LiveTrade]:
@@ -1090,6 +1166,13 @@ class OrderManager:
                 is_long = trade.side.lower() in ("buy", "long")
                 if not is_long:
                     continue
+                if trade.tp1 > 0 and not trade.tp1_done:   # batch68f
+                    if price >= trade.tp1:
+                        await self._take_tp1(trade, price)
+                        continue
+                    if price <= trade.stop_loss:
+                        await self.close_trade(trade.trade_id, "stop_loss_auto")
+                    continue   # قبل الهدف 1 لا Trailing — الوقف الأصلي فقط
 
                 if price > trade.highest_price:
                     trade.highest_price = price
@@ -1179,6 +1262,9 @@ class OrderManager:
                 if price <= 0:
                     continue
                 is_long = trade.side.lower() in ("buy", "long")
+                if is_long and trade.tp1 > 0 and not trade.tp1_done and price >= trade.tp1:   # batch68f
+                    await self._take_tp1(trade, price)
+                    continue
 
                 # تحريك Trailing Stop إذا مُفعَّل
                 if getattr(trade, "trailing_pct", 0) > 0:
