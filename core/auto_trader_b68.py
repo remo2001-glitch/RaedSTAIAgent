@@ -148,7 +148,31 @@ FALLBACK_TOP = ["BTC", "ETH", "XRP", "BNB", "SOL", "TRX", "DOGE", "ADA", "HYPE",
                 "BCH", "XLM", "SUI", "AVAX", "LTC", "HBAR", "TON", "DOT", "UNI", "AAVE"]
 
 
+_PERP_PROBE_B68 = {}      # batch68i: رمز → (وقت الفحص، هل له عقد دائم USDT على OKX)
+_PERP_PROBE_TTL = 6 * 3600
+LAST_NO_PERP_B68 = []     # آخر ما استُبعد من النطاق لعدم وجود عقد دائم (لسطر التقرير)
+
+
+async def _has_perp_b68(engine, sym: str):
+    """True/False من OKX SWAP؛ None عند تعذّر الفحص نفسه."""
+    import time as _t
+    c = _PERP_PROBE_B68.get(sym)
+    if c and _t.time() - c[0] < _PERP_PROBE_TTL:
+        return c[1]
+    try:
+        pp = await engine.data_layer._price_okx_perp(sym)
+    except Exception:
+        return None
+    ok = bool(pp and float((pp or {}).get("price", 0) or 0) > 0)
+    if ok:   # الرفض لا يُخزَّن: عطل شبكة عابر لا يستبعد عملة لساعات
+        _PERP_PROBE_B68[sym] = (_t.time(), ok)
+    return ok
+
+
 async def _universe(engine) -> list:
+    """أكبر 20 عملة (بلا عملات مستقرة/مغلّفة) **لها عقد دائم على OKX** — batch68i: كل التنفيذ Futures 1x،
+    فالعملة غير المدرجة في Futures (مثل XMR وRAIN في مسح 5 ص) تُستبعد ويحل محلها التالي في الترتيب."""
+    global LAST_NO_PERP_B68
     coins = []
     for lim in (150, 30, 40):   # نفس مفاتيح كاش المسح الرباعي أولاً (بلا طلب جديد)
         try:
@@ -157,19 +181,32 @@ async def _universe(engine) -> list:
             coins = []
         if len(coins) >= AUTO_UNIVERSE:
             break
-    out = []
+    cand = []
     for c in coins:
         s = str((c or {}).get("symbol") or "").upper()
-        if s and s not in STABLES and s not in out:
-            out.append(s)
+        if s and s not in STABLES and s not in cand:
+            cand.append(s)
+    for s_ in FALLBACK_TOP:
+        if s_ not in cand:
+            cand.append(s_)
+    out, no_perp, unknown = [], [], 0
+    probe = hasattr(getattr(engine, "data_layer", None), "_price_okx_perp")
+    for s in cand:
         if len(out) >= AUTO_UNIVERSE:
             break
-    if len(out) < AUTO_UNIVERSE:
-        for s_ in FALLBACK_TOP:
-            if s_ not in out:
-                out.append(s_)
-            if len(out) >= AUTO_UNIVERSE:
-                break
+        if probe:
+            hp = await _has_perp_b68(engine, s)
+            if hp is False:
+                no_perp.append(s)
+                continue
+            if hp is None:
+                unknown += 1
+        out.append(s)
+    # حماية: إن رُفض أكثر من النصف فالأرجح عطل في الشبكة لا غياب العقود — لا نستبعد شيئاً
+    if len(no_perp) > AUTO_UNIVERSE // 2:
+        out = cand[:AUTO_UNIVERSE]
+        no_perp = []
+    LAST_NO_PERP_B68 = no_perp[:]
     return out
 
 
@@ -195,6 +232,7 @@ async def run_auto_cycle_b68(engine, send_fn=None, bot_data=None) -> dict:
     syms = await _universe(engine)
     syms += [x for x in AUTO_EXTRA if x not in syms]   # batch68d
     summary["universe"] = len(syms)
+    summary["no_perp"] = list(LAST_NO_PERP_B68)
     for uid in uids:
         try:
             tier = _sm().get_tier(uid)
@@ -366,6 +404,9 @@ def scan_line_b68(sm: dict) -> str:
         t += f" (تعذّر تحليل {len(_es)}: {'، '.join(_es[:12])})"
     elif sm.get("errors"):
         t += f" (تعذّر تحليل {sm['errors']})"
+    _np = sm.get("no_perp") or []
+    if _np:
+        t += f" (استُبعد لعدم وجود عقد دائم على OKX وحلّ محله التالي: {'، '.join(_np[:8])})"
     if float(sm.get("ev_mult", 1) or 1) < 1:
         t += f" | سقف التعرض {float(sm['ev_mult']):.0%}"
     return t + " — /autostats"
