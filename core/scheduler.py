@@ -49,6 +49,18 @@ class Scheduler:
         self._last_weekly_ts:  float = 0.0
         self._last_monthly_ts: float = 0.0
 
+        # batch71 (مسحا 9 م و1 ص يوم 8–9 نوفمبر لم يصلا): نبضة الحلقة وحالة المسح للحارس و/scanstatus
+        self.loop_beat_ts:      float = 0.0
+        self.loop_restarts:     int   = 0
+        self.scan_started_ts:   float = 0.0
+        self.scan_finished_ts:  float = 0.0
+        self.scan_ok_ts:        float = 0.0
+        self.scan_session:      str   = ""
+        self.scan_status:       str   = "لم يبدأ بعد"
+        self.last_error:        str   = ""
+        self.last_error_ts:     float = 0.0
+        self.step_timeouts:     dict  = {}
+
     # ── التسجيل ──────────────────────────────────────────────
 
     async def _check_all_limit_orders(self):
@@ -115,25 +127,68 @@ class Scheduler:
         logger.info("🛑 Scheduler أوقف")
 
     # ── الحلقة الرئيسية ──────────────────────────────────────
+    async def _step(self, name: str, coro, limit: float):
+        """batch71: كل فحص داخل الحلقة بحد زمني — فحص عالق (طلب لا يعود أو قفل لا يُحرَّر) لا يوقف المسوح."""
+        try:
+            await asyncio.wait_for(coro, timeout=limit)
+        except asyncio.TimeoutError:
+            self.step_timeouts[name] = self.step_timeouts.get(name, 0) + 1
+            self._note_error(f"{name}: تجاوز {int(limit)} ثانية فأُلغي")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            self._note_error(f"{name}: خطأ غير متوقع (التفاصيل في السجل)")
+            logger.error(f"Scheduler {name}: {e}")
+
+    def _note_error(self, txt: str) -> None:
+        self.last_error = txt
+        self.last_error_ts = time.time()
+        logger.warning(f"Scheduler: {txt}")
+
     async def _loop(self):
         tick = 0
         while self._running:
+            self.loop_beat_ts = time.time()
             try:
                 now = datetime.now(timezone.utc)
-                await self._check_scan(now)
-                await self._check_weekly(now)
-                await self._check_monthly(now)
-                await self._check_coins_update(now)
-                await self._check_month_end_review(now)
-                # فحص Limit Orders كل 30 ثانية
+                await self._step("check_scan", self._check_scan(now), 20)
+                await self._step("weekly", self._check_weekly(now), 20)
+                await self._step("monthly", self._check_monthly(now), 20)
+                await self._step("coins_update", self._check_coins_update(now), 60)
+                await self._step("month_end", self._check_month_end_review(now), 20)
+                # فحص Limit Orders كل 30 ثانية — بحد دقيقة (مربوط بـ OKX)
                 if tick % 1 == 0:
-                    await self._check_all_limit_orders()
+                    await self._step("limit_orders", self._check_all_limit_orders(), 60)
                 tick += 1
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error(f"Scheduler loop error: {e}")
             await asyncio.sleep(30)
+
+    def ensure_loop(self) -> bool:
+        """batch71: يعيد تشغيل الحلقة إن ماتت أو توقفت نبضتها أكثر من 5 دقائق. True إن أُعيدت."""
+        if not self._running:
+            return False
+        dead = self._task is None or self._task.done()
+        stale = self.loop_beat_ts and (time.time() - self.loop_beat_ts > 300)
+        if not (dead or stale):
+            return False
+        if self._task and not self._task.done():
+            self._task.cancel()
+        self._task = asyncio.create_task(self._loop())
+        self.loop_restarts += 1
+        self._note_error("حلقة المجدول توقفت فأُعيد تشغيلها" + (" (مهمة منتهية)" if dead else " (نبضة متوقفة)"))
+        return True
+
+    def last_due_scan_ts(self, now_ts: float | None = None) -> float:
+        """آخر موعد مسح مستحق (بداية الساعة) حتى الآن."""
+        now = datetime.fromtimestamp(now_ts or time.time(), timezone.utc)
+        for back in range(0, 25):
+            c = (now - timedelta(hours=back)).replace(minute=0, second=0, microsecond=0)
+            if c.hour in SCAN_HOURS_UTC and c <= now:
+                return c.timestamp()
+        return 0.0
 
 
     async def _check_month_end_review(self, now: datetime):
@@ -218,18 +273,57 @@ class Scheduler:
         self._last_scan_ts = time.time()
         self._spawn(self._run_scan(now))
 
+    SCAN_TIMEOUT_SEC = 25 * 60
+
     async def _run_scan(self, now: datetime):
         ksa_hour = (now.hour + 3) % 24
         session  = _get_session_name(ksa_hour)
         logger.info(f"🔍 مسح {session} — {ksa_hour:02d}:00 KSA")
+        self.scan_started_ts = time.time()
+        self.scan_session = f"{session} ({ksa_hour:02d}:00 KSA)"
+        self.scan_status = "جارٍ"
         try:
             if self._scan_fn:
-                report = await self._scan_fn(session=session, ksa_hour=ksa_hour)
+                # batch71: حد زمني للمسح كله — لا مسح عالق بلا نهاية
+                report = await asyncio.wait_for(self._scan_fn(session=session, ksa_hour=ksa_hour),
+                                                timeout=self.SCAN_TIMEOUT_SEC)
                 if report:
                     await self._safe_send(report)
                     logger.info(f"✅ تقرير المسح أُرسل — {session}")
+                self.scan_ok_ts = time.time()
+                self.scan_status = "اكتمل وأُرسل" if report else "اكتمل بلا تقرير"
+        except asyncio.TimeoutError:
+            self.scan_status = f"تجاوز {self.SCAN_TIMEOUT_SEC // 60} دقيقة فأُلغي"
+            self._note_error(f"مسح {self.scan_session}: تجاوز {self.SCAN_TIMEOUT_SEC // 60} دقيقة")
         except Exception as e:
+            self.scan_status = "فشل"
+            self._note_error(f"مسح {self.scan_session}: خطأ غير متوقع (التفاصيل في السجل)")
             logger.error(f"Scan error ({session}): {e}")
+        finally:
+            self.scan_finished_ts = time.time()
+
+    def status_text_ar(self) -> str:
+        """batch71: /scanstatus (للمالك)."""
+        def _t(ts):
+            if not ts:
+                return "—"
+            return (datetime.fromtimestamp(ts, timezone.utc) + timedelta(hours=3)).strftime("%m-%d %H:%M KSA")
+        now = time.time()
+        beat = (f"قبل {int(now - self.loop_beat_ts)} ثانية" if self.loop_beat_ts else "—")
+        dur = (f"{(self.scan_finished_ts - self.scan_started_ts) / 60:.1f} دقيقة"
+               if self.scan_finished_ts >= self.scan_started_ts > 0 else
+               (f"جارٍ منذ {(now - self.scan_started_ts) / 60:.1f} دقيقة" if self.scan_started_ts else "—"))
+        L = ["🛰️ حالة المسح", "━━━━━━━━━━━━━━━━━━",
+             f"• نبضة المجدول: {beat}" + (f" | أُعيد تشغيلها {self.loop_restarts} مرة" if self.loop_restarts else ""),
+             f"• آخر مسح: {self.scan_session or '—'} — {self.scan_status}",
+             f"• بدأ: {_t(self.scan_started_ts)} | المدة: {dur}",
+             f"• آخر مسح ناجح: {_t(self.scan_ok_ts)}",
+             f"• آخر خطأ: {self.last_error or 'لا يوجد'}" + (f" ({_t(self.last_error_ts)})" if self.last_error else ""),
+             ]
+        if self.step_timeouts:
+            L.append("• فحوص أُلغيت لتجاوز الوقت: " + "، ".join(f"{k} ×{v}" for k, v in self.step_timeouts.items()))
+        L.append(self.next_scan_ar())
+        return "\n".join(L)
 
     # ── التقارير الدورية ─────────────────────────────────────
     async def _check_weekly(self, now: datetime):

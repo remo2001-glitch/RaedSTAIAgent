@@ -13,6 +13,7 @@ main.py v2 — نقطة الدخول الرئيسية
 import asyncio
 import logging
 import os
+import time
 from telegram import Update, BotCommand
 from telegram.ext import (
     Application, CommandHandler, ContextTypes,
@@ -188,7 +189,8 @@ def _build_commands_text(user_id: int, tier: str, tier_name: str) -> str:
     if _ag69.is_owner(user_id):
         sections.append(("🛠️ *المالك — أوامر فنية*", [
             "/killswitch — إيقاف طارئ", "/drift — حالة النموذج", "/review — المراجعة الأسبوعية",
-            "/survey_report — تقرير الاستبيان", "/whaletest — اختبار Whale التاريخي",
+            "/survey\\_report — تقرير الاستبيان", "/whaletest — اختبار Whale التاريخي",
+            "/scanstatus — حالة المسح والمجدول",
             "/stats — يتضمن حالة النظام للمالك",
         ]))
 
@@ -316,6 +318,47 @@ def _install_handler_timeouts(app, limit: float = HANDLER_TIMEOUT_SEC) -> int:
                     n += 1
     logger.info(f"⏱️ مهلة {limit:.0f}ث طُبِّقت على {n} معالجاً")
     return n
+
+
+_WATCH_START_B71 = time.time()
+
+
+async def scan_watchdog_job_b71(context):
+    """batch71 (مسحا 9 م و1 ص لم يصلا يوم 8–9 نوفمبر): يعيد حلقة المجدول إن توقفت، ويُشعر المالك
+    إن لم يكتمل مسح خلال 30 دقيقة من موعده. يعمل في job_queue مستقلاً عن حلقة المجدول نفسها."""
+    try:
+        from core.access_guard import owner_id as _oid71
+        sch = context.application.bot_data.get("scheduler")
+        if sch is None or not hasattr(sch, "ensure_loop"):
+            return
+        notes = []
+        if sch.ensure_loop():
+            notes.append("🔁 حلقة المجدول كانت متوقفة — أُعيد تشغيلها تلقائياً")
+        due = sch.last_due_scan_ts()
+        bd = context.application.bot_data
+        if (due > _WATCH_START_B71 and time.time() - due > 1800 and sch.scan_ok_ts < due
+                and bd.get("watch_alerted_b71") != due):
+            bd["watch_alerted_b71"] = due
+            _ksa = time.strftime("%H:%M", time.gmtime(due + 3 * 3600))
+            notes.append(f"⚠️ مسح {_ksa} KSA لم يكتمل خلال 30 دقيقة — الحالة: {sch.scan_status}"
+                         + (f"\nآخر خطأ: {sch.last_error}" if sch.last_error else ""))
+        if notes and _oid71():
+            await context.bot.send_message(chat_id=_oid71(), text="🛰️ حارس المسح\n" + "\n".join(notes)
+                                           + "\n\nالتفاصيل: /scanstatus")
+    except Exception as e:
+        logger.warning(f"scan_watchdog: {type(e).__name__}: {e}")
+
+
+async def cmd_scanstatus_b71(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/scanstatus — للمالك فقط (البوابة تخفيه عن غيره)."""
+    from core.access_guard import is_owner as _io71
+    if not _io71(update.effective_user.id):
+        return
+    sch = context.application.bot_data.get("scheduler")
+    if sch is None or not hasattr(sch, "status_text_ar"):
+        await update.message.reply_text("🛰️ المجدول غير مُشغَّل")
+        return
+    await update.message.reply_text(sch.status_text_ar())   # نص عادي: أسماء الفحوص فيها «_»
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
@@ -578,6 +621,7 @@ def build_app() -> Application:
 
     # ── الأوامر الرئيسية ──
     app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("scanstatus", cmd_scanstatus_b71))
     app.add_handler(CommandHandler("help",  cmd_help))
     app.add_handler(CommandHandler("about", cmd_about))
 
@@ -617,6 +661,9 @@ def build_app() -> Application:
         interval=300,
         first=60,
     )
+
+    # ── batch71: حارس المسح كل 5 دقائق (حلقة المجدول + مسح لم يكتمل خلال 30 دقيقة) ──
+    app.job_queue.run_repeating(scan_watchdog_job_b71, interval=300, first=240)
 
     # ── batch68: خروج مراكز القياس الآلي (TP1 60% / TP2 / وقف / مدة) كل 5 دقائق ──
     app.job_queue.run_repeating(auto_exit_job_b68, interval=300, first=90)
