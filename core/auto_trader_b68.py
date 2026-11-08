@@ -11,6 +11,7 @@ core/auto_trader_b68.py — التداول الآلي الافتراضي بمن�
   • القياس: سجل منفصل autoledger_b68 — المراكز القديمة تبقى كما هي ولا تدخل القياس.
   • الرسوم والانزلاق: Spot 0.1% لكل جهة، Futures 0.05% لكل جهة، وانزلاق 0.1% عند الدخول والخروج.
 """
+import asyncio
 import json
 import logging
 import time
@@ -27,6 +28,7 @@ AUTO_SPOT_FEE = 0.001
 AUTO_SLIP = 0.001
 AUTO_HOLD_HOURS = 120.0
 AUTO_MIN_USD = 20.0
+AUTO_CONCURRENCY = 4      # batch68j: تحليلات /signal المتزامنة في المسح الآلي
 STABLES = {"USDT", "USDC", "BUSD", "DAI", "TUSD", "USDP", "FDUSD", "USDD", "GUSD", "LUSD", "FRAX",
            "MIM", "ALUSD", "SUSD", "PYUSD", "USDE", "USD1", "RLUSD", "EURC", "USDS", "USDTB", "BUIDL", "USYC",
            # batch68c: أصول مغلّفة/مرهونة تكرّر BTC/ETH (ولا سوق فوري لها على OKX) + رموز منصات بلا سيولة OKX كافية
@@ -233,6 +235,41 @@ async def run_auto_cycle_b68(engine, send_fn=None, bot_data=None) -> dict:
     syms += [x for x in AUTO_EXTRA if x not in syms]   # batch68d
     summary["universe"] = len(syms)
     summary["no_perp"] = list(LAST_NO_PERP_B68)
+    # batch68j (ملاحظة رحال: تقرير المسح يتأخر منذ مسح 9 م يوم 6 نوفمبر): تحليلات /signal كانت متتابعة
+    # (حتى 33 أصلاً × عدد الباقات). الآن تُجلب مسبقاً بالتوازي بحد AUTO_CONCURRENCY — نفس الحكم ونفس المستويات،
+    # والدخول بعدها بسعر لحظي جديد كما كان. لا تغيير في منطق القرار.
+    _t0 = time.time()
+    _need = {}
+    for uid in uids:
+        try:
+            tier = _sm().get_tier(uid)
+        except Exception:
+            tier = "silver"
+        try:
+            wd0 = _sm().get_virtual_wallet(uid) or {}
+        except Exception:
+            wd0 = {}
+        _pos0 = set((wd0.get("positions") or {}).keys()) | set((wd0.get("futures") or {}).keys())
+        _nopen0 = sum(1 for p in (wd0.get("positions") or {}).values() if (p or {}).get("logic_ver")) + \
+                  sum(1 for p in (wd0.get("futures") or {}).values() if (p or {}).get("logic_ver"))
+        if _nopen0 >= AUTO_MAX_OPEN:
+            continue
+        for sym in syms:
+            if sym not in _pos0 and (tier, sym) not in _need:
+                _need[(tier, sym)] = uid
+    _sem = asyncio.Semaphore(AUTO_CONCURRENCY)
+
+    async def _pre(ck, uid_):
+        async with _sem:
+            try:
+                _rec_cache[ck] = await headless_signal_b68(engine, ck[1], "futures", uid_, bot_data)
+            except Exception as e:
+                logger.warning(f"auto_b68 {ck[1]}: /signal futures فشل — {type(e).__name__}: {e}")
+                _rec_cache[ck] = {}
+    if _need:
+        await asyncio.gather(*[_pre(ck, u) for ck, u in _need.items()], return_exceptions=True)
+    summary["analysis_sec"] = round(time.time() - _t0, 1)
+    logger.info(f"auto_b68: {len(_need)} تحليل /signal في {summary['analysis_sec']}s (توازي {AUTO_CONCURRENCY})")
     for uid in uids:
         try:
             tier = _sm().get_tier(uid)
