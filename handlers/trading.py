@@ -664,9 +664,9 @@ async def cmd_live(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"cmd_live: {e}")
         try:
-            await msg.edit_text(f"❌ خطأ: {str(e)[:100]}")
+            await msg.edit_text(f"❌ خطأ — حاول مرة أخرى بعد قليل")
         except Exception:
-            await update.message.reply_text(f"❌ خطأ: {str(e)[:100]}")
+            await update.message.reply_text(f"❌ خطأ — حاول مرة أخرى بعد قليل")
 
 
 # ════════════════════════════════════════════════════════════════
@@ -915,7 +915,7 @@ async def callback_execmode(update: Update, context: ContextTypes.DEFAULT_TYPE):
         import logging
         logging.getLogger("trading").error(f"execmode→cmd_execute: {_ce}", exc_info=True)
         try:
-            await query.edit_message_text(f"❌ خطأ في التنفيذ: {str(_ce)[:100]}")
+            await query.edit_message_text(f"❌ خطأ في التنفيذ — حاول مرة أخرى بعد قليل")
         except Exception:
             pass
 
@@ -985,7 +985,7 @@ async def _handle_trailing_stop(update, context, engine,
     except Exception as e:
         import logging
         logging.getLogger("trading").error(f"_handle_trailing_stop: {e}")
-        await msg.edit_text(f"❌ خطأ: {str(e)[:100]}")
+        await msg.edit_text(f"❌ خطأ — حاول مرة أخرى بعد قليل")
 
 
 async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1622,7 +1622,7 @@ async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         logger.error(f"cmd_execute: {e}")
-        await msg.edit_text(f"❌ خطأ: {str(e)[:100]}")
+        await msg.edit_text(f"❌ خطأ — حاول مرة أخرى بعد قليل")
 
 
 # ════════════════════════════════════════════════════════════════
@@ -1713,7 +1713,7 @@ async def cmd_trades(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup(_close_rows) if _close_rows else None)
     except Exception as e:
         logger.error(f"cmd_trades: {e}")
-        await update.message.reply_text(f"❌ خطأ: {str(e)[:100]}")
+        await update.message.reply_text(f"❌ خطأ — حاول مرة أخرى بعد قليل")
 
 
 # ════════════════════════════════════════════════════════════════
@@ -1737,15 +1737,9 @@ async def cmd_premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ══ حماية صارمة: أوامر الإدارة للمدير فقط ══
     user_tier = _sm.get_tier(user_id)
     # قبول admin من ADMIN_ID أو tier == "admin"
-    try:
-        from core.config import ADMIN_ID as _ADMIN_ID
-        _is_admin = (user_tier == "admin") or (user_id == _ADMIN_ID)
-    except Exception:
-        _is_admin = (user_tier == "admin")
+    _is_admin = _is_admin_b68(user_id)   # batch69: فحص المدير الموحّد
     if not _is_admin:
         logger.warning(f"⚠️ محاولة وصول غير مصرح: user {user_id} → /premium {args}")
-        await update.message.reply_text(
-            "⚠️ هذا الأمر للمدير فقط")
         return
 
     sub = args[0].lower()
@@ -1835,7 +1829,7 @@ async def cmd_premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ أدخل user_id صحيحاً")
     except Exception as e:
         logger.error(f"cmd_premium: {e}")
-        await update.message.reply_text(f"❌ خطأ: {str(e)[:100]}")
+        await update.message.reply_text(f"❌ خطأ — حاول مرة أخرى بعد قليل")
 
 
 # ════════════════════════════════════════════════════════════════
@@ -2038,7 +2032,7 @@ async def handle_trade_callback(update: Update,
                     parse_mode=ParseMode.MARKDOWN)
         except Exception as e:
             logger.error(f"handle_trade_callback: {e}")
-            await query.edit_message_text(f"❌ خطأ: {str(e)[:100]}")
+            await query.edit_message_text(f"❌ خطأ — حاول مرة أخرى بعد قليل")
 
 
 def build_confirm_keyboard(symbol: str, direction: str,
@@ -2063,7 +2057,12 @@ def build_confirm_keyboard(symbol: str, direction: str,
 # /autotrade, /killswitch, /risk, /setportfolio
 # ════════════════════════════════════════════════════════════════
 def _is_admin_b68(user_id: int) -> bool:
-    """نفس فحص /premium: باقة admin أو ADMIN_ID."""
+    """batch69: المصدر الموحّد core.access_guard.is_admin (المالك، أرقام المدراء، باقة admin)."""
+    try:
+        from core.access_guard import is_admin as _ia69
+        return _ia69(user_id)
+    except Exception:
+        pass
     try:
         if _sm.get_tier(user_id) == "admin":
             return True
@@ -2141,7 +2140,7 @@ async def cmd_autotrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # batch68l (طلب رحال): أوامر المدير — عرض الحسابات المفعّلة وإيقاف/تشغيل حساب آخر
     if action in ("users", "off", "on") and (action == "users" or len(args) >= 2):
         if not _is_admin_b68(user_id):
-            await update.message.reply_text("⚠️ هذا الأمر للمدير فقط"); return
+            return   # batch69: أوامر المدير مخفية — لا «للمدير فقط»
         try:
             if action == "users":
                 await update.message.reply_text(_autotrade_users_text_b68(), parse_mode=ParseMode.MARKDOWN)
@@ -2162,7 +2161,8 @@ async def cmd_autotrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if engine.kill_switch.is_active:
             await update.message.reply_text(
-                "🔴 Kill Switch مفعّل — /killswitch reset للتشغيل"); return
+                ("🔴 Kill Switch مفعّل — /killswitch reset للتشغيل" if _is_admin_b68(user_id)
+                 else "⏸️ التداول متوقف مؤقتاً من الإدارة — حاول لاحقاً")); return
 
         ex_info   = engine.get_user_exchange(user_id)
         mode      = f"💰 حقيقي ({ex_info['name'].upper()})" if ex_info else "🎮 افتراضي"
@@ -2237,7 +2237,7 @@ async def cmd_autostats_b68(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _args = context.args or []
         if _args:   # batch68l: /autostats [user_id] — للمدير فقط
             if not _is_admin_b68(uid):
-                await update.message.reply_text("⚠️ عرض قياس حساب آخر للمدير فقط"); return
+                return   # batch69: مخفي لغير المدير
             try:
                 uid = int(str(_args[0]).strip())
             except ValueError:
@@ -2255,6 +2255,9 @@ async def cmd_autostats_b68(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @require_tier("killswitch")
 async def cmd_killswitch(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from core.access_guard import is_owner as _is_owner69
+    if not _is_owner69(update.effective_user.id):   # batch69: أمر فني للمالك فقط
+        return
     engine = _eng(context)
     if not engine:
         await update.message.reply_text("⚠️ النظام لم يُهيَّأ بعد"); return
@@ -2282,7 +2285,7 @@ async def cmd_killswitch(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "⚠️ /killswitch status|trigger|reset")
     except Exception as e:
         logger.error(f"cmd_killswitch: {e}")
-        await update.message.reply_text(f"❌ خطأ: {str(e)[:80]}")
+        await update.message.reply_text(f"❌ خطأ — حاول مرة أخرى بعد قليل")
 
 
 @require_tier("risk")
@@ -2317,7 +2320,7 @@ async def cmd_risk(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "\n".join(lines), parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         logger.error(f"cmd_risk: {e}")
-        await update.message.reply_text(f"❌ خطأ: {str(e)[:80]}")
+        await update.message.reply_text(f"❌ خطأ — حاول مرة أخرى بعد قليل")
 
 
 async def cmd_setportfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3011,8 +3014,8 @@ async def cmd_survey_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from core.state_manager import state_manager as _sm_sr
     from core.config        import ADMIN_ID
     user_id = update.effective_user.id
-    if user_id != ADMIN_ID:
-        await update.message.reply_text("🔒 هذا الأمر للمدير فقط.")
+    from core.access_guard import is_owner as _is_owner69
+    if not _is_owner69(user_id):   # batch69: أمر فني للمالك فقط (كان ADMIN_ID وحده)
         return
     # استهداف مستخدم معين
     args = context.args or []
@@ -3163,7 +3166,7 @@ async def cb_vclose(update, context):
     except Exception as _cve:
         logger.error(f"cb_vclose error: {_cve}")
         try:
-            await query.edit_message_text(f"❌ خطأ: {str(_cve)[:100]}")
+            await query.edit_message_text(f"❌ خطأ — حاول مرة أخرى بعد قليل")
         except Exception:
             pass
 
@@ -3258,7 +3261,7 @@ async def cb_real_orders_pending(update, context):
         else:
             await query.message.reply_text("ℹ️ لا يوجد ربط منصة حقيقي.")
     except Exception as e:
-        await query.message.reply_text(f"❌ خطأ: {str(e)[:100]}")
+        await query.message.reply_text(f"❌ خطأ — حاول مرة أخرى بعد قليل")
 
 
 async def cb_vhistory(update, context):
@@ -3324,7 +3327,7 @@ async def cb_vreset_execute(update, context):
         await query.edit_message_text(
             "✅ تمت إعادة الضبط!\n💵 الرصيد الجديد: $10,000")
     except Exception as e:
-        await query.edit_message_text(f"❌ خطأ: {e}")
+        await query.edit_message_text(f"❌ خطأ — حاول مرة أخرى بعد قليل")
 
 
 async def cb_vreset_cancel(update, context):
@@ -3842,7 +3845,7 @@ async def cmd_setcustom(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"عملات: {coins} | الاسم: {label}",
             parse_mode="Markdown")
     except Exception as e:
-        await update.message.reply_text(f"❌ خطأ: {e}")
+        await update.message.reply_text(f"❌ خطأ — حاول مرة أخرى بعد قليل")
 
 
 async def cb_autotrade_decision(update, context):
@@ -3879,7 +3882,7 @@ async def cb_autotrade_decision(update, context):
                     "price":     float(bits[2]),
                 })
     except Exception as e:
-        await query.edit_message_text(f"❌ خطأ: {e}")
+        await query.edit_message_text(f"❌ خطأ — حاول مرة أخرى بعد قليل")
         return
 
     lines = ["✅ *صفقات مُنفَّذة*", ""]
@@ -3904,6 +3907,6 @@ async def cb_autotrade_decision(update, context):
             else:
                 lines.append(f"• {t['symbol']}: {_result.get('msg','')[:50]}")
         except Exception as e:
-            lines.append(f"• {t['symbol']}: ❌ {str(e)[:50]}")
+            lines.append(f"• {t['symbol']}: ❌ تعذّر الإغلاق الآن")
 
     await query.edit_message_text("\n".join(lines), parse_mode="Markdown")

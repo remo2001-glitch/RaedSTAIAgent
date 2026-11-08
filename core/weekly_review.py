@@ -148,7 +148,7 @@ async def agent_okx_review() -> Dict[str, Any]:
                         result["new_features"].append(
                             f"🆕 Skills جديدة: {', '.join(new_skills)}")
             except Exception as e:
-                result["warnings"].append(f"⚠️ GitHub fetch: {e}")
+                result["warnings"].append("⚠️ تعذّر جلب ملفات GitHub")
 
         # فحص OKX API للأصول المُرمَّزة الجديدة
         try:
@@ -178,11 +178,11 @@ async def agent_okx_review() -> Dict[str, Any]:
                     result["new_features"].append(
                         f"🆕 أصول X-prefix جديدة: {', '.join(sorted(new_x))}")
         except Exception as e:
-            result["warnings"].append(f"⚠️ OKX instruments: {e}")
+            result["warnings"].append("⚠️ تعذّر جلب قائمة أدوات OKX")
 
     except Exception as e:
         result["status"] = "error"
-        result["warnings"].append(f"❌ AgentOKX خطأ: {e}")
+        result["warnings"].append("❌ تعذّر فحص AgentOKX")
 
     return result
 
@@ -714,8 +714,8 @@ async def cmd_review(update, context):
     """
     from core.config import ADMIN_ID
     user_id = update.effective_user.id
-    if user_id != ADMIN_ID:
-        await update.message.reply_text("🔒 هذا الأمر للمدير فقط.")
+    from core.access_guard import is_owner as _is_owner69
+    if not _is_owner69(user_id):   # batch69: أمر فني للمالك فقط (كان ADMIN_ID وحده)
         return
 
     msg = await update.message.reply_text(

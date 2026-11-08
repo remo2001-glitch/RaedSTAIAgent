@@ -220,6 +220,12 @@ async def run_auto_cycle_b68(engine, send_fn=None, bot_data=None) -> dict:
                "waits": 0, "errors": 0, "ev_mult": 1.0, "scanned_syms": [], "err_syms": []}
     _rec_cache = {}   # batch68g: (الباقة، الأصل) → قرار /signal — لا يُعاد التحليل لكل حساب بنفس الباقة
     uids = _sm().get_autotrade_users() or []
+    # batch69 (الوضع الخاص، قرار رحال): الدخول الآلي لحسابات المالك والمدراء والمسموح لهم فقط
+    try:
+        from core.access_guard import is_allowed as _ok69
+        uids = [u for u in uids if _ok69(u)]
+    except Exception:
+        pass
     summary["users"] = len(uids)
     if not uids:
         return summary

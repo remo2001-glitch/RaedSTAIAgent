@@ -142,6 +142,7 @@ def _build_commands_text(user_id: int, tier: str, tier_name: str) -> str:
         "/quicksignal — تحليل أولي سريع مع نقاط الدخول والخروج",
         "/portfolio — استعراض المحفظة",
         "/trades — الصفقات السابقة والقائمة",
+        "/stats — إحصائيات حسابك",
         "/live — التداول الحقيقي (ربط منصة)",
         "/autotrade — تداول تلقائي (تشغيل/إيقاف)",
         "/setportfolio — ضبط حجم المحفظة",
@@ -167,7 +168,6 @@ def _build_commands_text(user_id: int, tier: str, tier_name: str) -> str:
             "/onchain — تحليل On-Chain",
             "/planweek — خطة أسبوعية",
             "/planmonth — خطة شهرية",
-            "/drift — مراقبة دقة النموذج",
         ]
         sections.append(("🔬 *التحليل المتقدم — ذهبي+*", deep))
 
@@ -175,14 +175,22 @@ def _build_commands_text(user_id: int, tier: str, tier_name: str) -> str:
         premium = ["/chart — تحليل شارت بصري (أرفع صورة)"]
         sections.append(("💎 *ماسي حصراً*", premium))
 
-    if tier == "admin":
+    # batch69: أوامر المدراء والأوامر الفنية تظهر لأصحابها فقط
+    from core import access_guard as _ag69
+    if _ag69.is_admin(user_id):
         admin_cmds = [
-            "/killswitch — إيقاف طارئ",
-            "/stats — إحصائيات النظام",
-            "/risk — Risk Engine",
-            "/premium — إدارة الباقات",
+            "/access — الحسابات المسموح لها (الوضع الخاص)",
+            "/premium list|info|set — إدارة الباقات",
+            "/autotrade users — حسابات التداول الآلي",
+            "/autostats رقم — قياس حساب",
         ]
         sections.append(("👑 *المدير*", admin_cmds))
+    if _ag69.is_owner(user_id):
+        sections.append(("🛠️ *المالك — أوامر فنية*", [
+            "/killswitch — إيقاف طارئ", "/drift — حالة النموذج", "/review — المراجعة الأسبوعية",
+            "/survey_report — تقرير الاستبيان", "/whaletest — اختبار Whale التاريخي",
+            "/stats — يتضمن حالة النظام للمالك",
+        ]))
 
     lines = [f"📋 *أوامرك — {tier_name}*", ""]
     for title, cmds in sections:
@@ -481,38 +489,12 @@ async def post_init(app: Application):
         logger.error(f"Scheduler start error: {_se}")
 
     # قائمة الأوامر لـ Telegram
-    await app.bot.set_my_commands([
-        BotCommand("start",        "بدء التشغيل"),
-        BotCommand("quicksignal",  "تحليل أولي سريع"),
-        BotCommand("signal",       "إشارة تداول شاملة"),
-        BotCommand("news",         "تحليل الأخبار"),
-        BotCommand("regime",       "حالة السوق"),
-        BotCommand("onchain",      "تحليل On-Chain"),
-        BotCommand("liquidity",    "تحليل السيولة"),
-        BotCommand("backtest",     "اختبار تاريخي"),
-        BotCommand("analyze",      "تحليل عميق"),
-        BotCommand("planmonth",    "خطة شهرية"),
-        BotCommand("planweek",     "خطة أسبوعية"),
-        BotCommand("portfolio",    "توزيع المحفظة"),
-        BotCommand("autotrade",    "تداول تلقائي on/off"),
-        BotCommand("execute",      "تنفيذ فوري"),
-        BotCommand("virtual",      "تداول افتراضي"),
-        BotCommand("stats",        "إحصائيات فورية"),
-        BotCommand("performance",  "أداء الإشارات حسب النوع"),
-        BotCommand("risk",         "حالة مخاطر المحفظة"),
-        BotCommand("marketrisk",   "تقييم مخاطر السوق"),
-        BotCommand("events",       "الأحداث القادمة"),
-        BotCommand("outlook", "رؤية المؤسسات — BlackRock"),
-        BotCommand("drift",        "حالة النموذج"),
-        BotCommand("killswitch",   "Kill Switch"),
-        BotCommand("about",        "عن رائد"),
-        BotCommand("setportfolio", "ضبط حجم محفظتك"),
-        BotCommand("live",         "التداول الحقيقي"),
-        BotCommand("trades",       "صفقاتي الحقيقية"),
-        BotCommand("premium",      "إدارة الباقة"),
-        BotCommand("upgrade",      "الباقات والأسعار"),
-        BotCommand("chart",        "تحليل شارت بصري"),
-    ])
+    # batch69: القائمة العامة بلا أوامر المدراء؛ المدراء والمالك قوائم خاصة بمحادثاتهم
+    try:
+        from core.access_guard import apply_command_menus as _menus69
+        await _menus69(app.bot)
+    except Exception as _me69:
+        logger.warning(f"command menus: {type(_me69).__name__}")
     logger.info("✅ RaedEngine تم تهيئته وربطه بـ Telegram")
 
 
@@ -575,15 +557,24 @@ def build_app() -> Application:
     if not token:
         raise ValueError("BOT_TOKEN غير موجود في متغيرات البيئة")
 
+    # batch69 (قرار رحال 2026-11-08): بوت محروس — لا إرسال لحساب غير مسموح ولا لمجموعة/قناة، ولا نص خطأ برمجي في أي رسالة
+    from telegram.request import HTTPXRequest
+    from core.access_guard import make_guarded_bot_class
+    _bot = make_guarded_bot_class()(token=token, request=HTTPXRequest(connection_pool_size=256),
+                                    get_updates_request=HTTPXRequest())
     app = (
         Application.builder()
-        .token(token)
+        .bot(_bot)
         # batch39: كانت التحديثات تُعالَج واحداً بعد الآخر (الافتراضي) فيجمّد أمر بطيء واحد البوت لكل المستخدمين بلا أي خطأ في السجل
         .concurrent_updates(16)
         .post_init(post_init)
         .post_shutdown(post_shutdown)
         .build()
     )
+
+    # ── batch69: بوابة الحماية قبل كل المعالجات (وضع خاص، خاص فقط، حد يومي، إغراق، أوامر مخفية) ──
+    from handlers.access import register as _access_register
+    _access_register(app)
 
     # ── الأوامر الرئيسية ──
     app.add_handler(CommandHandler("start", cmd_start))

@@ -2067,7 +2067,7 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"cmd_plan_month: {e}", exc_info=True)
         try:
-            await msg.edit_text(f"❌ خطأ في بناء الخطة: {str(e)[:100]}")
+            await msg.edit_text(f"❌ خطأ في بناء الخطة — حاول مرة أخرى بعد قليل")
         except Exception:
             await _get_message_p(update, context).reply_text("❌ خطأ في بناء الخطة الشهرية")
     finally:
@@ -2836,7 +2836,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ] + _pw_extra + _synth_pw_line + ([f"  {_sharp_warn(change_24h, float(locals().get('atr_v') or 0) * 100)}"] if _sharp_warn(change_24h, float(locals().get('atr_v') or 0) * 100) else []) + entry_lines + ([f"  {_g4_msg_w}"] if _g4_msg_w else []) + [""]
             except Exception as e:
                 logger.warning(f"plan_week {sym}: {e}")
-                lines.append(f"⚠️ {sym}: {str(e)[:50]}")
+                lines.append(f"⚠️ {sym} — حاول مرة أخرى بعد قليل")
                 lines.append("")
 
         # plan_sort_by_confidence: ترتيب كتل العملات تنازلياً حسب الثقة (كان ترتيب القائمة
@@ -3315,7 +3315,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         logger.error(f"cmd_plan_week: {e}")
-        await msg.edit_text(f"❌ خطأ في بناء الخطة الأسبوعية: {str(e)[:100]}")
+        await msg.edit_text(f"❌ خطأ في بناء الخطة الأسبوعية — حاول مرة أخرى بعد قليل")
     finally:
         try:
             _heavy_sem_m.release()
@@ -3572,7 +3572,7 @@ async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"cmd_portfolio: {e}", exc_info=True)
         try:
-            await msg.edit_text(f"❌ خطأ في تحليل المحفظة: {str(e)[:100]}")
+            await msg.edit_text(f"❌ خطأ في تحليل المحفظة — حاول مرة أخرى بعد قليل")
         except Exception:
             await _get_message_p(update, context).reply_text("❌ خطأ في تحليل المحفظة — أعد المحاولة")
     finally:
@@ -3683,7 +3683,7 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
         lines = [
-            "📊 *إحصائيات رائد الفورية*",
+            "📊 *إحصائيات حسابك — رائد*",
             "━━━━━━━━━━━━━━━━━━",
             "",
             "💰 *المحفظة الافتراضية*",
@@ -3701,6 +3701,11 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"• متوسط الربح: ${_avg_win:,.2f}",
             f"• متوسط الخسارة: ${abs(_avg_loss):,.2f}",
             *_stats_extra_lines,
+        ]
+        # batch69 (قرار رحال): /stats لكل مستخدم ما يخص حسابه فقط؛ حالة النظام (النموذج، Kill Switch، الموافقات) للمالك
+        from core.access_guard import is_owner as _is_owner69
+        _own69 = _is_owner69(update.effective_user.id)
+        _sys69 = [
             "",
             "🔬 *حالة النموذج*",
             # إصلاح #299 (H9): معدل الفوز من virtual_wallet (المصدر الحقيقي)
@@ -3709,6 +3714,10 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
              if _drift_ready_b55 else
              f"• الانحراف عن خط الأساس ({drift_st.baseline_win_rate:.0%}): غير مُقيَّم بعد"),
             f"• {drift_st.recommendation_ar} (يقيس الإشارات المُقيَّمة لا الصفقات المغلقة)",
+        ]
+        if _own69:
+            lines += _sys69
+        lines += [
             "",
             "📅 *الأحداث*",
             f"• نسبة التعرض المسموحة بسبب الأحداث: {ev_mult:.0%}"
@@ -3718,10 +3727,10 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"• {_clean(sched_w)}",
             # إصلاح #301/#350 (I9): تنظيف "يوم X" والرقم الزائد في التاريخ الشهري
             f"• {_sched_m_clean}",
-            "",
-            kill_st,
-            "",
-            override_st,
+        ]
+        if _own69:
+            lines += ["", kill_st, "", override_st]
+        lines += [
             "",
             "📊 *أداء رائد vs BTC*",
         ]
@@ -3790,7 +3799,7 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         logger.error(f"cmd_stats: {e}")
-        await _get_message_p(update, context).reply_text(f"❌ خطأ في الإحصائيات: {str(e)[:100]}")
+        await _get_message_p(update, context).reply_text(f"❌ خطأ في الإحصائيات — حاول مرة أخرى بعد قليل")
 
 
 # ════════════════════════════════════════════════════════════════
@@ -4024,7 +4033,7 @@ async def cb_plan_general(update, context):
         logging.getLogger("plan").error(f"cb_plan_general: {e}", exc_info=True)
         try:
             if msg:
-                await msg.edit_text(f"❌ خطأ في إعداد الخطة: {str(e)[:100]}")
+                await msg.edit_text(f"❌ خطأ في إعداد الخطة — حاول مرة أخرى بعد قليل")
         except Exception:
             pass
 

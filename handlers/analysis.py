@@ -7175,6 +7175,9 @@ async def cmd_outlook(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ════════════════════════════════════════════════════════════════
 @require_tier("drift")
 async def cmd_drift(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from core.access_guard import is_owner as _is_owner69
+    if not _is_owner69(update.effective_user.id):   # batch69: أمر فني للمالك فقط
+        return
     engine = _eng(context)
     if not engine:
         await _get_message(update, context).reply_text("⚠️ النظام لم يُهيَّأ بعد")
@@ -7774,7 +7777,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 is_stock=_is_perp_an)
         except Exception as _pb_err:
             logger.error(f"build_professional_block CRASH [{type(_pb_err).__name__}]: {_pb_err}", exc_info=True)
-            pro_block_a = f"⚠️ تعذّر بناء التحليل التفصيلي: {type(_pb_err).__name__}: {str(_pb_err)[:80]}"
+            pro_block_a = "⚠️ تعذّر بناء التحليل التفصيلي الآن — حاول مرة أخرى بعد قليل"
             _sig_meta_an = {}
         fib_lines_a = _fmt_fib_lines(fib_a, price, locals().get("_atr_a") or 0.0)
 
@@ -8590,10 +8593,9 @@ async def cmd_whaletest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     يجلب سجل Long/Short اليومي من OKX وشموع كل عملة ويعرض عوائد 3 و7 أيام بحسب حالة النسبة. لا يغيّر أي قرار."""
     msg = _get_message(update, context)
     try:
-        from core.config import ADMIN_ID as _ADM
+        from core.access_guard import is_owner as _is_owner69
         uid = update.effective_user.id if update.effective_user else 0
-        if uid != _ADM and _sm.get_tier(uid) != "admin":
-            await msg.reply_text("⛔ هذا الأمر للأدمن فقط")
+        if not _is_owner69(uid):   # batch69: أمر فني للمالك فقط
             return
         engine = _eng(context)
         if not engine:
@@ -8628,7 +8630,7 @@ async def cmd_whaletest(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await wait.edit_text(text)
     except Exception as e:
         logger.error(f"cmd_whaletest: {e}")
-        await msg.reply_text(f"⚠️ تعذّر تنفيذ الاختبار: {str(e)[:120]}")
+        await msg.reply_text(f"⚠️ تعذّر تنفيذ الاختبار — حاول مرة أخرى بعد قليل")
 
 
 async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):

@@ -343,7 +343,7 @@ async def _build_proposal(engine, user_id: int, base: str):
         bal = await ex.get_balance("USDT")
         free, total = float(bal.free), float(bal.total)
     except Exception as e:
-        return None, f"❌ تعذّر قراءة رصيدك من المنصة: {str(e)[:80]}"
+        return None, "❌ تعذّر قراءة رصيدك من المنصة — حاول مرة أخرى بعد قليل"
     open_map = {}
     for t in await _get_open_trades(engine, user_id):
         open_map[t.symbol] = open_map.get(t.symbol, 0.0) + float(t.size_usd or 0)
@@ -493,7 +493,7 @@ async def cmd_trade(update: Update, context: ContextTypes.DEFAULT_TYPE):
         proposal, err = await _build_proposal(engine, user_id, base)
     except Exception as e:
         logger.error(f"trade proposal: {e}", exc_info=True)
-        await msg.edit_text(f"❌ خطأ في التحليل: {str(e)[:100]}")
+        await msg.edit_text(f"❌ خطأ في التحليل — حاول مرة أخرى بعد قليل")
         return
     if not proposal:
         await msg.edit_text(err, parse_mode=ParseMode.MARKDOWN)
@@ -804,7 +804,7 @@ async def cmd_trade_auto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if mode:
             _flag_set(user_id, "stopped", False)
     except Exception as e:
-        await reply(f"❌ خطأ: {e}")
+        await reply(f"❌ خطأ — حاول مرة أخرى بعد قليل")
         return
 
     status = "✅ مُفعَّل" if mode else "⛔ مُوقَف"
@@ -828,7 +828,7 @@ async def cmd_trade_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _flag_set(user_id, "stopped", True)
         _flag_set(user_id, "auto", False)
     except Exception as e:
-        await reply(f"❌ خطأ: {e}")
+        await reply(f"❌ خطأ — حاول مرة أخرى بعد قليل")
         return
     _cancel_jobs(context, user_id)          # يلغي أي تأكيد تلقائي معلّق
     trades = await _get_open_trades(engine, user_id) if engine else []

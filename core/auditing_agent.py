@@ -145,7 +145,7 @@ class AuditingAgent:
             
         except Exception as e:
             logger.error(f"auditing_agent error: {e}")
-            return self._reject(source, f"خطأ في التدقيق: {e}")
+            return self._reject(source, "خطأ في التدقيق")
     
     def audit_financial(self, content: str, source: str = "signal") -> Tuple[bool, str]:
         """تدقيق مالي متشدد للإشارات والتحليلات"""
