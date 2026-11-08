@@ -2057,6 +2057,60 @@ def build_confirm_keyboard(symbol: str, direction: str,
 # ════════════════════════════════════════════════════════════════
 # /autotrade, /killswitch, /risk, /setportfolio
 # ════════════════════════════════════════════════════════════════
+def _is_admin_b68(user_id: int) -> bool:
+    """نفس فحص /premium: باقة admin أو ADMIN_ID."""
+    try:
+        if _sm.get_tier(user_id) == "admin":
+            return True
+    except Exception:
+        pass
+    try:
+        from core.config import ADMIN_ID as _AID
+        return int(user_id) == int(_AID)
+    except Exception:
+        return False
+
+
+def _autotrade_users_text_b68() -> str:
+    """batch68l: الحسابات المفعّل عليها التداول الآلي + الباقة + صفقات القياس (سجل b68)."""
+    from core.auto_trader_b68 import ledger_get, auto_stats_b68, AUTO_LOGIC_VER
+    uids = sorted(_sm.get_autotrade_users() or [])
+    L = [f"🤖 *حسابات التداول الآلي المفعّلة ({len(uids)})*", "━━━━━━━━━━━━━━━━━━"]
+    if not uids:
+        L.append("لا يوجد حساب مفعّل — /autotrade on")
+    tiers = set()
+    for u in uids:
+        try:
+            tier = _sm.get_tier(u)
+        except Exception:
+            tier = "?"
+        tiers.add(tier)
+        try:
+            tn = _sm.get_tier_name(u)
+        except Exception:
+            tn = tier
+        try:
+            st = auto_stats_b68(ledger_get(u))
+            n_cl, tot = int(st.get("n", 0)), float(st.get("total", 0.0))
+        except Exception:
+            n_cl, tot = 0, 0.0
+        try:
+            wd = _sm.get_virtual_wallet(u) or {}
+            n_op = sum(1 for p in (wd.get("positions") or {}).values() if (p or {}).get("logic_ver") == AUTO_LOGIC_VER) + \
+                   sum(1 for p in (wd.get("futures") or {}).values() if (p or {}).get("logic_ver") == AUTO_LOGIC_VER)
+        except Exception:
+            n_op = 0
+        L.append(f"• `{u}` — {tn} | مفتوحة {n_op} | مغلقة {n_cl} | الصافي ${tot:+,.2f}")
+    if uids:
+        L.append("")
+        from core.event_risk import _ar_count as _arc
+        L.append(f"🔁 تحليلات كل مسح: {_arc(len(tiers), 'باقة واحدة', 'باقتان', 'باقات', 'باقة')} × الأصول "
+                 "(الحسابات بنفس الباقة تتشارك التحليل)")
+    L.append("")
+    L.append("للإيقاف: /autotrade off [user\\_id] | للتشغيل: /autotrade on [user\\_id] | قياس حساب: /autostats [user\\_id]")
+    return "\n".join(L)
+
+
 @require_tier("autotrade")
 async def cmd_autotrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine  = _eng(context)
@@ -2075,6 +2129,27 @@ async def cmd_autotrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "⬆️ للترقية: /upgrade",
                 parse_mode="Markdown"); return
     user_id = update.effective_user.id
+
+    # batch68l (طلب رحال): أوامر المدير — عرض الحسابات المفعّلة وإيقاف/تشغيل حساب آخر
+    if action in ("users", "off", "on") and (action == "users" or len(args) >= 2):
+        if not _is_admin_b68(user_id):
+            await update.message.reply_text("⚠️ هذا الأمر للمدير فقط"); return
+        try:
+            if action == "users":
+                await update.message.reply_text(_autotrade_users_text_b68(), parse_mode=ParseMode.MARKDOWN)
+                return
+            target = int(str(args[1]).strip())
+            _sm.set_autotrade_on(target, action == "on")
+            await update.message.reply_text(
+                (f"✅ التداول الآلي مُفعَّل للحساب `{target}` ({_sm.get_tier_name(target)})" if action == "on"
+                 else f"⏹️ التداول الآلي مُوقَف للحساب `{target}` — صفقاته المفتوحة تكمل حتى الخروج، ولا دخول جديد")
+                + "\n\n" + _autotrade_users_text_b68(), parse_mode=ParseMode.MARKDOWN)
+        except ValueError:
+            await update.message.reply_text("⚠️ أدخل user_id صحيحاً — مثال: /autotrade off 123456789")
+        except Exception as e:
+            logger.error(f"cmd_autotrade admin: {e}")
+            await update.message.reply_text("❌ تعذّر تنفيذ أمر المدير")
+        return
 
     try:
         if engine.kill_switch.is_active:
@@ -2151,7 +2226,17 @@ async def cmd_autostats_b68(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         from core.auto_trader_b68 import ledger_get, auto_stats_b68, format_auto_stats_b68
         uid = update.effective_user.id
+        _args = context.args or []
+        if _args:   # batch68l: /autostats [user_id] — للمدير فقط
+            if not _is_admin_b68(uid):
+                await update.message.reply_text("⚠️ عرض قياس حساب آخر للمدير فقط"); return
+            try:
+                uid = int(str(_args[0]).strip())
+            except ValueError:
+                await update.message.reply_text("⚠️ أدخل user_id صحيحاً"); return
         txt = format_auto_stats_b68(auto_stats_b68(ledger_get(uid)))
+        if uid != update.effective_user.id:
+            txt = f"👤 الحساب `{uid}`\n" + txt
         if not _sm.is_autotrade_on(uid):
             txt += "\n\n⚠️ التداول الآلي مُوقَف لحسابك — /autotrade on لبدء القياس"
         await update.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
