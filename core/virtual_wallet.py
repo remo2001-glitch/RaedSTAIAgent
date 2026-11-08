@@ -309,6 +309,22 @@ class VirtualWallet:
     FUT_FEE_RATE     = 0.0005  # 0.05% من القيمة الاسمية لكل جهة
     FUT_MMR          = 0.005   # هامش الصيانة 0.5%
 
+    # batch70 (قرار رحال 2026-11-08 «يفتح مركز مستقل»): مركز القياس الآلي بمفتاح مستقل «XAG@AUTO»
+    # فلا يمنعه مركز يدوي على الأصل نفسه ولا يستبدله. «symbol» داخل المركز = الرمز الحقيقي دائماً.
+    AUTO_KEY_SUFFIX = "@AUTO"
+
+    @classmethod
+    def auto_key(cls, symbol: str) -> str:
+        return f"{str(symbol).upper()}{cls.AUTO_KEY_SUFFIX}"
+
+    @staticmethod
+    def base_symbol(key: str, pos: dict | None = None) -> str:
+        return str((pos or {}).get("symbol") or str(key).split("@", 1)[0]).upper()
+
+    @classmethod
+    def is_auto_key(cls, key: str) -> bool:
+        return str(key).upper().endswith(cls.AUTO_KEY_SUFFIX)
+
     @classmethod
     def futures_liq_price(cls, side: str, entry: float, leverage: int) -> float:
         lev = max(1, int(leverage or 1))
@@ -318,14 +334,16 @@ class VirtualWallet:
 
     def open_futures(self, symbol: str, side: str, price: float, margin_usd: float,
                      leverage: int = 1, stop_loss: float = 0.0, take_profit: float = 0.0,
-                     max_hold_hours: float = 0.0, extra: dict | None = None) -> dict:
-        """يفتح مركز Futures افتراضياً (Long/Short) بهامش معزول. margin_usd = الهامش المحجوز من الرصيد."""
+                     max_hold_hours: float = 0.0, extra: dict | None = None, key: str | None = None) -> dict:
+        """يفتح مركز Futures افتراضياً (Long/Short) بهامش معزول. margin_usd = الهامش المحجوز من الرصيد.
+        key (batch70): مفتاح الحفظ — مراكز القياس الآلي تُحفظ بمفتاح مستقل (auto_key)."""
         symbol = symbol.upper().replace("USDT", "") or symbol.upper()
+        _bk = (str(key).upper() if key else symbol)
         side = "long" if str(side).lower() in ("long", "buy", "flong") else "short"
         lev = int(leverage or 1)
         if lev < 1 or lev > self.FUT_MAX_LEVERAGE:
             return {"ok": False, "msg": f"⚠️ الرافعة الافتراضية بين 1x و{self.FUT_MAX_LEVERAGE}x فقط"}
-        if symbol in self.futures:
+        if _bk in self.futures:
             return {"ok": False, "msg": f"⚠️ لديك مركز Futures افتراضي مفتوح على {symbol} — أغلقه أولاً"}
         if price <= 0 or margin_usd <= 0:
             return {"ok": False, "msg": f"{E['error']} سعر أو هامش غير صالح"}
@@ -347,7 +365,7 @@ class VirtualWallet:
                                              f"خفّض الرافعة أو قرّب الوقف (الوقف يجب أن يُضرب قبل التصفية)")}
         qty = notional / price
         self.balance -= (margin_usd + fee)
-        self.futures[symbol] = {
+        self.futures[_bk] = {
             "symbol": symbol, "side": side, "leverage": lev,
             "entry": round(price, 8), "qty": round(qty, 10),
             "margin": round(margin_usd, 2), "notional": round(notional, 2),
@@ -356,12 +374,12 @@ class VirtualWallet:
             "opened_at": _now(), "max_hold_hours": float(max_hold_hours or 0),
         }
         if extra:   # batch68
-            self.futures[symbol].update(extra)
+            self.futures[_bk].update({k: v for k, v in extra.items() if k != "symbol"})
         self.history.append({"type": "fut_open", "symbol": symbol, "side": side, "leverage": lev,
                              "price": price, "margin": round(margin_usd, 2), "notional": round(notional, 2),
                              "fee": round(fee, 4), "time": _now()})
         _side_ar = "📈 Long (شراء)" if is_long else "📉 Short (بيع على المكشوف)"
-        return {"ok": True, "position": self.futures[symbol], "msg": (
+        return {"ok": True, "key": _bk, "position": self.futures[_bk], "msg": (
             f"{E['ok']} تم فتح مركز Futures افتراضي\n\n"
             f"{E['bank']} {symbol} | {_side_ar} | رافعة {lev}x (هامش معزول)\n"
             f"💲 الدخول: ${price:,.4f}\n"
@@ -423,7 +441,8 @@ class VirtualWallet:
         pos["margin"] = round(float(pos["margin"]) - m, 2)
         pos["notional"] = round(float(pos["notional"]) * (1 - frac), 2)
         pos["fee_open"] = round(float(pos.get("fee_open", 0) or 0) - fee_open_part, 4)
-        trade = {"type": "sell", "futures": True, "symbol": symbol, "side": pos["side"], "leverage": pos["leverage"],
+        trade = {"type": "sell", "futures": True, "symbol": self.base_symbol(symbol, pos), "side": pos["side"],
+                 "leverage": pos["leverage"],
                  "price": price, "entry": pos["entry"], "quantity": round(q, 10), "amount": round(q * price, 2),
                  "pnl": round(pnl, 2), "pnl_pct": round(pnl / m * 100 if m > 0 else 0, 2),
                  "fees": round(fee_open_part + fee_close, 4), "reason": reason, "time": _now(),
@@ -454,7 +473,7 @@ class VirtualWallet:
         pnl_pct = pnl / margin * 100 if margin > 0 else 0.0
         del self.futures[symbol]
         trade = {
-            "type": "sell", "futures": True, "symbol": symbol, "side": pos["side"],
+            "type": "sell", "futures": True, "symbol": self.base_symbol(symbol, pos), "side": pos["side"],
             "leverage": pos["leverage"], "price": exit_px, "entry": pos["entry"],
             "quantity": pos["qty"], "amount": round(float(pos["qty"]) * exit_px, 2),
             "pnl": round(pnl, 2), "pnl_pct": round(pnl_pct, 2),
@@ -479,7 +498,7 @@ class VirtualWallet:
             pass
         _usd = (lambda v: f"{'+' if v >= 0 else '-'}${abs(v):,.2f}")
         return {"ok": True, "trade": trade, "msg": (
-            f"{E['ok']} أُغلق مركز Futures افتراضي — {symbol}\n\n"
+            f"{E['ok']} أُغلق مركز Futures افتراضي — {trade['symbol']}" + (" 🤖 قياس" if pos.get("logic_ver") else "") + "\n\n"
             f"• الجهة: {'Long' if pos['side'] == 'long' else 'Short'} | رافعة {pos['leverage']}x\n"
             f"• السبب: {_r_ar}" + (f" | المدة: {_dur}" if _dur else "") + "\n"
             f"• الدخول: {_fp(pos['entry'])} → الخروج: {_fp(exit_px)}\n"
@@ -490,12 +509,14 @@ class VirtualWallet:
 
     def futures_report_lines(self, current_prices: dict | None = None) -> list:
         out = []
-        for sym, pos in self.futures.items():
+        for key, pos in self.futures.items():
+            sym = self.base_symbol(key, pos)
             px = (current_prices or {}).get(sym, pos["entry"])
-            pnl = self.futures_pnl(sym, px)
+            pnl = self.futures_pnl(key, px)
             pct = pnl / pos["margin"] * 100 if pos.get("margin") else 0
             sign = "+" if pnl >= 0 else ""
-            out.append(f"  • {sym} {'Long' if pos['side'] == 'long' else 'Short'} {pos['leverage']}x @ ${pos['entry']:,.4f}"
+            _tag = " 🤖 قياس" if pos.get("logic_ver") else ""
+            out.append(f"  • {sym}{_tag} {'Long' if pos['side'] == 'long' else 'Short'} {pos['leverage']}x @ ${pos['entry']:,.4f}"
                        f" | هامش ${pos['margin']:,.2f} | تصفية ≈ ${pos['liq_price']:,.4f}\n"
                        f"    {E['up'] if pnl >= 0 else E['down']} {sign}${pnl:,.2f} ({sign}{pct:.1f}% من الهامش)")
         return out
@@ -523,7 +544,7 @@ class VirtualWallet:
             )
 
         _fut_lines = self.futures_report_lines(current_prices)
-        _fut_val = sum(float(p["margin"]) + self.futures_pnl(s_, (current_prices or {}).get(s_, p["entry"]))
+        _fut_val = sum(float(p["margin"]) + self.futures_pnl(s_, (current_prices or {}).get(self.base_symbol(s_, p), p["entry"]))
                        for s_, p in self.futures.items())
         total = self.balance + positions_value + _fut_val
         total_pnl = total - VIRTUAL_WALLET_START

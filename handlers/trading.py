@@ -2375,14 +2375,24 @@ async def cmd_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• الرصيد النقدي: ${vw.balance:,.2f}",
         f"• مُستثمر: ${vw.invested:,.2f}",
         f"• إجمالي: ${vw.total_value:,.2f}",
-        f"• مراكز مفتوحة: {len(vw.positions)}",
+        f"• مراكز فوري مفتوحة: {len(vw.positions)}",
     ]
+    # batch70: مراكز Futures كانت خارج «مراكز مفتوحة» رغم دخول هامشها في الإجمالي
+    if vw.futures:
+        _n_auto70 = sum(1 for p in vw.futures.values() if p.get("logic_ver"))
+        lines.append(f"• مراكز Futures مفتوحة: {len(vw.futures)} (هامش ${vw.futures_margin:,.2f})"
+                     + (f" — منها {_n_auto70} قياس 🤖" if _n_auto70 else "") + " — /vfutures")
 
-    # إجمالي PnL
+    # إجمالي PnL — batch70: من مجمّع الربح غير المقرّب (كان مجموع أرباح مقرّبة لكل صفقة فيفرق سنتات عن الإجمالي)
     sells = [t for t in vw.history if t.get("type") == "sell"]
-    net_pnl = sum(t.get("pnl", 0) for t in sells)
+    # الإجمالي هنا بسعر التكلفة (نقد + تكلفة الفوري + هامش Futures)، فالإجمالي − رأس المال = المحقق بالضبط
+    try:
+        from core.virtual_wallet import VIRTUAL_WALLET_START as _VWS70
+        net_pnl = round(float(vw.total_value) - float(_VWS70), 2)
+    except Exception:
+        net_pnl = sum(t.get("pnl", 0) for t in sells)
     if sells:
-        lines.append(f"• صافي الربح: ${net_pnl:+,.2f}")
+        lines.append(f"• صافي الربح المحقق: {'+' if net_pnl >= 0 else '-'}${abs(net_pnl):,.2f}")
 
     # المحفظة الحقيقية
     lines += ["", "💱 *المحفظة الحقيقية*"]
@@ -3287,8 +3297,10 @@ async def cb_vhistory(update, context):
             pnl_pct = t.get("pnl_pct", 0) or (pnl / max(t.get("cost",1),1) * 100)
             # إصلاح #73: تنسيق صحيح للقيم السالبة — "-$19.03 (-2.5%)" بدل "$-19.03 (2.5%)"
             pnl_str = f"+${pnl:,.2f}" if pnl >= 0 else f"-${abs(pnl):,.2f}"
-            pct_str = f"+{pnl_pct:.1f}%" if pnl_pct >= 0 else f"-{abs(pnl_pct):.1f}%"
-            lines.append(f"{emoji} {t.get('symbol','')} | {ts} | {pnl_str} ({pct_str})")
+            # batch70: نسبة صغيرة (<0.1%) بمنزلتين — كان «+$0.14 (+0.0%)»
+            from core.virtual_wallet import _pct_b60 as _pct70
+            pct_str = _pct70(pnl_pct)
+            lines.append(f"{emoji} {t.get('symbol','')}{' 🤖' if t.get('logic_ver') else ''} | {ts} | {pnl_str} ({pct_str})")
         await query.message.reply_text("\n".join(lines), parse_mode="Markdown")
     except Exception as e:
         logger.error(f"cb_vhistory: {e}")
@@ -3641,7 +3653,10 @@ async def cmd_vfutures(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     engine = _eng(context)
     prices = {}
-    for sym in vw.futures:
+    for _k70, _p70 in vw.futures.items():   # batch70: السعر بالرمز الحقيقي (مفتاح القياس XAG@AUTO)
+        sym = _VW_vf.base_symbol(_k70, _p70)
+        if sym in prices:
+            continue
         try:
             pd = await engine.data_layer.get_price(sym) if engine else None
             if pd and float(pd.get("price", 0) or 0) > 0:
@@ -3651,7 +3666,9 @@ async def cmd_vfutures(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = ["⚡ *مراكز Futures الافتراضية*", "━━━━━━━━━━━━━━━━━━"]
     _tot_m67 = _tot_n67 = 0.0
     for s_, p_ in vw.futures.items():   # batch59 (#719/#720): السعر الحالي والوقف/الهدف والصافي بعد الرسوم
-        px = prices.get(s_, float(p_["entry"]))
+        _bs70 = _VW_vf.base_symbol(s_, p_)
+        _auto70 = bool(p_.get("logic_ver"))
+        px = prices.get(_bs70, float(p_["entry"]))
         _long67 = p_["side"] == "long"
         _pxc = px * (0.999 if _long67 else 1.001)   # batch61 (#755): نفس انزلاق الإغلاق الفعلي
         g = vw.futures_pnl(s_, _pxc)
@@ -3666,8 +3683,8 @@ async def cmd_vfutures(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _tp67 = float(p_.get("take_profit") or 0)
         _liq67 = float(p_.get("liq_price") or 0)
         lines += [
-            f"• *{s_}* {'Long' if _long67 else 'Short'} {lev_}x — هامش ${_mg67:,.2f} | اسمية ${float(p_['notional']):,.2f}"
-            + (" — مرجعي: لا عقد دائم على OKX" if s_ in _NO_PERP_B63 else ""),   # batch67 (قرار رحال #978)
+            f"• *{_bs70}*{' 🤖 قياس' if _auto70 else ''} {'Long' if _long67 else 'Short'} {lev_}x — هامش ${_mg67:,.2f} | اسمية ${float(p_['notional']):,.2f}"
+            + (" — مرجعي: لا عقد دائم على OKX" if _bs70 in _NO_PERP_B63 else ""),   # batch67 (قرار رحال #978)
             f"  الدخول {_fmt_price(p_['entry'])} | الحالي {_fmt_price(px)}",
             f"  الوقف {_fmt_price(p_['stop_loss']) if _sl67 else '—'} | الهدف {_fmt_price(p_['take_profit']) if _tp67 else '—'}"
             + ("" if lev_ == 1 else (f" | التصفية ≈ ${round(_liq67):,}" if _liq67 >= 100
@@ -3721,8 +3738,12 @@ async def cmd_vfutures(update: Update, context: ContextTypes.DEFAULT_TYPE):
                   f"({_tot_n67 / _tot_m67 * 100:+.1f}%)", ""]
     # batch67 (#977): الرسوم 0.05% لكل جهة (قرار رحال) + انزلاق إغلاق تقديري 0.1% — كان النص يذكر الرسوم وحدها
     lines += ["🎮 تدريب فقط — هامش معزول؛ رسوم 0.05% لكل جهة + انزلاق إغلاق تقديري 0.1%؛ الرافعة الحقيقية غير مفعّلة"]
+    # batch70: مراكز القياس 🤖 تُدار آلياً بلا تدخل (قرار رحال) — لا زر إغلاق يدوي لها حتى لا ينفصل سجل القياس
+    _man70 = [s_ for s_, p_ in vw.futures.items() if not p_.get("logic_ver")][:8]
+    if any(p_.get("logic_ver") for p_ in vw.futures.values()):
+        lines += ["🤖 مراكز القياس تُدار آلياً (الوقف والأهداف والخروج الزمني) — لا إغلاق يدوي لها"]
     kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"🔴 إغلاق {s_}", callback_data=f"vfclose_{s_}")]
-                               for s_ in list(vw.futures)[:8]])
+                               for s_ in _man70]) if _man70 else None
     await update.message.reply_text("\n".join(lines), reply_markup=kb, parse_mode=ParseMode.MARKDOWN)   # batch59 (#718)
 
 
@@ -3739,6 +3760,9 @@ async def cb_vfclose(update, context):
     vw = _VW_vf(_sm_vf.get_virtual_wallet(user_id) or {})
     if sym not in vw.futures:
         await query.edit_message_text(f"❌ لا يوجد مركز Futures افتراضي على {sym}")
+        return
+    if vw.futures[sym].get("logic_ver"):   # batch70: مركز القياس لا يُغلق يدوياً
+        await query.edit_message_text("🤖 هذا مركز قياس آلي — يُدار بالوقف والأهداف والخروج الزمني فقط")
         return
     price = float(vw.futures[sym]["entry"])
     engine = context.bot_data.get("raed_engine")

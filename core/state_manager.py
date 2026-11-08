@@ -296,11 +296,21 @@ class StateManager:
         return tier if tier in TIERS else "free"
 
     def set_tier(self, user_id: int, tier: str,
-                  by: str = "admin", requester_id: int = 0) -> bool:
+                  by: str = "admin", requester_id: int = 0, system: bool = False) -> bool:
         if tier not in TIERS:
             return False
-        if requester_id and self.get_tier(requester_id) != "admin":
+        # batch70: لا تغيير باقة بلا طالب مدير إلا لمسار داخلي صريح (system=True) — كان requester_id=0 يتخطى الفحص
+        if not requester_id and not system:
+            logger.warning(f"set_tier مرفوض بلا طالب: {user_id} → {tier}")
             return False
+        if requester_id:
+            try:
+                from core.access_guard import is_admin as _ia70
+                _ok70 = _ia70(requester_id)
+            except Exception:
+                _ok70 = self.get_tier(requester_id) == "admin"
+            if not _ok70:
+                return False
         owner = self._get_owner_id()
         if owner and user_id == owner and requester_id and requester_id != owner:
             return False
@@ -394,7 +404,7 @@ class StateManager:
         return TIERS[self.get_tier(user_id)]["level"] >= 1
 
     def set_premium(self, user_id: int, is_prem: bool, by: str = "admin"):
-        self.set_tier(user_id, "silver" if is_prem else "free", by=by)
+        self.set_tier(user_id, "silver" if is_prem else "free", by=by, system=True)
 
     # ═══ إعدادات التداول ════════════════════════════════════
     def get_futures_enabled(self, user_id: int) -> bool:

@@ -3473,7 +3473,7 @@ async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if _vw_p and _open_fut_p:
             for _sym_f, _pos_f in _vw_p.futures.items():
                 try:
-                    _pd_f = await engine.data_layer.get_price(_sym_f)
+                    _pd_f = await engine.data_layer.get_price(str((_pos_f or {}).get("symbol") or _sym_f).split("@", 1)[0])   # batch70
                     if _pd_f and _pd_f.get("price"):
                         # batch61 (#754/#755): صافٍ كما في /vfutures — بعد رسوم الفتح والإغلاق وانزلاق الإغلاق
                         _pxf = float(_pd_f["price"]) * (0.999 if _pos_f.get("side") == "long" else 1.001)
@@ -3518,7 +3518,7 @@ async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"• PnL الحي (المراكز المفتوحة، صافٍ بعد رسوم Futures): {'+' if _live_pnl_p >= 0 else '-'}${abs(_live_pnl_p):,.2f}\n"
             f"• صفقات مفتوحة: {_open_p} Spot" + (f" + {_open_fut_p} Futures" if _open_fut_p else "")
             # batch62 (#798): أسماء مراكز Futures وجهتها
-            + ((" (" + "، ".join(f"{str(k_).upper()} {'Long' if str((v_ or {}).get('side', 'long')) == 'long' else 'Short'}"
+            + ((" (" + "، ".join(f"{str((v_ or {}).get('symbol') or k_).split('@', 1)[0].upper()}{' 🤖' if (v_ or {}).get('logic_ver') else ''} {'Long' if str((v_ or {}).get('side', 'long')) == 'long' else 'Short'}"
                                  for k_, v_ in list((_vw_p.futures or {}).items())[:6]) + ") — التفاصيل: /vfutures")
                if (_vw_p and _open_fut_p) else "")
         )

@@ -168,7 +168,7 @@ class UserManager:
         valid = {"silver", "gold", "diamond"}
         if tier not in valid:
             tier = "gold"
-        _sm.set_tier(user_id, tier)
+        _sm.set_tier(user_id, tier, system=True)
         _sm.set_premium(user_id, True, by=by)
         if notes:
             self._notes[user_id] = notes
@@ -178,7 +178,7 @@ class UserManager:
 
     def remove_premium(self, user_id: int) -> bool:
         """يُلغي باقة المستخدم → free."""
-        _sm.set_tier(user_id, "free")
+        _sm.set_tier(user_id, "free", system=True)
         _sm.set_premium(user_id, False, by="admin")
         self._futures_flags.pop(user_id, None)
         self._margin_flags.pop(user_id, None)

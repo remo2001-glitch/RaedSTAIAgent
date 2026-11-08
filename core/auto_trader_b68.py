@@ -255,7 +255,10 @@ async def run_auto_cycle_b68(engine, send_fn=None, bot_data=None) -> dict:
             wd0 = _sm().get_virtual_wallet(uid) or {}
         except Exception:
             wd0 = {}
-        _pos0 = set((wd0.get("positions") or {}).keys()) | set((wd0.get("futures") or {}).keys())
+        # batch70: مراكز القياس فقط تمنع إعادة الدخول — المراكز اليدوية على الأصل نفسه لا تمنعه (قرار رحال)
+        _pos0 = {str((p or {}).get("symbol") or k).split("@", 1)[0].upper()
+                 for k, p in (wd0.get("futures") or {}).items() if (p or {}).get("logic_ver")} | \
+                {k for k, p in (wd0.get("positions") or {}).items() if (p or {}).get("logic_ver")}
         _nopen0 = sum(1 for p in (wd0.get("positions") or {}).values() if (p or {}).get("logic_ver")) + \
                   sum(1 for p in (wd0.get("futures") or {}).values() if (p or {}).get("logic_ver"))
         if _nopen0 >= AUTO_MAX_OPEN:
@@ -290,7 +293,9 @@ async def run_auto_cycle_b68(engine, send_fn=None, bot_data=None) -> dict:
             if n_open >= AUTO_MAX_OPEN:
                 summary["skipped"]["max_open"] = summary["skipped"].get("max_open", 0) + 1
                 break
-            if sym in vw.positions or sym in vw.futures:
+            if _auto_open_b70(vw, sym):   # مركز قياس مفتوح على الأصل (لا المراكز اليدوية)
+                if sym not in summary.setdefault("held_syms", []):
+                    summary["held_syms"].append(sym)
                 continue
             summary["scanned"] += 1
             if sym not in summary["scanned_syms"]:
@@ -341,15 +346,16 @@ async def run_auto_cycle_b68(engine, send_fn=None, bot_data=None) -> dict:
                         _ex_f = {k: v for k, v in extra.items() if k not in ("stop_loss", "take_profit", "max_hold_hours")}
                         r = vw.open_futures(sym, "long", epx, amt, 1, stop_loss=_sl_use,
                                             take_profit=float(rec.get("tp2") or rec["tp1"]), max_hold_hours=AUTO_HOLD_HOURS,
-                                            extra=_ex_f)
+                                            extra=_ex_f, key=VirtualWallet.auto_key(sym))
                     else:
                         r = vw.buy(sym, epx, amt, fee_rate=AUTO_SPOT_FEE, extra=extra)
                     if r.get("ok"):
                         _sid = _track_open_b68(engine, uid, sym, "long", epx, extra, rec.get("confidence"), 0)
                         _book = vw.futures if _fut_long else vw.positions
-                        if _sid and sym in _book:
-                            _book[sym]["signal_id"] = _sid
-                            _book[sym]["setup_type"] = "auto_long_b68"
+                        _k70 = r.get("key") or sym
+                        if _sid and _k70 in _book:
+                            _book[_k70]["signal_id"] = _sid
+                            _book[_k70]["setup_type"] = "auto_long_b68"
                         _sm().save_virtual_wallet(uid, vw.to_dict())
                         summary["long"] += 1
                         _ledger_open(uid, sym, "long", epx, amt, {**extra, "mkt": "futures" if _fut_long else "spot"})
@@ -383,12 +389,13 @@ async def run_auto_cycle_b68(engine, send_fn=None, bot_data=None) -> dict:
                      "regime": rec.get("regime_bucket", ""), "rr_entry": round(rr2, 3),
                      "conf_entry": float(sh.get("bear_conf") or 0)}
             r = vw.open_futures(sym, "short", epx, mg, 1, stop_loss=float(sh["sl"]),
-                                take_profit=float(sh.get("tp2") or sh["tp1"]), max_hold_hours=AUTO_HOLD_HOURS, extra=extra)
+                                take_profit=float(sh.get("tp2") or sh["tp1"]), max_hold_hours=AUTO_HOLD_HOURS, extra=extra,
+                                key=VirtualWallet.auto_key(sym))
             if r.get("ok"):
                 _sid = _track_open_b68(engine, uid, sym, "short", epx, {**extra, "stop_loss": float(sh["sl"])},
                                        sh.get("bear_conf"), sh.get("n_flags"))
-                if _sid:
-                    vw.futures[sym]["signal_id"] = _sid
+                if _sid and (r.get("key") or sym) in vw.futures:
+                    vw.futures[r.get("key") or sym]["signal_id"] = _sid
                 _sm().save_virtual_wallet(uid, vw.to_dict())
                 summary["short"] += 1
                 _ledger_open(uid, sym, "short", epx, mg, extra)
@@ -424,6 +431,18 @@ def _track_close_b68(engine, sid, px, why):
         logger.debug(f"auto_b68 tracker close: {e}")
 
 
+def _auto_open_b70(vw, sym: str) -> bool:
+    """مركز قياس مفتوح على الأصل: بالمفتاح المستقل، أو بمفتاح الرمز لمراكز قياس قديمة (قبل الدفعة 70)."""
+    from core.virtual_wallet import VirtualWallet as _VW
+    if _VW.auto_key(sym) in vw.futures:
+        return True
+    for book in (vw.futures, vw.positions):
+        p = book.get(sym)
+        if p and p.get("logic_ver"):
+            return True
+    return False
+
+
 def scan_line_b68(sm: dict) -> str:
     """سطر تقرير المسح: ما فعله التداول الآلي في هذه الدورة (يظهر دائماً، حتى بلا صفقات)."""
     sm = sm or {}
@@ -447,6 +466,9 @@ def scan_line_b68(sm: dict) -> str:
         t += f" (تعذّر تحليل {len(_es)}: {'، '.join(_es[:12])})"
     elif sm.get("errors"):
         t += f" (تعذّر تحليل {sm['errors']})"
+    _hs = sm.get("held_syms") or []
+    if _hs:   # batch70: سبب الأصل المتخطّى (كان «فُحص 32 من 33» بلا تفسير)
+        t += f" (تُخطّي {len(_hs)}: {'، '.join(_hs[:8])} — مركز قياس مفتوح عليه)"
     _np = sm.get("no_perp") or []
     if _np:
         t += f" (استُبعد لعدم وجود عقد دائم على OKX وحلّ محله التالي: {'، '.join(_np[:8])})"
@@ -543,10 +565,11 @@ async def check_auto_exits_b68(engine, send_fn=None) -> int:
             notes, changed = [], False
             books = [("spot", s) for s, p in vw.positions.items() if p.get("logic_ver")] + \
                     [("fut", s) for s, p in vw.futures.items() if p.get("logic_ver")]
-            for book, sym in books:
+            for book, sym in books:      # sym = مفتاح المحفظة (مثل XAG@AUTO)؛ _bs = الرمز الحقيقي للبيانات
                 pos = (vw.positions if book == "spot" else vw.futures).get(sym)
                 if not pos:
                     continue
+                _bs = VirtualWallet.base_symbol(sym, pos) if book == "fut" else sym
                 side = "long" if book == "spot" else pos.get("side", "long")
                 short = side == "short"
                 try:
@@ -555,8 +578,8 @@ async def check_auto_exits_b68(engine, send_fn=None) -> int:
                 except Exception:
                     _op_ts = now - 300
                 since = float(pos.get("last_chk_ts") or _op_ts)
-                bars = await _minute_bars_b68(engine, sym, since)
-                pd = await engine.data_layer.get_price(sym, mkttype="futures")
+                bars = await _minute_bars_b68(engine, _bs, since)
+                pd = await engine.data_layer.get_price(_bs, mkttype="futures")
                 px = float((pd or {}).get("price") or 0)
                 if not bars and px > 0:
                     bars = [(now, px, px)]   # احتياط: السعر الحالي إن تعذّرت شموع الدقيقة
@@ -595,7 +618,7 @@ async def check_auto_exits_b68(engine, send_fn=None) -> int:
                     if final:
                         _track_close_b68(engine, pos.get("signal_id"), xp, kind)
                     closed += 1
-                    notes.append(_close_msg(sym, side, kind, t))
+                    notes.append(_close_msg(_bs, side, kind, t))
                     if final:
                         break
                 _book = vw.positions if book == "spot" else vw.futures
