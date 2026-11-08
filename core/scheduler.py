@@ -330,10 +330,20 @@ class Scheduler:
             candidate = (now + timedelta(days=1)).replace(
                 hour=next_h, minute=0, second=0, microsecond=0)
         ksa_h = (candidate.hour + 3) % 24
-        hours = max(1, round((candidate - now).total_seconds() / 3600))
         from core.event_risk import _ar_count
+        # batch68j: كان round() فيظهر «بعد 3 ساعات» بين 05:00 و09:00 حين يتأخر إرسال التقرير ≥30 دقيقة
+        _mins = max(1, int((candidate - now).total_seconds() // 60))
+        _h, _m = divmod(_mins, 60)
+        if _m >= 55:   # دقائق قليلة بعد بدء المسح → ساعات كاملة
+            _h, _m = _h + 1, 0
+        if _h and _m >= 5:
+            _left = f"{_ar_count(_h, 'ساعة', 'ساعتين', 'ساعات', 'ساعة')} و{_m} دقيقة"
+        elif _h:
+            _left = _ar_count(_h, 'ساعة', 'ساعتين', 'ساعات', 'ساعة')
+        else:
+            _left = f"{_m} دقيقة"
         return (f"⏰ المسح القادم: {ksa_h:02d}:00 KSA — "
-                f"بعد {_ar_count(hours, 'ساعة', 'ساعتين', 'ساعات', 'ساعة')} — {_get_session_name(ksa_h)}")
+                f"بعد {_left} — {_get_session_name(ksa_h)}")
 
     def next_weekly_ar(self) -> str:
         now  = datetime.now(timezone.utc)
