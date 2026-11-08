@@ -2107,7 +2107,10 @@ def _autotrade_users_text_b68() -> str:
         L.append(f"🔁 تحليلات كل مسح: {_arc(len(tiers), 'باقة واحدة', 'باقتان', 'باقات', 'باقة')} × الأصول "
                  "(الحسابات بنفس الباقة تتشارك التحليل)")
     L.append("")
-    L.append("للإيقاف: /autotrade off [user\\_id] | للتشغيل: /autotrade on [user\\_id] | قياس حساب: /autostats [user\\_id]")
+    # batch68m: الأقواس والشرطة السفلية كانت تظهر «user\\_id» بلا أقواس في Telegram — مثال برقم فعلي بدلها
+    _ex = f"`{uids[0]}`" if uids else "رقم الحساب"
+    L.append(f"للإيقاف: /autotrade off ثم رقم الحساب — مثال: /autotrade off {_ex}")
+    L.append("للتشغيل: /autotrade on ثم الرقم | قياس حساب: /autostats ثم الرقم")
     return "\n".join(L)
 
 
