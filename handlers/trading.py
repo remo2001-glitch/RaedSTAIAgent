@@ -1777,8 +1777,13 @@ async def cmd_premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("لا يوجد مستخدمون مدفوعون")
                 return
             lines = [f"💎 *المستخدمون المدفوعون ({len(premium_users)})*",""]
+            # batch68m: list_premium_users تُرجع dict — كان u.user_id يُفشل الأمر («'dict' object has no attribute 'user_id'»)
+            _at_on = set(_sm.get_autotrade_users() or [])
             for u in premium_users:
-                lines.append(f"• {u.user_id} {u.notes or ''}")
+                _uid = int(u.get("user_id") if isinstance(u, dict) else getattr(u, "user_id", 0))
+                _tr = (u.get("tier") if isinstance(u, dict) else getattr(u, "tier", "")) or ""
+                _tn = TIERS.get(_tr, {}).get("name", _tr)
+                lines.append(f"• `{_uid}` — {_tn}" + (" | 🤖 تداول آلي مفعّل" if _uid in _at_on else ""))
             await update.message.reply_text(
                 "\n".join(lines), parse_mode=ParseMode.MARKDOWN)
 
