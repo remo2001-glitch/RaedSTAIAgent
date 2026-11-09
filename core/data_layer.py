@@ -184,6 +184,11 @@ def _cvd_persist_set(kind: str, key: str, value, ttl: int = 3600):
     except Exception:
         pass
 
+# batch72 (قرار رحال 2026-11-09): الشموع اليومية من OKX بتوقيت UTC (المعيار القياسي: إغلاق 00:00 UTC = 03:00 KSA)
+# كان شريط OKX اليومي «1D» (بلا utc) = توقيت هونغ كونغ (إغلاق 16:00 UTC = 19:00 KSA) بخلاف Binance/CoinGecko/TradingView.
+OKX_DAILY_BAR = "1Dutc"
+DAILY_OPEN_HOUR_UTC = 0
+
 _OHLCV_SNAP: dict = {}   # batch37: آخر شموع OKX ناجحة لكل (رمز/عملة تسعير/سوق) — تُستخدم قبل CoinGecko عند تعذّر OKX
 _SNAP_MAX_AGE = 6 * 3600
 
@@ -201,7 +206,7 @@ def _snap_save(snapkey: str, candles: list):
         if r:
             import json as _jx, zlib as _zl, base64 as _b64
             blob = _b64.b64encode(_zl.compress(_jx.dumps(candles).encode("utf-8"), 6)).decode("ascii")
-            r.setex(f"raed:ohlcvsnap:{snapkey}", _SNAP_MAX_AGE, _jx.dumps({"ts": _ts.time(), "b": blob}))
+            r.setex(f"raed:ohlcvsnap:u:{snapkey}", _SNAP_MAX_AGE, _jx.dumps({"ts": _ts.time(), "b": blob}))
     except Exception:
         pass
 
@@ -213,7 +218,7 @@ def _snap_load(snapkey: str):
         hit = _OHLCV_SNAP.get(snapkey)
         if not hit:
             r = _cvd_redis()
-            raw = r.get(f"raed:ohlcvsnap:{snapkey}") if r else None
+            raw = r.get(f"raed:ohlcvsnap:u:{snapkey}") if r else None   # batch72: «u» = لقطات UTC فقط
             if raw:
                 import json as _jx, zlib as _zl, base64 as _b64
                 d = _jx.loads(raw)
@@ -1097,7 +1102,7 @@ class DataLayer:
             limit   = min(days, 300)
             data = await _fetch(
                 self.session,
-                f"https://www.okx.com/api/v5/market/candles?instId={inst_id}&bar=1D&limit={limit}",
+                f"https://www.okx.com/api/v5/market/candles?instId={inst_id}&bar={OKX_DAILY_BAR}&limit={limit}",
                 headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
                 retries=2,
             )
@@ -2433,7 +2438,7 @@ class DataLayer:
             return ""
 
 
-    async def _okx_hist_rows(self, inst_id: str, days: int, bar: str = "1D") -> list:
+    async def _okx_hist_rows(self, inst_id: str, days: int, bar: str = OKX_DAILY_BAR) -> list:
         """batch37 (شموع ×365): جلب صفوف OKX الخام مع ترقيم صفحي.
         الطلب الأول بسقف 300 كما كان؛ إن نقصت النتيجة عن المطلوب تُجلب صفحات أقدم بـ`after`
         (≤100 لكل صفحة، حتى 6 صفحات) وتُدمج دون تكرار. فشل صفحة لاحقة لا يُسقط ما جُلب سابقاً.

@@ -1943,7 +1943,7 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         pass
                     lines.append(f"  📍 الآن ({_sym_now}): RSI = {float(_now_fc.get('rsi', 0)):.0f} | "
                                  f"حجم = {_fvr_pm(float(_now_fc.get('vol_ratio', 0)))}"
-                                 + (f" (شمعة {__import__('core.indicators', fromlist=['volume_candle_label_ar']).volume_candle_label_ar(_now_fc.get('vol_candle'), _now_fc.get('vol_candle_h', 16)) or _now_fc.get('vol_candle')})" if _now_fc.get('vol_candle') else "")
+                                 + (f" (شمعة {__import__('core.indicators', fromlist=['volume_candle_label_ar']).volume_candle_label_ar(_now_fc.get('vol_candle'), _now_fc.get('vol_candle_h', 0)) or _now_fc.get('vol_candle')})" if _now_fc.get('vol_candle') else "")
                                  + f"{_now_extra}")
                     # batch31: حكم صريح — شرطا RSI/الحجم في المصفوفة قد يتحققان بينما الثقة دون حد الدخول (BTC: 46% < 55%)
                     # فكان المستخدم يقرأ «🟢 دخول 50%» ثم «الآن RSI 47 حجم 1.04x» دون حكم. وروابط الوقف/الأهداف في /signal.

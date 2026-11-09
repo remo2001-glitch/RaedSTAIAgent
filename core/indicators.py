@@ -8,7 +8,7 @@ Wilder (RMA) على كامل السلسلة. الفرق الفعلي: عند خ�
 الآن كل المواضع تستورد من هنا. (ADX كان يستخدم Wilder أصلاً — لم يتغيّر.)
 
 volume_completed_fix: كانت نسبة الحجم = حجم آخر شمعة ÷ SMA20 بما فيها الشمعة
-اليومية التي ما زالت تتكوّن (تبدأ 19:00 بتوقيت الرياض في بيانات البوت) فتظهر
+اليومية التي ما زالت تتكوّن (تبدأ 03:00 بتوقيت الرياض = 00:00 UTC منذ الدفعة 72؛ كانت 19:00) فتظهر
 0.03x–0.1x مساءً. الآن تُقارَن آخر شمعة **مكتملة** بمتوسط 20 شمعة مكتملة.
 العتبات (0.3x / 0.5x / 1.5x / 3.0x) لم تتغيّر.
 
@@ -182,7 +182,7 @@ def volume_ratio_completed(candles: list, window: int = 20,
 
 def volume_candle_date(candles: list, now: Optional[float] = None) -> str:
     """batch49 (قرار 6): تاريخ (UTC) آخر شمعة *مكتملة* التي بُنيت عليها نسبة الحجم، بصيغة YYYY-MM-DD ('' إن تعذّر).
-    يوضح للقارئ سبب اختلاف النسبة بين استدعاءين حول إغلاق الشمعة اليومية (16:00 UTC في OKX)."""
+    يوضح للقارئ سبب اختلاف النسبة بين استدعاءين حول إغلاق الشمعة اليومية (00:00 UTC — OKX 1Dutc منذ الدفعة 72)."""
     try:
         cs = list(candles or [])
         if last_candle_is_forming(cs, now) and len(cs) >= 3:
@@ -209,7 +209,7 @@ _AR_MONTHS_B50 = ["يناير", "فبراير", "مارس", "أبريل", "ما�
 
 
 def volume_candle_open_hour(candles: list, now: Optional[float] = None):
-    """batch59 (#694): ساعة افتتاح (UTC) آخر شمعة مكتملة — OKX اليومية 16:00؛ الأسهم المُرمَّزة/غيرها قد تختلف."""
+    """batch59 (#694): ساعة افتتاح (UTC) آخر شمعة مكتملة — OKX اليومية 00:00 UTC (1Dutc، الدفعة 72)؛ Yahoo للأسهم جلسة سوق."""
     try:
         cs = list(candles or [])
         if last_candle_is_forming(cs, now) and len(cs) >= 3:
@@ -220,7 +220,7 @@ def volume_candle_open_hour(candles: list, now: Optional[float] = None):
         return None
 
 
-def volume_candle_label_ar(date_str: str, open_hour_utc=16) -> str:
+def volume_candle_label_ar(date_str: str, open_hour_utc=0) -> str:   # batch72: الافتراضي يوم UTC
     """batch50: وصف مقروء لشمعة الحجم: «29→30 أكتوبر» (شمعة OKX اليومية تفتح 16:00 UTC وتغلق 16:00 اليوم التالي)،
     فلا يلتبس التاريخ المعروض بيوم الإغلاق. '' إن كان التاريخ غير صالح."""
     try:
