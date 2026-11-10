@@ -396,6 +396,11 @@ class Scheduler:
                         text += "\n\n" + system_txt
                     await self._notify_user(uid, text)
                     sent += 1
+                    try:   # batch73 (G2): الملاحظات المعروضة لا تتكرر في التقرير التالي
+                        import time as _t73
+                        _sm.mark_comments_reported(uid, _t73.time())
+                    except Exception:
+                        pass
                 except Exception as _e:
                     logger.debug(f"period report {period} user={uid}: {_e}")
             logger.info(f"📊 التقرير {_name} أُرسل لـ {sent} مستخدم")

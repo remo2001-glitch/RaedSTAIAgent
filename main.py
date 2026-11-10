@@ -112,8 +112,11 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "━━━━━━━━━━━━━━━━━━\n"
         "🌏 01:00 | 🌅 05:00 | 🌍 09:00\n"
         "📈 13:00 | 🗽 17:00 | 🌙 21:00 KSA\n"
-        "• تحليل أفضل العملات تلقائياً\n"
-        f"• تنبيه فوري عند فرصة ≥ {int(BOT_CONFIG['MIN_CONFIDENCE']*100)}%"
+        # batch73 (E1): نص التنبيه الفوري عند 65% لم يطابق النظام — المسح السريع للعلم فقط،
+        # والتداول الآلي الافتراضي بحكم /signal الكامل، والتنبيه الساعي (BTC/ETH/SOL/BNB) عند ثقة ≥ 80% مع جهة واضحة
+        "• التداول الآلي الافتراضي (للمفعَّل): حكم /signal الكامل على 33 أصلاً\n"
+        "• المسح السريع لأكبر 5 عملات للعلم فقط\n"
+        "• تنبيه ساعي عند إشارة BTC/ETH/SOL/BNB بثقة ≥ 80% وجهة واضحة"
     )
 
     days_note = ""
@@ -143,7 +146,8 @@ def _build_commands_text(user_id: int, tier: str, tier_name: str) -> str:
         "/quicksignal — تحليل أولي سريع مع نقاط الدخول والخروج",
         "/portfolio — استعراض المحفظة",
         "/trades — الصفقات السابقة والقائمة",
-        "/stats — إحصائيات حسابك",
+        ("/stats — إحصائيات حسابك (للمالك: يشمل حالة النظام)" if __import__("core.access_guard", fromlist=["is_owner"]).is_owner(user_id)
+         else "/stats — إحصائيات حسابك"),   # batch73 (E2): مرة واحدة بدل تكرارها في قسم المالك
         "/live — التداول الحقيقي (ربط منصة)",
         "/autotrade — تداول تلقائي (تشغيل/إيقاف)",
         "/setportfolio — ضبط حجم المحفظة",
@@ -191,7 +195,6 @@ def _build_commands_text(user_id: int, tier: str, tier_name: str) -> str:
             "/killswitch — إيقاف طارئ", "/drift — حالة النموذج", "/review — المراجعة الأسبوعية",
             "/survey\\_report — تقرير الاستبيان", "/whaletest — اختبار Whale التاريخي",
             "/scanstatus — حالة المسح والمجدول",
-            "/stats — يتضمن حالة النظام للمالك",
         ]))
 
     lines = [f"📋 *أوامرك — {tier_name}*", ""]

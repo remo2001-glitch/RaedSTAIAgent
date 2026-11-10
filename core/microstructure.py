@@ -61,6 +61,7 @@ class LiquidityProfile:
     depth_low:               float = 0.0   # batch56 (#629): أدنى سعر شراء ضمن أول 20 مستوى
     depth_high:              float = 0.0   # batch56 (#629): أعلى سعر بيع ضمن أول 20 مستوى
     snapshot_ts:             float = 0.0   # batch56 (#631): وقت لقطة الدفتر
+    book_anomaly:            bool  = False # batch73 (#1): جهة < 1% من الأخرى في أصل كبير بعد إعادة الجلب — لا حكم
 
 
 @dataclass
@@ -71,6 +72,17 @@ class OrderFlowSignal:
     net_pressure:    float
     support_level:   float
     resistance_level: float
+
+
+def _book_anomalous_b73(bids, asks, levels: int = 20) -> bool:
+    """batch73 (#1): جهة أقل من 1% من الأخرى (أول 20 مستوى) والجهة الأكبر ≥ $100K = لقطة غير طبيعية."""
+    try:
+        tb = sum(float(b[0]) * float(b[1]) for b in (bids or [])[:levels])
+        ta = sum(float(a[0]) * float(a[1]) for a in (asks or [])[:levels])
+        big, small = max(tb, ta), min(tb, ta)
+        return big >= 100_000 and small < 0.01 * big
+    except Exception:
+        return False
 
 
 def _stamp_depth_b56(prof, bids, asks):
@@ -130,11 +142,26 @@ class MicrostructureLayer:
                         bids  = books.get("bids", [])
                         asks  = books.get("asks", [])
                         if bids or asks:
+                            # batch73 (#1): لقطة دفتر مشوّهة (BTC: شراء $587 مقابل بيع $439,612) — إعادة جلب مرة؛
+                            # إن تكررت تُوسم ولا تُخزَّن فلا تُبنى عليها أحكام «ضغط بيع قوي/غير موصى بالتداول»
+                            _anom = _book_anomalous_b73(bids, asks)
+                            if _anom:
+                                try:
+                                    async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=8)) as r2:
+                                        if r2.status == 200:
+                                            _b2 = ((await r2.json()).get("data") or [{}])[0]
+                                            if _b2.get("bids") or _b2.get("asks"):
+                                                bids, asks = _b2.get("bids", []), _b2.get("asks", [])
+                                                _anom = _book_anomalous_b73(bids, asks)
+                                except Exception:
+                                    pass
                             walls   = self._compute_walls_from_levels(symbol, bids, asks)
                             profile = self._build_profile_from_walls(
                                 symbol, walls, bids, asks, order_size_usd)
                             profile.source = "okx"
-                            self._cache[symbol] = (profile, time.time())
+                            profile.book_anomaly = bool(_anom)
+                            if not _anom:
+                                self._cache[symbol] = (profile, time.time())
                             logger.info(f"✅ Liquidity OKX ({symbol})")
                             return profile
         except Exception as e:

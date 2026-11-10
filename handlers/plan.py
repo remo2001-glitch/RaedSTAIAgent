@@ -126,6 +126,27 @@ def _collapse_closed_notes(items):
 from core.market_checks import sharp_move_warning as _sharp_warn, breadth_note as _breadth_note
 
 
+def _weeks_signal_gate_b73(lines):
+    """batch73 (#21): نصوص الأسابيع كانت توحي بأن شرط RSI وحده يكفي للدخول («دخول تدريجي عند ارتداد RSI فوق 35»،
+    «قرار الدخول الكامل») بخلاف القاعدة المجمّدة: الدخول بحكم /signal الكامل فقط. عرض فقط."""
+    import re as _r
+    out = []
+    for l in list(lines or []):
+        try:
+            l = _r.sub(r"دخول تدريجي في (.+?) عند ارتداد RSI فوق 35", r"مراقبة ارتداد RSI فوق 35 في \1 — الدخول بحكم /signal فقط", l)
+            l = l.replace("دخول تدريجي عند ارتداد RSI فوق 35", "مراقبة ارتداد RSI فوق 35 — الدخول بحكم /signal فقط")
+            l = l.replace("مراقبة مستويات الدعم ودخول عند ارتداد RSI فوق 35", "مراقبة مستويات الدعم وارتداد RSI فوق 35 — الدخول بحكم /signal فقط")
+            l = l.replace("تقييم القاع — قرار الدخول الكامل", "تقييم القاع — أي دخول بحكم /signal فقط عند استيفاء شروطه")
+            l = l.replace("تقييم: هل تشكّل قاع؟ قرار الدخول الكامل", "تقييم: هل تشكّل قاع؟ — أي دخول بحكم /signal فقط عند استيفاء شروطه")
+            l = l.replace("🟢 ابدأ التجميع التدريجي", "🟢 منطقة تجميع محتملة — الدخول بحكم /signal فقط")
+        except Exception:
+            pass
+        out.append(l)
+    if out and not any("بحكم /signal" in l for l in out[-1:]):
+        out.append("• ⚖️ كل دخول بحكم /signal فقط: ثقة ≥ حد الدخول + اتجاه شراء مؤكد + تأكيدات 2/4")
+    return out
+
+
 async def _plan_btc_dom(engine) -> float:
     """نفس مصدر هيمنة BTC المستخدم في /signal (كاش data_layer) لتطابق تصنيف السوق."""
     try:
@@ -1988,7 +2009,7 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                            else f" ℹ️ (تأثير متوسط: {_e.name_ar})")
         except Exception as _wk_e:
             logger.debug(f"planmonth event-week link: {_wk_e}")
-        lines += ["", "📅 *جدول الشهر المقترح*"] + week_plan
+        lines += ["", "📅 *جدول الشهر المقترح*"] + _weeks_signal_gate_b73(week_plan)   # batch73 (#21)
         # batch19: أحداث الشهر (FOMC/CPI/انتهاء الخيارات) كما في /planweek — مع تصفية النطاق للأصول المُرمَّزة
         try:
             _pm_all_tok = bool(symbols) and all(_non_crypto_sym(str(_s).upper()) for _s in symbols)
@@ -2486,7 +2507,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                         f" (المطبّق: الارتداد للمتوسط بشروطه أدناه وبحجم مخفّض — +DI أعلى بـ{-_g62:.1f}: جهة DI تعاكس تصنيف الهبوط؛ لا هبوط قائم بقاعدة /signal)"
                                         if _g62 < 0 else
                                         f" (الارتداد مسموح: ADX {_a62:.0f}، −DI أعلى بـ{_g62:.1f} فقط (< 3) — لا هبوط قائم بقاعدة /signal)")
-                                       if _a62 >= 25 else f" (الارتداد مسموح: ADX {_a62:.0f} < 25 — لا هبوط قائم بقاعدة /signal)")
+                                       if _a62 >= 25 else f" (الارتداد مسموح: ADX {_a62:.0f} < 25 — الهبوط ضعيف القوة لا غائب؛ ليس هبوطاً قائماً بقاعدة /signal)")   # batch73 (#20)
                 except Exception:
                     pass
 
@@ -2529,7 +2550,9 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception:
                     pass
                 # EMA50_leak_fix: حساب _ema_cond و_rsi_cond هنا (قبل جميع الكتل)
-                _rsi_t_w = 35 if "هابط" in regime.description_ar else 45
+                # batch73 (#31): شرط اتباع الاتجاه RSI > 45 دائماً — كان 35 في السوق الهابط فيظهر «✅ RSI فوق 35» (BGB 35.1)
+                # بينما تذييل الخطة نفسها: «>45 لاتباع الاتجاه و≤35 للارتداد» (RSI بين 35 و45 لا يحقق أياً منهما)
+                _rsi_t_w = 45
                 # rsi_plan_fix: RSI>=70 → تحذير لا تأكيد
                 if rsi_w >= 70:
                     _rsi_cond = f"  • ⚠️ RSI = {rsi_w:.0f} ذروة شراء — انتظر تصحيح تحت 60"
@@ -2732,8 +2755,10 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                              f"  • ❌ الثقة ≥ {_t_entry_plan}% (حالياً {signal.confidence:.0%}) — غير مُستوفى"),
                             (f"  • ✅ اتجاه الإشارة شراء — مُستوفى"
                              if locals().get("_dir_ok_w", False) else
-                             f"  • ❌ اتجاه الإشارة شراء (حالياً {'بيع' if signal.direction == 'short' else ('اتجاه هابط قائم — لا شراء' if _bear_w57 else 'غير مؤكد')}) — غير مُستوفى"
-                             + (" (الجهة تتطلب ثقة 65%)" if (signal.direction not in ('long', 'short') and signal.confidence < SIGNAL_DIRECTION_MIN_CONF) else "")),
+                             f"  • ❌ اتجاه الإشارة شراء (حالياً {'بيع' if signal.direction == 'short' else ('اتجاه هابط قائم — لا شراء' if _bear_w57 else (f'ميل هابط {1 - signal.confidence:.0%} — لا شراء' if signal.confidence <= 1 - SIGNAL_DIRECTION_MIN_CONF else 'غير مؤكد'))}) — غير مُستوفى"
+                             # batch73 (#32/#16): السبب في الهبوط القائم أو الميل الهابط ليس الثقة — الإلحاق مع «غير مؤكد» فقط
+                             + (" (الجهة تتطلب ثقة 65%)" if (signal.direction not in ('long', 'short') and signal.confidence < SIGNAL_DIRECTION_MIN_CONF
+                                                            and not _bear_w57 and signal.confidence > 1 - SIGNAL_DIRECTION_MIN_CONF) else "")),
                             # plan_pro_fix: label واضح حسب حالة الإشارة
                             # pro_option_technical_gate_fix: يتطلب الآن
                             # استيفاء RSI وEMA50 معاً بجانب الثقة، لا الثقة
@@ -3095,7 +3120,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if _buy_signals and _rsi_pw < 20:
                 # ذروة بيع تاريخية + إشارات شراء → دخول تكتيكي
                 week_lines = [
-                    f"• أسبوع 1: دخول تكتيكي محدود (25%) في {_buy_names} — RSI={_rsi_pw:.0f} ذروة بيع تاريخية",
+                    f"• أسبوع 1: دخول تكتيكي محدود (25%) في {_buy_names} — RSI السوق المرجعي (BTC)={_rsi_pw:.0f} ذروة بيع تاريخية",
                     f"• أسبوع 2: مراقبة — وقف صارم إذا كسر الدعم | زيادة عند RSI > 25",
                     f"• أسبوع 3: Fear & Greed < 25 → زيادة تدريجية عند تأكيد القاع ({_fg_lbl})",
                     "• أسبوع 4: مراجعة المراكز وقرار الاستمرار",
@@ -3103,9 +3128,9 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
             elif _buy_signals and _rsi_pw < 30:
                 week_lines = [
                     # rsi_logic_fix: RSI مرتفع لا يعني "ارتداد فوق 30"
-                    (f"• أسبوع 1: لا دخول — RSI = {_rsi_pw:.0f} ذروة شراء، انتظر تصحيح تحت 60"
+                    (f"• أسبوع 1: لا دخول — RSI السوق المرجعي (BTC) = {_rsi_pw:.0f} ذروة شراء، انتظر تصحيح تحت 60"
                      if _rsi_pw >= 70
-                     else f"• أسبوع 1: مراقبة — RSI = {_rsi_pw:.0f} ({_rsi_lbl})"),
+                     else f"• أسبوع 1: مراقبة — RSI السوق المرجعي (BTC) = {_rsi_pw:.0f} ({_rsi_lbl})"),   # batch73 (#30)
                     f"• أسبوع 2: دخول تدريجي في {_buy_names} عند ارتداد RSI فوق 35",
                     f"• أسبوع 3: Fear & Greed < 25 → {'🟢 ابدأ التجميع التدريجي' if _fg_pw < 25 else 'انتظر تأكيد ارتداد'} ({_fg_lbl})",
                     "• أسبوع 4: تقييم القاع — قرار الدخول الكامل",
@@ -3115,9 +3140,9 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 week_lines = [
                     (f"• أسبوع 1: 🟡 تجميع محدود 3-5% عند الدعم — Fear={_fg_pw} < 20 (خوف شديد = فرصة)"
                      if _fg_pw < 20
-                     else (f"• أسبوع 1: لا دخول — RSI = {_rsi_pw:.0f} ذروة شراء"
+                     else (f"• أسبوع 1: لا دخول — RSI السوق المرجعي (BTC) = {_rsi_pw:.0f} ذروة شراء"
                            if _rsi_pw >= 70
-                           else f"• أسبوع 1: مراقبة — RSI = {_rsi_pw:.0f}")),
+                           else f"• أسبوع 1: مراقبة — RSI السوق المرجعي (BTC) = {_rsi_pw:.0f}")),   # batch73 (#30)
                     "• أسبوع 2: دخول تدريجي عند ارتداد RSI فوق 35",
                     f"• أسبوع 3: Fear & Greed < 25 → {'🟢 ابدأ التجميع التدريجي' if _fg_pw < 25 else 'انتظر تأكيد ارتداد'} ({_fg_lbl})",
                     "• أسبوع 4: تقييم القاع — قرار الدخول الكامل",
@@ -3238,7 +3263,7 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as _pwk_e:
             logger.debug(f"planweek event-week link: {_pwk_e}")
         if symbols:   # batch59 (#731): لا خطة دخول عامة حين لا أصل محلَّل
-            lines += ["", "📅 *خطة الأسابيع الأربعة القادمة (تبدأ من هذا الأسبوع)*"] + week_lines + [""]
+            lines += ["", "📅 *خطة الأسابيع الأربعة القادمة (تبدأ من هذا الأسبوع)*"] + _weeks_signal_gate_b73(week_lines) + [""]   # batch73 (#21)
 
         lines += ["📅 *أحداث الأسبوع*"]
         # نُزيل العنوان المكرر من format_upcoming_ar

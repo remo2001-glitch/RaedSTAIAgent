@@ -20,7 +20,7 @@ import ast
 import re
 import os
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Any
 
 logger = logging.getLogger(__name__)
@@ -97,7 +97,7 @@ def _fetch_json(req, timeout: int):
         return json.loads(resp.read())
 
 
-async def agent_okx_review() -> Dict[str, Any]:
+async def agent_okx_review(prev_x: Optional[List[str]] = None) -> Dict[str, Any]:
     """
     يفحص مستودع OKX agent-skills للتحديثات:
     - endpoints جديدة
@@ -160,23 +160,30 @@ async def agent_okx_review() -> Dict[str, Any]:
             stock_data = await asyncio.to_thread(_fetch_json, req, 15)
             if stock_data.get("code") == "0":
                 instruments = stock_data.get("data", [])
-                # batch52: instFamily لا يصلح لسوق SPOT (HTTP 400)؛ نجلب SPOT ونفلتر محلياً X-prefix مقابل USDT
-                x_stocks = [i["instId"] for i in instruments
-                            if i.get("instId", "").startswith("X")
-                            and i.get("instId", "").endswith("-USDT")]
+                # batch73 (F1): التصنيف بقائمة الأسهم المُرمَّزة لا بحرف X وحده (كانت XRP وXLM وXTZ وXCH وXAUT تُعدّ أسهماً)،
+                # و«جديدة» = الفرق عن قائمة الأسبوع السابق (كانت القائمة كلها ناقص 13 رمزاً ثابتاً)
+                try:
+                    from core.symbol_classify import is_tokenized_x_ticker as _tok73
+                except Exception:
+                    _tok73 = lambda b: False
+                _real_x73 = {"XCH", "XPL", "XDC", "XEM", "XYO", "XVS", "XEC", "XAI", "XION", "XCN", "XNO", "XVG", "XPR", "XCAD", "XETA", "XAVA", "XTM", "XWG", "XIDO"}
+                x_stocks = sorted(i["instId"] for i in instruments
+                                  if i.get("instId", "").endswith("-USDT")
+                                  and _tok73(i["instId"].split("-")[0])
+                                  and i["instId"].split("-")[0] not in _real_x73)
+                result["x_list"] = x_stocks
                 result["findings"].append(
-                    f"📊 أصول X-prefix في OKX Spot: {len(x_stocks)} أصل")
-                # الأصول المعروفة حالياً
-                known_x = {
-                    "XSPCX-USDT", "XAMZN-USDT", "XAAPL-USDT", "XGOOGL-USDT",
-                    "XMETA-USDT", "XAMD-USDT", "XNFLX-USDT", "XSPY-USDT",
-                    "XORCL-USDT", "XAVGO-USDT", "XMSFT-USDT", "XCOIN-USDT",
-                    "XNVDA-USDT",
-                }
-                new_x = set(x_stocks) - known_x
-                if new_x:
-                    result["new_features"].append(
-                        f"🆕 أصول X-prefix جديدة: {', '.join(sorted(new_x))}")
+                    f"📊 أسهم مُرمَّزة (X) في OKX Spot: {len(x_stocks)} أصل")
+                if prev_x:
+                    new_x = set(x_stocks) - set(prev_x)
+                    gone_x = set(prev_x) - set(x_stocks)
+                    if new_x:
+                        result["new_features"].append(
+                            f"🆕 أسهم مُرمَّزة جديدة منذ المراجعة السابقة: {', '.join(sorted(new_x))}")
+                    if gone_x:
+                        result["findings"].append(f"➖ أُزيلت منذ المراجعة السابقة: {', '.join(sorted(gone_x))}")
+                else:
+                    result["findings"].append("ℹ️ أول قائمة مرجعية — الإضافات الجديدة تُرصد من المراجعة القادمة")
         except Exception as e:
             result["warnings"].append("⚠️ تعذّر جلب قائمة أدوات OKX")
 
@@ -247,9 +254,9 @@ def agent_finance_review(project_files: Dict[str, str]) -> Dict[str, Any]:
     else:
         result["critical"].append("❌ Fibonacci calculation غير موجود!")
 
-    # ── فحص Trailing Stop ──
-    if "Trailing Stop" in an and "rsi < 15" in an.lower() or "rsi < 30" in an.lower():
-        result["ok"].append("✅ Trailing Stop مع RSI filter موجود")
+    # ── فحص نموذج الخروج — batch73 (#22، قرار رحال 2026-11-06): 60/40 + نقل الوقف إلى TP1 بلا Trailing ──
+    if "TP1 (60%) ← TP2 (40%)" in an:
+        result["ok"].append("✅ نموذج الخروج 60/40 مع نقل الوقف إلى TP1")
 
     # ── فحص Yahoo Finance ──
     if "_ohlcv_yahoo" in dl:
@@ -305,7 +312,7 @@ def agent_code_review(project_files: Dict[str, str]) -> Dict[str, Any]:
             ("TK_tier_fix: Futures",          "الأسهم المُرمَّزة Futures → جميع الباقات"),
             ("FA_bug_fix",                    "_sym_disp"),
             ("FIN2c: outlier SL",             "_recent = candles[-min(10"),
-            ("FIN3b: Trailing RSI",           "rsi < 15"),
+            ("EXIT_b73: خروج 60/40",          "TP1 (60%) ← TP2 (40%)"),
             ("BT1_fix: Yahoo backtest",       "_ohlcv_yahoo"),
             ("core.data_layer imports",       "from core.data_layer import"),
         ],
@@ -473,7 +480,7 @@ def agent_report_compile(
     # بناء التقرير
     lines = [
         f"🔬 *تقرير المراجعة الأسبوعية — رائد*",
-        f"📅 {now.strftime('%Y-%m-%d %H:%M')} UTC",
+        f"📅 {(now + timedelta(hours=3)).strftime('%Y-%m-%d %H:%M')} بتوقيت السعودية",   # batch73 (F5)
         f"━━━━━━━━━━━━━━━━━━",
         f"",
         f"📊 *النتيجة الإجمالية: {overall}/100*{trend}",
@@ -485,8 +492,10 @@ def agent_report_compile(
         f"🤖 *الوكلاء:*",
         f"• AgentOKX:     {'✅' if okx['status'] == 'ok' else '❌'}",
         f"• AgentFinance: {finance.get('score', 0)}/100",
-        f"• AgentCode:    {code.get('score', 0)}/100",
-        f"• AgentQA:      {qa.get('score', 0)}/100 ({qa.get('summary', '')})",
+        # batch73 (F3/F4): سبب الدرجة، وAgentQA فحص داخلي لوجود إصلاحات معروفة لا اختبارات المشروع
+        f"• AgentCode:    {code.get('score', 0)}/100 (سليم {len(code.get('ok', []))}، تحذيرات {len(code.get('warnings', []))}، حرجة {len(code.get('critical', []))}"
+        + (f" — أهمها: {(code.get('critical') or code.get('warnings'))[0]}" if (code.get('critical') or code.get('warnings')) else "") + ")",
+        f"• AgentQA:      {qa.get('score', 0)}/100 (فحص داخلي لوجود إصلاحات معروفة: {qa.get('summary', '')} — ليس اختبارات المشروع)",
         f"",
     ]
 
@@ -535,15 +544,23 @@ def agent_report_compile(
             lines.append(f"  {date}: {score}/100 ({issues} مشاكل)")
         lines.append("")
 
-    # توصية
+    # توصية — batch73 (F2): توصية «الإطلاق الكامل» كانت تناقض قرار رحال (لا مشتركين قبل إثبات الأفضلية بالقياس)
     if overall >= 90:
-        rec = "✅ *المشروع جاهز للإطلاق الكامل*"
+        rec = "✅ صحة الكود جيدة"
     elif overall >= 75:
-        rec = "🟡 *جاهز مع مراقبة — بعض التحسينات المطلوبة*"
+        rec = "🟡 صحة الكود جيدة مع ملاحظات"
     elif overall >= 60:
-        rec = "🟠 *يحتاج إصلاحات قبل الإطلاق*"
+        rec = "🟠 ملاحظات كود تحتاج إصلاحاً"
     else:
-        rec = "🔴 *إصلاحات عاجلة مطلوبة قبل الإطلاق*"
+        rec = "🔴 ملاحظات كود عاجلة"
+    try:
+        from core import access_guard as _ag73
+        from core.auto_trader_b68 import ledger_get as _lg73, auto_stats_b68 as _as73, CRIT_MIN_TRADES as _cm73
+        _st73 = _as73(_lg73(_ag73.owner_id()))
+        rec += (f" — الإطلاق للمشتركين مرهون بالقياس الآلي: {_st73['n']}/{_cm73} صفقة مغلقة"
+                + (" (الشروط مستوفاة — للنقاش)" if _st73.get("ready") else " (لا مشتركين قبل إثبات الأفضلية)"))
+    except Exception:
+        rec += " — الإطلاق للمشتركين مرهون بنتيجة القياس الآلي (/autostats)"
 
     lines += [
         f"━━━━━━━━━━━━━━━━━━",
@@ -591,8 +608,12 @@ async def run_weekly_review(
     history  = _load_review_history(redis_client)
 
     # ── تشغيل الوكلاء بالتوازي ──
+    try:
+        _prev_x73 = ((previous or {}).get("okx") or {}).get("x_list")
+    except Exception:
+        _prev_x73 = None
     okx_result, _ = await asyncio.gather(
-        agent_okx_review(),
+        agent_okx_review(_prev_x73),
         asyncio.sleep(0),  # dummy
     )
     finance_result = agent_finance_review(project_files)

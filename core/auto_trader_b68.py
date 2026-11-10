@@ -327,6 +327,10 @@ async def run_auto_cycle_b68(engine, send_fn=None, bot_data=None) -> dict:
             if px <= 0:
                 continue
             ok, why, rr = long_gate_b68(rec, px)
+            _cf73 = float(rec.get("confidence") or 0)
+            if not ok and _cf73 > 0.35:   # batch73 (H2): عرض فقط — أقرب الأصول للدخول وما ينقصها
+                _near_add_b73(summary, sym, "شراء", _cf73,
+                              (f"الثقة {_cf73:.0%} دون حد الدخول أو التأكيدات ناقصة" if why == "انتظار" else why))
             if ok:
                 amt = size_usd_b68(vw.total_value, _long_factor(rec, tier), ev_mult)
                 amt = min(amt, vw.balance * 0.95)
@@ -377,6 +381,7 @@ async def run_auto_cycle_b68(engine, send_fn=None, bot_data=None) -> dict:
             ok2, why2, rr2 = short_gate_b68(sh, px)
             if not ok2:
                 summary["waits"] += 1
+                _near_add_b73(summary, sym, "Short", 1.0 - _cf73, why2)   # batch73 (H2)
                 continue
             mg = size_usd_b68(vw.total_value, float(sh.get("size_factor") or 0), ev_mult)
             mg = min(mg, vw.balance * 0.95)
@@ -443,6 +448,29 @@ def _auto_open_b70(vw, sym: str) -> bool:
     return False
 
 
+def _near_add_b73(summary: dict, sym: str, side: str, score: float, why: str) -> None:
+    """batch73 (H2): يسجّل أقرب الأصول للدخول (أعلى ثقة شراء أو أعلى ميل هبوط) وسبب الرفض — للعرض فقط."""
+    try:
+        lst = summary.setdefault("near", [])
+        if any(x["sym"] == sym for x in lst):
+            return
+        lst.append({"sym": sym, "side": side, "score": float(score), "why": str(why or "")[:70]})
+    except Exception:
+        pass
+
+
+def near_text_b73(sm: dict, k: int = 3) -> str:
+    try:
+        lst = sorted((sm or {}).get("near") or [], key=lambda x: -x["score"])[:k]
+        if not lst:
+            return ""
+        return "\n🔎 الأقرب للدخول: " + "؛ ".join(
+            f"{x['sym']} {x['side']} ({'ثقة' if x['side'] == 'شراء' else 'ميل هبوط'} {x['score']:.0%}) — ينقصه: {x['why']}"
+            for x in lst)
+    except Exception:
+        return ""
+
+
 def scan_line_b68(sm: dict) -> str:
     """سطر تقرير المسح: ما فعله التداول الآلي في هذه الدورة (يظهر دائماً، حتى بلا صفقات)."""
     sm = sm or {}
@@ -474,7 +502,7 @@ def scan_line_b68(sm: dict) -> str:
         t += f" (استُبعد لعدم وجود عقد دائم على OKX وحلّ محله التالي: {'، '.join(_np[:8])})"
     if float(sm.get("ev_mult", 1) or 1) < 1:
         t += f" | سقف التعرض {float(sm['ev_mult']):.0%}"
-    return t + " — /autostats"
+    return t + " — /autostats" + (near_text_b73(sm) if not (sm.get("long") or sm.get("short")) else "")
 
 
 def _ledger_open(uid, sym, side, px, amt, extra):
@@ -686,7 +714,8 @@ def auto_stats_b68(ledger: list, start_capital: float = 10000.0) -> dict:
     crit = [
         (f"صفقات مغلقة ≥ {CRIT_MIN_TRADES}", n >= CRIT_MIN_TRADES, f"{n}"),
         ("متوسط الصافي لكل صفقة > 0 بعد الرسوم", n > 0 and tot / n > 0, f"{(tot / n if n else 0):+,.2f}$"),
-        (f"أقصى تراجع ≤ {CRIT_MAX_DD_PCT:.0f}% من رأس المال", dd_pct <= CRIT_MAX_DD_PCT, f"{dd_pct:.1f}%"),
+        # batch73 (H1): بلا صفقات مغلقة لا يُعدّ الشرط متحققاً (كان ✅ مع 0 صفقات)
+        (f"أقصى تراجع ≤ {CRIT_MAX_DD_PCT:.0f}% من رأس المال", n > 0 and dd_pct <= CRIT_MAX_DD_PCT, (f"{dd_pct:.1f}%" if n else "—")),
         (f"صفقات في {CRIT_MIN_REGIMES}+ حالات سوق", len(regimes) >= CRIT_MIN_REGIMES, "، ".join(sorted(regimes)) or "—"),
     ]
     return {"n": n, "open": len([p for p in opens if p not in done]), "wins": len(wins), "total": tot,

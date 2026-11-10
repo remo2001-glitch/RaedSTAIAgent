@@ -78,7 +78,8 @@ def _get_recurring_events() -> List[MarketEvent]:
     # events_calendar_fix: كان الموعد يُحسَب "أقرب يوم خميس" دائماً (أي كل أسبوع!)
     # بينما اجتماعات FOMC ثمانية فقط في السنة. الآن: جدول فعلي لعام 2026؛
     # وإن انتهى الجدول لا يُعرَض موعد مُخمَّن (أفضل من موعد خاطئ).
-    next_fomc = _next_fomc_time()
+    # batch73 (K): الحدث يبقى قائماً حتى نهاية نافذته بعد الصدور (كان يختفي لحظة الصدور فيضيع سقف 50%)
+    next_fomc = _next_fomc_time(grace_sec=3 * 3600)
     if next_fomc:
         events.append(MarketEvent(
             name="FOMC Meeting", name_ar="اجتماع الفيدرالي الأمريكي",
@@ -92,10 +93,10 @@ def _get_recurring_events() -> List[MarketEvent]:
     # لا نملك جدول BLS الرسمي هنا؛ يُوسَم صراحةً "تقريبي" كي لا يُعرَض كموعد مؤكد.
     # official_calendar_fix (بند 13): مواعيد BLS الرسمية (08:30 نيويورك) من الجدول أدناه؛
     # التقريب يُستخدم فقط بعد انتهاء الجدول، ويبقى موسوماً «تقريبي».
-    next_cpi = _next_official_time(_BLS_CPI_RELEASES)
+    next_cpi = _next_official_time(_BLS_CPI_RELEASES, grace_sec=2 * 3600)
     _cpi_official = next_cpi is not None
     if next_cpi is None:
-        next_cpi = _approx_cpi_time()
+        next_cpi = _approx_cpi_time(grace_sec=2 * 3600)
     events.append(MarketEvent(
         name="US CPI Release",
         name_ar=("مؤشر التضخم الأمريكي CPI" if _cpi_official else "مؤشر التضخم الأمريكي CPI (موعد تقريبي)"),
@@ -106,9 +107,9 @@ def _get_recurring_events() -> List[MarketEvent]:
     ))
 
     # ── NFP (أول جمعة من كل شهر، 8:30 نيويورك) ───────────────────────────
-    next_nfp = _next_official_time(_BLS_NFP_RELEASES)
+    next_nfp = _next_official_time(_BLS_NFP_RELEASES, grace_sec=1 * 3600)
     if next_nfp is None:
-        next_nfp = _first_weekday_of_month(4, hour_utc=13, minute=30)
+        next_nfp = _first_weekday_of_month(4, hour_utc=13, minute=30, grace_sec=1 * 3600)
     events.append(MarketEvent(
         name="Non-Farm Payrolls", name_ar="الوظائف غير الزراعية NFP",
         severity=EventSeverity.HIGH,  # batch51 (قرار رحال 2026-10-31): كان MEDIUM؛ يتساوى مع CPI/FOMC (الحجم 25% في النافذة، و0.7 قبل أسبوع)
@@ -119,7 +120,7 @@ def _get_recurring_events() -> List[MarketEvent]:
 
     # ── Bitcoin Options Expiry (آخر جمعة من الشهر، 08:00 UTC — Deribit) ──
     # كان from_end_of_month يُتجاهَل فيظهر "أقرب جمعة" (خلل موثَّق: 162 ساعة).
-    next_expiry = _last_weekday_of_month(4, hour_utc=8)
+    next_expiry = _last_weekday_of_month(4, hour_utc=8, grace_sec=2 * 3600)
     events.append(MarketEvent(
         name="BTC Options Expiry", name_ar="انتهاء عقود خيارات BTC",
         severity=EventSeverity.MEDIUM,
@@ -130,7 +131,8 @@ def _get_recurring_events() -> List[MarketEvent]:
         scope="crypto",
     ))
 
-    return [e for e in events if e.event_time > now - 3600]
+    # batch73 (K): الفلتر بنهاية نافذة كل حدث (كان ساعة ثابتة بعد الصدور)
+    return [e for e in events if e.event_time + e.hours_after * 3600 > now]
 
 
 class EventRiskFilter:
@@ -337,8 +339,9 @@ class EventRiskFilter:
         )
         now    = time.time()
         cutoff = now + hours_ahead * 3600
+        # batch73 (K): الحدث الجاري (صدر ونافذته قائمة) يبقى ظاهراً — كان يختفي ويختفي معه موعده التالي حتى تنتهي النافذة
         return [e for e in all_events
-                if now <= e.event_time <= cutoff
+                if (now <= e.event_time <= cutoff or (e.event_time < now < e.event_time + e.hours_after * 3600))
                 and not (asset_scope == "tokenized" and getattr(e, "scope", "all") == "crypto")]
 
     # ═══════════════════════════════════════════════════════════
@@ -384,10 +387,15 @@ class EventRiskFilter:
             # events_days_fmt_fix (جولة 35): الأحداث الشهرية بالساعات فقط (253 / 585 ساعة)
             # يصعب قراءتها؛ ≥48 ساعة تُعرض بالأيام مع التاريخ.
             _when = _fmt_after_ar(in_hours, e.event_time)
+            if in_hours < 0:   # batch73 (K): صدر والنافذة قائمة
+                _end = e.event_time + e.hours_after * 3600
+                _when = (f"صدر قبل {int(-in_hours * 60)} دقيقة — نافذة الحدث (سقف 50%) حتى "
+                         f"{time.strftime('%H:%M', time.gmtime(_end + 3 * 3600))} بتوقيت السعودية")
+                sign = "⚠️"
             lines.append(
                 f"{sign} {e.name_ar} — {_when} ({SEVERITY_AR[e.severity]})"
             )
-            recommendation = _event_recommendation(e.severity, int(in_hours))
+            recommendation = ("" if in_hours < 0 else _event_recommendation(e.severity, int(in_hours), e.hours_before, e.hours_after))
             if recommendation:
                 lines.append(f"  💡 {recommendation}")
         return "\n".join(lines)
@@ -457,12 +465,12 @@ def _ny_0830_to_utc_ts(y: int, m: int, d: int) -> float:
     return dt.timestamp()
 
 
-def _next_official_time(table) -> Optional[float]:
+def _next_official_time(table, grace_sec: float = 0) -> Optional[float]:
     """أول موعد رسمي في الجدول لم يَحِن بعد (أو None إن انتهى الجدول)."""
     now = time.time()
     for y, m, d in table:
         ts = _ny_0830_to_utc_ts(y, m, d)
-        if ts > now - 3600 and ts > now:
+        if ts + grace_sec > now:   # batch73 (K): كان `ts > now - 3600 and ts > now` فيسقط الحدث لحظة صدوره
             return ts
     return None
 
@@ -477,19 +485,19 @@ def _to_ts(dt) -> float:
     return dt.replace(tzinfo=datetime.timezone.utc).timestamp()
 
 
-def _next_fomc_time() -> Optional[float]:
+def _next_fomc_time(grace_sec: float = 0) -> Optional[float]:
     """أقرب قرار FOMC قادم: 14:00 بتوقيت نيويورك (يراعي DST: 18:00 UTC صيفاً / 19:00 شتاءً)."""
     import datetime
     from zoneinfo import ZoneInfo
     now = time.time()
     for y, m, d in _FOMC_2026_DECISIONS:
         ts = datetime.datetime(y, m, d, 14, 0, tzinfo=ZoneInfo("America/New_York")).timestamp()
-        if ts > now:
+        if ts + grace_sec > now:
             return ts
     return None
 
 
-def _first_weekday_of_month(weekday: int, hour_utc: int = 12, minute: int = 0) -> float:
+def _first_weekday_of_month(weekday: int, hour_utc: int = 12, minute: int = 0, grace_sec: float = 0) -> float:
     """أقرب "أول <weekday>" في شهر قادم (أو الحالي إن لم يَحِن بعد)."""
     import datetime
     now = _utc_now()
@@ -497,7 +505,7 @@ def _first_weekday_of_month(weekday: int, hour_utc: int = 12, minute: int = 0) -
     for _ in range(3):
         first = datetime.datetime(y, m, 1, hour_utc, minute)
         first += datetime.timedelta(days=(weekday - first.weekday()) % 7)
-        if first > now:
+        if first + datetime.timedelta(seconds=grace_sec) > now:
             return _to_ts(first)
         m += 1
         if m > 12:
@@ -505,7 +513,7 @@ def _first_weekday_of_month(weekday: int, hour_utc: int = 12, minute: int = 0) -
     return _to_ts(first)
 
 
-def _last_weekday_of_month(weekday: int, hour_utc: int = 8, minute: int = 0) -> float:
+def _last_weekday_of_month(weekday: int, hour_utc: int = 8, minute: int = 0, grace_sec: float = 0) -> float:
     """أقرب "آخر <weekday>" في الشهر (الحالي إن لم يَحِن، وإلا القادم)."""
     import datetime
     now = _utc_now()
@@ -514,13 +522,13 @@ def _last_weekday_of_month(weekday: int, hour_utc: int = 8, minute: int = 0) -> 
         ny, nm = (y + 1, 1) if m == 12 else (y, m + 1)
         last = datetime.datetime(ny, nm, 1, hour_utc, minute) - datetime.timedelta(days=1)
         last -= datetime.timedelta(days=(last.weekday() - weekday) % 7)
-        if last > now:
+        if last + datetime.timedelta(seconds=grace_sec) > now:
             return _to_ts(last)
         y, m = ny, nm
     return _to_ts(last)
 
 
-def _approx_cpi_time() -> float:
+def _approx_cpi_time(grace_sec: float = 0) -> float:
     """موعد تقريبي لـ CPI: أقرب أربعاء لليوم 13 من الشهر (13:30 UTC)."""
     import datetime
     now = _utc_now()
@@ -533,7 +541,7 @@ def _approx_cpi_time() -> float:
         if delta < -3:
             delta += 7
         dt = base + datetime.timedelta(days=delta)
-        if dt > now:
+        if dt + datetime.timedelta(seconds=grace_sec) > now:
             return _to_ts(dt)
         m += 1
         if m > 12:
@@ -576,19 +584,21 @@ def _hours_ar_b66(h: float) -> str:
     return f"{n} ساعة"
 
 
-def _event_recommendation(severity: EventSeverity, in_hours: float) -> str:
+def _event_recommendation(severity: EventSeverity, in_hours: float, hours_before: int = 2, hours_after: int = 1) -> str:
     """توصية إجرائية حسب شدة الحدث والوقت المتبقي."""
     # batch66 (#876، قرار رحال): التوصية تطابق المضاعف المطبَّق فعلاً في كل الأوامر —
     # سقف 70% قبل الحدث الكبير، و50% أثناء نافذته (ساعتان قبله حتى ساعة بعده)، ولا تداول للحرج
-    if severity == EventSeverity.CRITICAL and in_hours <= 2:
+    if severity == EventSeverity.CRITICAL and in_hours <= hours_before:
         return "لا تداول أثناء نافذة الحدث الحرج"
-    if in_hours <= 2:
+    if in_hours <= hours_before:
         if severity == EventSeverity.HIGH:
             return "نافذة الحدث: سقف التعرض 50% — لا مراكز جديدة بحجم كامل"
         return "لا تفتح مراكز جديدة"
     elif in_hours <= 24:
         if severity == EventSeverity.HIGH:
-            return "سقف التعرض 70% الآن، ثم 50% في نافذة الحدث (من ساعتين قبله حتى ساعة بعده)"
+            # batch73 (K2): النافذة من إعداد الحدث نفسه (CPI 3/2، FOMC 6/3، NFP 2/1) — كان النص ثابتاً «ساعتين/ساعة»
+            return (f"سقف التعرض 70% الآن، ثم 50% في نافذة الحدث (من {_hours_ar_b66(hours_before)} قبله "
+                    f"حتى {_hours_ar_b66(hours_after)} بعده)")
         elif severity == EventSeverity.MEDIUM and in_hours <= 6:
             return "قلّل حجم المراكز 30% قبل الحدث"
     return ""

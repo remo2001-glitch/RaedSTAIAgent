@@ -388,6 +388,9 @@ class SignalLayer:
                 ),
                 "scenario_warn":   scenario_warn,
                 "excluded_sources": _excl,
+                # batch73 (#28، عرض فقط — الثقة لا تتغير): On-Chain بلا Whale ولا Funding للأصل = قراءة TVL العالمي
+                "onchain_basis":   ("none" if not onchain_data else "global" if not ((onchain_data.get("whale_ratio") or 0) > 0
+                                                 or (onchain_data.get("funding_rate_pct") not in (None, 0, 0.0))) else "asset"),
                 "max_size_pct":    SCENARIO_MAX_SIZE.get(scenario, 0.15),
                 "target_mult":     SCENARIO_TARGET_MULT.get(scenario, 2.0),
             },
@@ -754,7 +757,10 @@ class SignalLayer:
             f"الثقة:  {bar} {s.confidence:.0%}\n\n"
             f"📊 *مصادر الإشارة*\n"
             f"• تقني:    {s.signal_sources['technical']:.0%}{_src_tag(s.signal_sources['technical'])}{_tech_conflict_b56(s)}\n"
-            f"• On-Chain: " + (_ex_tag.strip() if 'onchain' in _ex_src else f"{s.signal_sources['onchain']:.0%}{_src_tag(s.signal_sources['onchain'])}") + "\n"
+            f"• On-Chain: " + (_ex_tag.strip() if 'onchain' in _ex_src else f"{s.signal_sources['onchain']:.0%}{_src_tag(s.signal_sources['onchain'])}"
+                               + (" (مؤشرات السوق العامة — TVL الكلي؛ لا بيانات On-Chain خاصة بهذا الأصل)"
+                                  if (s.technicals or {}).get("onchain_basis") == "global" else
+                                  " (لا بيانات On-Chain — قيمة محايدة)" if (s.technicals or {}).get("onchain_basis") == "none" else "")) + "\n"
             f"• أخبار:   " + (_ex_tag.strip() if 'news' in _ex_src else f"{s.signal_sources['news']:.0%}{_src_tag(s.signal_sources['news'])}") + "\n"
             f"• زخم 30 يوم: {s.signal_sources['momentum']:.0%}{_src_tag(s.signal_sources['momentum'])}\n"
             f"• ماكرو:   {s.signal_sources['macro']:.0%}{_src_tag(s.signal_sources['macro'])}\n"

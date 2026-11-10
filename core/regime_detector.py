@@ -665,8 +665,8 @@ class RegimeDetector:
         """batch50: لاحقة «قوة الاتجاه» دون أقواس عندما تحوي التسمية أقواساً (ADX<20)."""
         adx = float(m.get('adx', 0) or 0)
         if adx < 20 and abs(float(m.get('di_plus', 0) or 0) - float(m.get('di_minus', 0) or 0)) >= 3:
-            return f"— قوة الاتجاه {adx:.0f} فقط، لا تحدد الاتجاه بمفردها\n"
-        return f"(قوة الاتجاه {adx:.0f} فقط — لا تحدد الاتجاه بمفردها)\n"
+            return f"— قوة الاتجاه {_fmt_rsi_threshold(adx, 20)} فقط، لا تحدد الاتجاه بمفردها\n"   # batch73 (#15): 19.8 لا «20» بجانب «ADX<20»
+        return f"(قوة الاتجاه {_fmt_rsi_threshold(adx, 20)} فقط — لا تحدد الاتجاه بمفردها)\n"
 
     @staticmethod
     def _di_conflict_note(result, m) -> str:

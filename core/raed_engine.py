@@ -1008,6 +1008,14 @@ class RaedEngine:
                     b = best[0]
                     from core.thresholds import fear_greed_zone as _fgz_scan, DISCLAIMER_LINE as _DISC_SCAN
                     _dir_scan = {"long": "شراء", "short": "بيع"}.get(b.get("direction"), "محايد")
+                    # batch73 (H3): ثقة الشراء ≤ 35% = ميل هبوط ≥ 65% — كان يُكتب «محايد» (للعلم فقط بلا تنفيذ)
+                    _bear73 = [x for x in all_signals if x.get("direction") not in ("long", "short")
+                               and float(x.get("confidence") or 1) <= 0.35]
+                    if _dir_scan == "محايد" and _bear73:
+                        _bw73 = min(_bear73, key=lambda x: float(x.get("confidence") or 1))
+                        _dir_scan = (f"ميل هبوط {1 - float(b['confidence']):.0%}" if float(b["confidence"]) <= 0.35 else "محايد") + \
+                                    ((f" | أقوى ميل هبوط: {_bw73['symbol']} {1 - float(_bw73['confidence']):.0%} (≥ 65%)")
+                                     if _bw73["symbol"] != b["symbol"] else " (≥ 65%)")
                     return (
                         f"🔍 *مسح {session}*\n"
                         f"━━━━━━━━━━━━━━━━━━\n"

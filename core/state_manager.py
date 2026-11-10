@@ -587,6 +587,23 @@ class StateManager:
     def get_user_comments(self, user_id: int) -> list:
         return self._get_user(user_id).get("comments", [])
 
+    def mark_comments_reported(self, user_id: int, upto_ts: float) -> None:
+        """batch73 (G2، قرار رحال: غير المعالجة فقط): الملاحظة تُعرض في تقرير دوري واحد ثم تُعلَّم معروضة."""
+        try:
+            ud = self._get_user(user_id)
+            changed = False
+            for c in ud.get("comments", []) or []:
+                if not c.get("reported") and float(c.get("ts") or 0) <= float(upto_ts):
+                    c["reported"] = True
+                    changed = True
+            if changed:
+                self._set_user(user_id, ud)
+                if self._redis_ok:
+                    try: self._redis_set_user(user_id, ud)
+                    except: pass
+        except Exception:
+            pass
+
     def get_user_preferences(self, user_id: int) -> dict:
         """تفضيلات التداول المستمرة للمستخدم."""
         return self._get_user(user_id).get("preferences", {})

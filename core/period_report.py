@@ -64,10 +64,13 @@ def _ts(v) -> Optional[float]:
 
 
 # ── جمع الصفقات ─────────────────────────────────────────────────────────────
-def virtual_closed(vw_data: Optional[dict], start: float, end: float) -> List[dict]:
+def virtual_closed(vw_data: Optional[dict], start: float, end: float, auto: Optional[bool] = None) -> List[dict]:
+    """auto=None الكل؛ True صفقات القياس الآلي (logic_ver)؛ False اليدوية فقط (batch73 G1)."""
     out = []
     for t in ((vw_data or {}).get("history") or []):
         if t.get("type") != "sell":
+            continue
+        if auto is not None and bool(t.get("logic_ver")) != bool(auto):
             continue
         ts = _ts(t.get("time"))
         if ts is None or not (start <= ts < end):
@@ -75,6 +78,10 @@ def virtual_closed(vw_data: Optional[dict], start: float, end: float) -> List[di
         out.append({"symbol": t.get("symbol", "-"), "pnl": float(t.get("pnl", 0) or 0),
                     "pnl_pct": float(t.get("pnl_pct", 0) or 0), "ts": ts})
     return out
+
+
+# batch73 (G2): الملاحظات قبل هذه الدفعة عولجت في دفعات سابقة — لا تُعرض
+COMMENTS_CUTOFF_B73 = datetime(2026, 11, 10, tzinfo=timezone.utc).timestamp()
 
 
 def _keys(r, pattern: str) -> List[str]:
@@ -191,15 +198,21 @@ def build_user_report(uid: int, period: str, vw_data: Optional[dict], redis_clie
     head = "📅 *التقرير الشهري — رائد التداول الذكي*" if is_m else "📊 *التقرير الأسبوعي — رائد التداول الذكي*"
     lines = [head, "━━━━━━━━━━━━━━━━━━",
              (f"📅 الشهر المنتهي: {label}" if is_m else f"📅 الفترة: {label} (آخر 7 أيام)"), ""]
-    v = summarize(virtual_closed(vw_data, start, end))
-    lines += format_section("🎮 *الصفقات الافتراضية*", v)
+    # batch73 (G1): القياس الآلي (منطق /signal المجمّد) منفصل عن الصفقات اليدوية — كانت اليدوية القديمة (10x) تُخلط بأداء رائد
+    va = summarize(virtual_closed(vw_data, start, end, auto=True))
+    vm = summarize(virtual_closed(vw_data, start, end, auto=False))
+    v = {"count": va["count"] + vm["count"]}
+    lines += format_section("🤖 *القياس الآلي — منطق /signal المجمّد (b68)*", va)
+    if vm["count"]:
+        lines += [""] + format_section("✋ *صفقات افتراضية يدوية (تدريب — ليست أداء رائد)*", vm)
     lines += wallet_status_lines(vw_data)
     rl = real_closed(uid, start, end, redis_client)
     if rl or has_exchange:
         lines += [""] + format_section("💱 *الصفقات الحقيقية*", summarize(rl))
     if v["count"] == 0 and not rl:
         lines += ["", "ℹ️ لم تُغلق أي صفقة خلال هذه الفترة — الأرقام أعلاه ليست أداءً صفرياً بل غياب صفقات."]
-    recent = [c for c in (comments or []) if (_ts(c.get("ts")) or 0) >= start]
+    recent = [c for c in (comments or []) if (_ts(c.get("ts")) or 0) >= max(start, COMMENTS_CUTOFF_B73)
+              and not c.get("reported")]   # batch73 (G2، قرار رحال): غير المعالجة فقط
     if recent:
         lines += ["", "💬 *ملاحظاتك المسجَّلة*"] + [f"• {str(c.get('text', ''))[:80]}" for c in recent[-3:]]
     lines += ["", "ℹ️ الأرقام من صفقاتك المغلقة في الفترة نفسها وبصيغ /stats ذاتها.",
