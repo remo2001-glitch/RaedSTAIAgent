@@ -461,7 +461,12 @@ def _near_add_b73(summary: dict, sym: str, side: str, score: float, why: str) ->
 
 def near_text_b73(sm: dict, k: int = 3) -> str:
     try:
-        lst = sorted((sm or {}).get("near") or [], key=lambda x: -x["score"])[:k]
+        # batch74 (L1): الأقرب فعلاً = الأقل نقصاً — عدد التأكيدات المتحققة أولاً ثم الميل/الثقة
+        import re as _re74
+        def _cn74(x):
+            m = _re74.search(r"تأكيدات[^\d]*(\d+)/(\d+)", x.get("why") or "")
+            return int(m.group(1)) if m else 0
+        lst = sorted((sm or {}).get("near") or [], key=lambda x: (-_cn74(x), -x["score"]))[:k]
         if not lst:
             return ""
         return "\n🔎 الأقرب للدخول: " + "؛ ".join(
