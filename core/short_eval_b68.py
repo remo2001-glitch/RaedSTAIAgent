@@ -98,7 +98,17 @@ def evaluate_short_b68(*, price: float, conf: float, rsi: float, atr_pct: float,
     if ok:
         out["size_factor"] = 1.0 if (bear >= 0.75 and out["n_flags"] >= 3) else 0.5
     else:
-        out["reason"] = next((lbl for lbl, c in checks if not c), "")
+        # batch76 (N1): سبب الرفض بصيغة الحالة الفعلية — عناوين الشروط مكتوبة بصيغة المطلوب (لقائمة ✅/❌)
+        # فكانت «ينقصه: RSI 29 ≥ 30» و«ينقصه: السعر تحت المقاومة المثبتة» تُقرأ عبارات خاطئة
+        _fail76 = [
+            f"ميل الهبوط {bear:.0%} < 65% — الجهة الهابطة غير مؤكدة",
+            "تصنيف السوق ليس هابطاً",
+            f"RSI {_f(rsi):.0f} < 30 — ذروة بيع، لا Short",
+            (f"السعر فوق المقاومة المثبتة ({nr:,.6g}) — السيناريو ملغى" if nr > 0 else "لا مقاومة معروفة للدخول"),
+            f"تأكيدات Short {out['n_flags']}/4 (الحد الأدنى 2)",
+            ("R/R المرجّح" + (f" 1:{out['rr']:.2f} < 1:1" if out["entry"] else " غير محسوب — لا نقطة دخول")),
+        ]
+        out["reason"] = next((_fail76[i] if i < len(_fail76) else lbl for i, (lbl, c) in enumerate(checks) if not c), "")
     return out
 
 
