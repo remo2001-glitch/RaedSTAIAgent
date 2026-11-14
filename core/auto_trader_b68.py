@@ -77,7 +77,10 @@ def long_gate_b68(rec: dict, price: float):
     if not rec:
         return False, "لا قرار /signal", 0.0
     if str(rec.get("verdict", "")).upper() == "AUTO-FAIL":
-        return False, "AUTO-FAIL", 0.0
+        # batch78 (P1): المصطلح الداخلي وحده لا يشرح شيئاً — بنية الصفقة فاشلة: R/R المرجّح 60/40 < 1:1
+        _rr78 = float(rec.get("rr") or 0)
+        return False, ("بنية الصفقة فاشلة (AUTO-FAIL): " + (f"R/R المرجّح 1:{_rr78:.2f} < 1:1" if _rr78 > 0 else "R/R المرجّح < 1:1")
+                       + " — الأهداف قريبة مقارنة بالوقف"), 0.0
     if rec.get("wait") or float(rec.get("size_pct") or 0) <= 0:
         return False, "انتظار", 0.0
     if str(rec.get("direction", "")).lower() not in ("long", "bullish", "buy"):
@@ -362,6 +365,7 @@ async def run_auto_cycle_b68(engine, send_fn=None, bot_data=None) -> dict:
                             _book[_k70]["setup_type"] = "auto_long_b68"
                         _sm().save_virtual_wallet(uid, vw.to_dict())
                         summary["long"] += 1
+                        summary.setdefault("opened_syms", []).append(sym)   # batch78 (P2)
                         _ledger_open(uid, sym, "long", epx, amt, {**extra, "mkt": "futures" if _fut_long else "spot"})
                         await _notify(send_fn, uid, _open_msg(sym, "long_fut" if _fut_long else "long", epx, amt, extra, rr, ev_mult))
                 continue
@@ -403,6 +407,7 @@ async def run_auto_cycle_b68(engine, send_fn=None, bot_data=None) -> dict:
                     vw.futures[r.get("key") or sym]["signal_id"] = _sid
                 _sm().save_virtual_wallet(uid, vw.to_dict())
                 summary["short"] += 1
+                summary.setdefault("opened_syms", []).append(sym)   # batch78 (P2)
                 _ledger_open(uid, sym, "short", epx, mg, extra)
                 await _notify(send_fn, uid, _open_msg(sym, "short", epx, mg, {**extra, "stop_loss": float(sh["sl"])}, rr2, ev_mult))
     logger.info(f"auto_b68 cycle: {summary}")

@@ -1062,7 +1062,9 @@ class RaedEngine:
                 # الصفقات يوحيان بتنفيذ لم يحدث (التنفيذ بحكم /signal الكامل وحده). عرض فقط.
                 lines.append(f"📡 *المسح السريع (للعلم فقط، لا ينفّذ): إشارة ≥ {_SCAN_STRONG_CONF:.0%}*")
                 _near77 = {x.get("sym"): x for x in ((_sum68 or {}).get("near") or [])}
-                _opened77 = int((_sum68 or {}).get("long", 0) or 0) + int((_sum68 or {}).get("short", 0) or 0)
+                # batch78 (P2): لكل أصل على حدة — كان فتح أي صفقة في المسح يُخفي سبب عدم فتح الأصول الأخرى
+                _opened78 = {str(x).upper() for x in ((_sum68 or {}).get("opened_syms") or [])}
+                _held78 = {str(x).upper() for x in ((_sum68 or {}).get("held_syms") or [])}
                 for s in strong_signals:
                     dir_ar = "🟢 شراء" if s["direction"] == "long" else "🔴 بيع"
                     lines.append(
@@ -1070,10 +1072,16 @@ class RaedEngine:
                         f"ثقة: {s['confidence']:.0%} | "
                         f"${s['price']:,.2f}"
                     )
-                    if _at_active and not _opened77:
-                        _n77 = _near77.get(str(s["symbol"]).upper())
-                        lines.append("  🤖 لم يُفتح — حكم /signal: " + (_n77["why"] if _n77 else "لا «دخول»")
-                                     + f" — /signal {s['symbol']} للتفاصيل")
+                    if _at_active:
+                        _su78 = str(s["symbol"]).upper()
+                        if _su78 in _opened78:
+                            lines.append("  ✅ فُتح آلياً (افتراضي) — انظر إشعار الصفقة")
+                        elif _su78 in _held78:
+                            lines.append("  🤖 لم يُفتح — مركز قياس مفتوح عليه بالفعل")
+                        else:
+                            _n77 = _near77.get(_su78)
+                            lines.append("  🤖 لم يُفتح — حكم /signal: " + (_n77["why"] if _n77 else "لا «دخول»")
+                                         + f" — /signal {s['symbol']} للتفاصيل")
                 # إصلاح #6: جمع الرموز المفتوحة لجميع المستخدمين ثم عرض تحذير واحد
                 _all_open_syms: set = set()
                 for _uid_w in (_at_users if _at_active else []):
