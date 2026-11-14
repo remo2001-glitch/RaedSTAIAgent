@@ -330,7 +330,7 @@ async def run_auto_cycle_b68(engine, send_fn=None, bot_data=None) -> dict:
             _cf73 = float(rec.get("confidence") or 0)
             if not ok and _cf73 > 0.35:   # batch73 (H2): عرض فقط — أقرب الأصول للدخول وما ينقصها
                 _near_add_b73(summary, sym, "شراء", _cf73,
-                              (f"الثقة {_cf73:.0%} دون حد الدخول أو التأكيدات ناقصة" if why == "انتظار" else why))
+                              (_wait_reason_b77(rec, _cf73) if why == "انتظار" else why))
             if ok:
                 amt = size_usd_b68(vw.total_value, _long_factor(rec, tier), ev_mult)
                 amt = min(amt, vw.balance * 0.95)
@@ -446,6 +446,18 @@ def _auto_open_b70(vw, sym: str) -> bool:
         if p and p.get("logic_ver"):
             return True
     return False
+
+
+def _wait_reason_b77(rec: dict, conf: float) -> str:
+    """batch77 (O2): سبب «انتظار» الفعلي من قرار /signal المحفوظ (سبب الحجم 0% أو وسم القرار) بدل نص عام
+    («الثقة 67% دون حد الدخول…» كان مضللاً فوق حد الدخول). عرض فقط."""
+    import re as _re77
+    for k in ("size_rule", "decision_label", "verdict_reason"):
+        t = str((rec or {}).get(k) or "").strip()
+        t = _re77.sub(r"^[\s0%.,—\-:|]+", "", t).replace("*", "").strip()
+        if t and t not in ("انتظار", "⏳ انتظار"):
+            return t
+    return f"حكم /signal «انتظار» (الثقة {conf:.0%})"
 
 
 def _near_add_b73(summary: dict, sym: str, side: str, score: float, why: str) -> None:

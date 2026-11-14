@@ -1058,11 +1058,11 @@ class RaedEngine:
             _at_users  = _sm_stat.get_autotrade_users()
             _at_active = bool(_at_users)
             if strong_signals and not executed:
-                if _at_active:
-                    # #719: عدد المستخدمين للمدير فقط — إصلاح #834
-                    lines.append("⚡ *فرص قوية — autotrade نشط ✅*")
-                else:
-                    lines.append("⚡ *فرص قوية (autotrade مُوقَف)*")
+                # batch77 (O1): المسح السريع للعلم فقط منذ b68 — كان عنوان «الفرص القوية» وسطر متابعة
+                # الصفقات يوحيان بتنفيذ لم يحدث (التنفيذ بحكم /signal الكامل وحده). عرض فقط.
+                lines.append(f"📡 *المسح السريع (للعلم فقط، لا ينفّذ): إشارة ≥ {_SCAN_STRONG_CONF:.0%}*")
+                _near77 = {x.get("sym"): x for x in ((_sum68 or {}).get("near") or [])}
+                _opened77 = int((_sum68 or {}).get("long", 0) or 0) + int((_sum68 or {}).get("short", 0) or 0)
                 for s in strong_signals:
                     dir_ar = "🟢 شراء" if s["direction"] == "long" else "🔴 بيع"
                     lines.append(
@@ -1070,6 +1070,10 @@ class RaedEngine:
                         f"ثقة: {s['confidence']:.0%} | "
                         f"${s['price']:,.2f}"
                     )
+                    if _at_active and not _opened77:
+                        _n77 = _near77.get(str(s["symbol"]).upper())
+                        lines.append("  🤖 لم يُفتح — حكم /signal: " + (_n77["why"] if _n77 else "لا «دخول»")
+                                     + f" — /signal {s['symbol']} للتفاصيل")
                 # إصلاح #6: جمع الرموز المفتوحة لجميع المستخدمين ثم عرض تحذير واحد
                 _all_open_syms: set = set()
                 for _uid_w in (_at_users if _at_active else []):
@@ -1082,12 +1086,15 @@ class RaedEngine:
                 if _same_global:
                     lines += ["", f"⚠️ صفقات مفتوحة على: {', '.join(set(_same_global))}",
                                "💡 /vtrades للمراجعة"]
-                elif _at_active:
-                    lines.append("💡 /vtrades لمتابعة الصفقات")
-                else:
-                    lines.append("💡 /autotrade on للتفعيل")
+                elif not _at_active:
+                    lines.append("💡 التداول الآلي الافتراضي مُوقَف — /autotrade on للتفعيل")
 
             lines.append(f"\n{self.scheduler.next_scan_ar()}")
+            try:   # batch77 (O1): سطر التنبيه كان يغيب عن هذا الفرع
+                from core.thresholds import DISCLAIMER_LINE as _DISC77
+                lines.append(f"\n{_DISC77}")
+            except Exception:
+                pass
             return "\n".join(lines)
 
         except Exception as e:
