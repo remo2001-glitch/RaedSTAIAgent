@@ -1636,6 +1636,15 @@ def _save_signal_decision_b58(user_id, symbol, mkttype, meta: dict, score: dict,
         "confidence": float(meta.get("confidence_pct") or 0) / 100.0,
         "rr": float(meta.get("rr_real") or 0),
         "short": meta.get("short_b68") or None,   # batch68: تقييم Short (Futures) لتنفيذه آلياً كما هو
+        # batch80 (قرار رحال: «البيانات التفصيلية لكل صفقة كاملة وواضحة للقياس المستقبلي وحتى يتعلم رائد»):
+        # لقطة السوق والإعداد عند القرار — تُنسخ إلى المركز وسجل القياس. تخزين فقط، لا يغيّر أي قرار.
+        "setup_score": (score or {}).get("score"),
+        "n_conf": meta.get("confirmations_met"),
+        "rsi": meta.get("rsi"), "vol_ratio": meta.get("vol_ratio"),
+        "fear_greed": meta.get("fear_greed"), "cvd_available": meta.get("cvd_available"),
+        "sl_pct": meta.get("sl_pct"), "tp1_pct": meta.get("tp_pct"), "tp2_pct": meta.get("tp2_pct"),
+        "support_gap_pct": meta.get("support_gap_pct"),
+        "regime_desc": str(meta.get("regime_desc", ""))[:60],
         "regime_bucket": ("هابط" if "هابط" in str(meta.get("regime_desc", "")) else "صاعد" if "صاعد" in str(meta.get("regime_desc", ""))
                           else "جانبي" if str(meta.get("regime_desc", "")) else ""),
     }

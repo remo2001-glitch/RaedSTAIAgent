@@ -345,7 +345,8 @@ async def run_auto_cycle_b68(engine, send_fn=None, bot_data=None) -> dict:
                              "stop_loss": _sl_use, "take_profit": float(rec.get("tp2") or rec["tp1"]),
                              "tp1": float(rec["tp1"]), "tp2": float(rec.get("tp2") or rec["tp1"]), "tp1_done": False,
                              "max_hold_hours": AUTO_HOLD_HOURS, "regime": rec.get("regime_bucket", ""),
-                             "rr_entry": round(rr, 3), "conf_entry": float(rec.get("confidence") or 0)}
+                             "rr_entry": round(rr, 3), "conf_entry": float(rec.get("confidence") or 0),
+                             **entry_snapshot_b80(rec, ev_mult)}   # batch80
                     if _fut_long:   # batch68e: كل الشراء الآلي عبر Futures 1x
                         _ex_f = {k: v for k, v in extra.items() if k not in ("stop_loss", "take_profit", "max_hold_hours")}
                         r = vw.open_futures(sym, "long", epx, amt, 1, stop_loss=_sl_use,
@@ -393,7 +394,8 @@ async def run_auto_cycle_b68(engine, send_fn=None, bot_data=None) -> dict:
             extra = {"logic_ver": AUTO_LOGIC_VER, "pos_id": pid, "auto": True,
                      "tp1": float(sh["tp1"]), "tp2": float(sh.get("tp2") or sh["tp1"]), "tp1_done": False,
                      "regime": rec.get("regime_bucket", ""), "rr_entry": round(rr2, 3),
-                     "conf_entry": float(sh.get("bear_conf") or 0)}
+                     "conf_entry": float(sh.get("bear_conf") or 0),
+                     "e_short_flags": sh.get("n_flags"), **entry_snapshot_b80(rec, ev_mult)}   # batch80
             r = vw.open_futures(sym, "short", epx, mg, 1, stop_loss=float(sh["sl"]),
                                 take_profit=float(sh.get("tp2") or sh["tp1"]), max_hold_hours=AUTO_HOLD_HOURS, extra=extra,
                                 key=VirtualWallet.auto_key(sym))
@@ -553,10 +555,23 @@ def scan_line_b68(sm: dict) -> str:
     return t + " — /autostats" + (near_text_b73(sm) if not (sm.get("long") or sm.get("short")) else "")
 
 
+def entry_snapshot_b80(rec: dict, ev_mult: float) -> dict:
+    """batch80: لقطة الدخول (قرار /signal + السوق) لكل صفقة قياس — للتعلّم والقياس اللاحق. تخزين فقط."""
+    r = rec or {}
+    keys = ("verdict", "size_pct", "atr_pct", "setup_score", "n_conf", "rsi", "vol_ratio", "fear_greed",
+            "cvd_available", "sl_pct", "tp1_pct", "tp2_pct", "support_gap_pct", "regime_desc", "mkt")
+    out = {f"e_{k}": r.get(k) for k in keys if r.get(k) not in (None, "")}
+    out["e_decision"] = str(r.get("decision_label") or r.get("size_rule") or "")[:120]
+    out["e_ev_mult"] = float(ev_mult or 1)
+    return out
+
+
 def _ledger_open(uid, sym, side, px, amt, extra):
     ledger_add(uid, {"ev": "open", "pos_id": extra.get("pos_id"), "symbol": sym, "side": side, "entry": px,
                      "amount": round(amt, 2), "sl": extra.get("stop_loss"), "tp1": extra.get("tp1"),
                      "tp2": extra.get("tp2"), "regime": extra.get("regime", ""), "rr": extra.get("rr_entry"),
+                     "conf": extra.get("conf_entry"),
+                     **{k: v for k, v in extra.items() if k.startswith("e_")},   # batch80: لقطة الدخول الكاملة
                      "ts": time.time(), "ver": AUTO_LOGIC_VER})
 
 
@@ -659,6 +674,16 @@ async def check_auto_exits_b68(engine, send_fn=None) -> int:
                 px = float((pd or {}).get("price") or 0)
                 if not bars and px > 0:
                     bars = [(now, px, px)]   # احتياط: السعر الحالي إن تعذّرت شموع الدقيقة
+                # batch80: أقصى صعود/هبوط بلغه السعر أثناء الصفقة (MFE/MAE) — للتعلّم؛ لا يغيّر الخروج
+                try:
+                    if bars:
+                        _hi80 = max(b[1] for b in bars); _lo80 = min(b[2] for b in bars)
+                        _fav, _adv = (_lo80, _hi80) if short else (_hi80, _lo80)
+                        _pf, _pa = pos.get("mfe_px"), pos.get("mae_px")
+                        pos["mfe_px"] = (min(_pf, _fav) if short else max(_pf, _fav)) if _pf else _fav
+                        pos["mae_px"] = (max(_pa, _adv) if short else min(_pa, _adv)) if _pa else _adv
+                except Exception:
+                    pass
                 sl, tp1, tp2 = float(pos.get("stop_loss") or 0), float(pos.get("tp1") or 0), float(pos.get("tp2") or 0)
                 events = walk_exits_b68(side, bars, sl, tp1, tp2, bool(pos.get("tp1_done")))
                 if not events:
@@ -690,7 +715,7 @@ async def check_auto_exits_b68(engine, send_fn=None) -> int:
                         live[sym]["tp1_done"] = True
                         live[sym]["stop_loss"] = tp1   # قرار رحال: الوقف الجديد = سعر الهدف 1
                     final = sym not in live
-                    _ledger_close(uid, t, kind, final=final)
+                    _ledger_close(uid, t, kind, final=final, pos=pos)
                     if final:
                         _track_close_b68(engine, pos.get("signal_id"), xp, kind)
                     closed += 1
@@ -710,10 +735,32 @@ async def check_auto_exits_b68(engine, send_fn=None) -> int:
     return closed
 
 
-def _ledger_close(uid, t: dict, why: str, final: bool):
+def close_details_b80(pos: dict, now: float = None) -> dict:
+    """batch80: تفاصيل الإغلاق للتعلّم — مدة الصفقة وأقصى صعود/هبوط بلغه السعر كنسبة من الدخول."""
+    out = {}
+    try:
+        p = pos or {}
+        ep = float(p.get("entry") or p.get("entry_price") or 0)
+        short = p.get("side") == "short"
+        if ep > 0:
+            for k, nm in (("mfe_px", "mfe_pct"), ("mae_px", "mae_pct")):
+                v = float(p.get(k) or 0)
+                if v > 0:
+                    out[nm] = round(((ep - v) if short else (v - ep)) / ep * 100, 3)
+        _op = datetime.fromisoformat(str(p.get("opened_at")))
+        _op = _op if _op.tzinfo else _op.replace(tzinfo=timezone.utc)
+        out["held_h"] = round(((now or time.time()) - _op.timestamp()) / 3600.0, 2)
+    except Exception:
+        pass
+    return out
+
+
+def _ledger_close(uid, t: dict, why: str, final: bool, pos: dict = None):
     ledger_add(uid, {"ev": "close", "pos_id": t.get("pos_id"), "symbol": t.get("symbol"), "side": t.get("side", "long"),
-                     "exit": t.get("price"), "pnl": float(t.get("pnl") or 0), "reason": why, "final": bool(final),
-                     "regime": t.get("regime", ""), "ts": time.time(), "ver": AUTO_LOGIC_VER})
+                     "exit": t.get("price"), "pnl": float(t.get("pnl") or 0), "pnl_pct": t.get("pnl_pct"),
+                     "qty": t.get("quantity"), "reason": why, "final": bool(final),
+                     "regime": t.get("regime", ""), **close_details_b80(pos),   # batch80
+                     "ts": time.time(), "ver": AUTO_LOGIC_VER})
 
 
 def _close_msg(sym, side, why, t) -> str:

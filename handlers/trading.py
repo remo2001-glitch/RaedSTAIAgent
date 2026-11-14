@@ -3639,6 +3639,31 @@ async def _open_virtual_futures_b58(user_id, symbol, side, price, amount, levera
     return "\n".join(lines)
 
 
+
+def _dur_ar_b80(hours: float) -> str:
+    """batch80 (R3): مدة بصيغة العدد العربية."""
+    h = float(hours or 0)
+    if h < 1:
+        m = max(1, int(round(h * 60)))
+        return "دقيقة" if m == 1 else "دقيقتين" if m == 2 else f"{m} دقائق" if m <= 10 else f"{m} دقيقة"
+    if h < 48:
+        n = int(round(h))
+        return "ساعة" if n == 1 else "ساعتين" if n == 2 else f"{n} ساعات" if n <= 10 else f"{n} ساعة"
+    d = h / 24
+    return f"{d:.1f} يوم" if d < 11 else f"{d:.0f} يوماً"
+
+
+def _auto_targets_b80(p_: dict, _fmt_price) -> str:
+    """batch80 (R1): مركز القياس يعرض خطة الخروج كاملة (قرار رحال 2026-11-06): TP1 60% ← TP2 40%، ثم نقل الوقف إلى TP1.
+    كان يعرض TP2 وحده («الهدف») فيختفي TP1 وخطة 60/40."""
+    tp1, tp2 = float(p_.get("tp1") or 0), float(p_.get("tp2") or 0)
+    sl = float(p_.get("stop_loss") or 0)
+    if p_.get("tp1_done"):
+        return (f"  ✅ TP1 {_fmt_price(tp1)} تحقق (أُغلق 60%) — الوقف الآن {_fmt_price(sl)} للباقي 40%"
+                f" | 🎯 TP2 {_fmt_price(tp2)}")
+    return (f"  الوقف {_fmt_price(sl) if sl else '—'} | 🎯 TP1 {_fmt_price(tp1)} (60%) ← TP2 {_fmt_price(tp2)} (40%)\n"
+            f"  ↪️ بعد TP1 يُنقل الوقف إلى {_fmt_price(tp1)} للباقي")
+
 async def cmd_vfutures(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """batch58: مراكز Futures الافتراضية مع الربح/الخسارة الحي وأزرار الإغلاق."""
     from core.state_manager import state_manager as _sm_vf
@@ -3686,7 +3711,8 @@ async def cmd_vfutures(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"• *{_bs70}*{' 🤖 قياس' if _auto70 else ''} {'Long' if _long67 else 'Short'} {lev_}x — هامش ${_mg67:,.2f} | اسمية ${float(p_['notional']):,.2f}"
             + (" — مرجعي: لا عقد دائم على OKX" if _bs70 in _NO_PERP_B63 else ""),   # batch67 (قرار رحال #978)
             f"  الدخول {_fmt_price(p_['entry'])} | الحالي {_fmt_price(px)}",
-            f"  الوقف {_fmt_price(p_['stop_loss']) if _sl67 else '—'} | الهدف {_fmt_price(p_['take_profit']) if _tp67 else '—'}"
+            (_auto_targets_b80(p_, _fmt_price) if (_auto70 and float(p_.get("tp1") or 0) > 0) else
+             f"  الوقف {_fmt_price(p_['stop_loss']) if _sl67 else '—'} | الهدف {_fmt_price(p_['take_profit']) if _tp67 else '—'}")
             + ("" if lev_ == 1 else (f" | التصفية ≈ ${round(_liq67):,}" if _liq67 >= 100
                                      else f" | التصفية ≈ {_fmt_price(p_['liq_price'])}")),
         ]
@@ -3696,9 +3722,16 @@ async def cmd_vfutures(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _sl_d = abs(_ep67 - _sl67) / _ep67
                 _loss_sl = min(_sl_d * lev_ * 100, 100.0)
                 _rr_t = ""
-                if _tp67 > 0 and _sl_d > 0:
+                if _auto70 and p_.get("rr_entry"):
+                    # batch80 (R1): مركز القياس = R/R المرجّح 60/40 عند الدخول (كما في إشعار الفتح)
+                    _rr_t = f" | R/R المرجّح عند الدخول 1:{float(p_['rr_entry']):.2f}"
+                elif _tp67 > 0 and _sl_d > 0:
                     _rr_t = f" | R/R 1:{abs(_tp67 - _ep67) / _ep67 / _sl_d:.1f}"
-                lines.append(f"  🛑 عند الوقف: −{_loss_sl:.0f}% من الهامش (المسافة {_sl_d * 100:.1f}% × {lev_}x){_rr_t}")
+                if _auto70 and p_.get("tp1_done"):
+                    lines.append(f"  🛑 عند الوقف (سعر TP1): الباقي يُغلق دون خسارة على الدخول{_rr_t}")
+                else:
+                    # batch80 (R2): منزلة واحدة في الرقمين (كان «−8%» و«8.5%» للقيمة نفسها)
+                    lines.append(f"  🛑 عند الوقف: −{_loss_sl:.1f}% من الهامش (المسافة {_sl_d * 100:.1f}% × {lev_}x){_rr_t}")
         except Exception:
             pass
         lines.append(f"  {'📈' if net >= 0 else '📉'} الصافي لو أُغلق الآن: {'+' if net >= 0 else '-'}${abs(net):,.2f} "
@@ -3728,7 +3761,7 @@ async def cmd_vfutures(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _op = _op.replace(tzinfo=_tz67.utc)
             _hh = (_dt67.now(_tz67.utc) - _op).total_seconds() / 3600.0
             _mh = float(p_.get("max_hold_hours") or 0) or float(getattr(vw, "LEGACY_MAX_HOLD_HOURS", 0) or 0)
-            _dur = f"{_hh:.0f} ساعة" if _hh < 48 else f"{_hh / 24:.1f} يوم"
+            _dur = _dur_ar_b80(_hh)   # batch80 (R3): «5 ساعات» لا «5 ساعة»
             lines.append(f"  ⏱️ مفتوح منذ {_dur}" + (f" (الخروج الزمني بعد {_mh / 24:.0f} أيام)" if _mh >= 24 else ""))
         except Exception:
             pass
