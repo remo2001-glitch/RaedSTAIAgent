@@ -2232,7 +2232,7 @@ async def cmd_autotrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_autostats_b68(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """batch68: نتائج القياس الآلي (منطق /signal المجمّد) مقابل شروط العبور إلى تجربة حقيقية صغيرة."""
     try:
-        from core.auto_trader_b68 import ledger_get, auto_stats_b68, format_auto_stats_b68
+        from core.auto_trader_b68 import ledger_get, auto_stats_b68, format_auto_stats_b68, open_rows_b81
         uid = update.effective_user.id
         _args = context.args or []
         if _args:   # batch68l: /autostats [user_id] — للمدير فقط
@@ -2242,7 +2242,7 @@ async def cmd_autostats_b68(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 uid = int(str(_args[0]).strip())
             except ValueError:
                 await update.message.reply_text("⚠️ أدخل user_id صحيحاً"); return
-        txt = format_auto_stats_b68(auto_stats_b68(ledger_get(uid)))
+        txt = format_auto_stats_b68(auto_stats_b68(ledger_get(uid)), await open_rows_b81(_eng(context), uid))   # batch81 (S2)
         if uid != update.effective_user.id:
             txt = f"👤 الحساب `{uid}`\n" + txt
         if not _sm.is_autotrade_on(uid):

@@ -808,7 +808,7 @@ def auto_stats_b68(ledger: list, start_capital: float = 10000.0) -> dict:
     dd_pct = dd / start_capital * 100 if start_capital > 0 else 0.0
     crit = [
         (f"صفقات مغلقة ≥ {CRIT_MIN_TRADES}", n >= CRIT_MIN_TRADES, f"{n}"),
-        ("متوسط الصافي لكل صفقة > 0 بعد الرسوم", n > 0 and tot / n > 0, f"{(tot / n if n else 0):+,.2f}$"),
+        ("متوسط الصافي لكل صفقة > 0 بعد الرسوم", n > 0 and tot / n > 0, _usd_b81(tot / n if n else 0)),   # batch81 (S1)
         # batch73 (H1): بلا صفقات مغلقة لا يُعدّ الشرط متحققاً (كان ✅ مع 0 صفقات)
         (f"أقصى تراجع ≤ {CRIT_MAX_DD_PCT:.0f}% من رأس المال", n > 0 and dd_pct <= CRIT_MAX_DD_PCT, (f"{dd_pct:.1f}%" if n else "—")),
         (f"صفقات في {CRIT_MIN_REGIMES}+ حالات سوق", len(regimes) >= CRIT_MIN_REGIMES, "، ".join(sorted(regimes)) or "—"),
@@ -818,18 +818,80 @@ def auto_stats_b68(ledger: list, start_capital: float = 10000.0) -> dict:
             "regimes": sorted(regimes), "criteria": crit, "ready": all(c[1] for c in crit)}
 
 
-def format_auto_stats_b68(st: dict) -> str:
+async def open_rows_b81(engine, uid: int) -> list:
+    """batch81 (S2): حالة مراكز القياس المفتوحة (السعر الحالي، الصافي بعد رسوم وانزلاق الإغلاق، المسافة إلى TP1 والوقف)."""
+    rows = []
+    try:
+        from core.virtual_wallet import VirtualWallet
+        vw = VirtualWallet(_sm().get_virtual_wallet(uid) or {})
+        for k, p in vw.futures.items():
+            if not p.get("logic_ver"):
+                continue
+            bs = VirtualWallet.base_symbol(k, p)
+            pd = await engine.data_layer.get_price(bs, mkttype="futures") if engine else None
+            px = float((pd or {}).get("price") or 0) or float(p["entry"])
+            short = p.get("side") == "short"
+            pxc = px * (1.001 if short else 0.999)
+            net = vw.futures_pnl(k, pxc) - float(p.get("fee_open", 0) or 0) - float(p["qty"]) * pxc * vw.FUT_FEE_RATE
+            mg = float(p.get("margin") or 0)
+            tp1, sl = float(p.get("tp1") or 0), float(p.get("stop_loss") or 0)
+            try:
+                _op = datetime.fromisoformat(str(p.get("opened_at")))
+                _op = _op if _op.tzinfo else _op.replace(tzinfo=timezone.utc)
+                hrs = (time.time() - _op.timestamp()) / 3600.0
+            except Exception:
+                hrs = 0
+            rows.append({"sym": bs, "side": p.get("side"), "hours": hrs, "net": net,
+                         "net_pct": (net / mg * 100 if mg else 0), "tp1_done": bool(p.get("tp1_done")),
+                         "to_tp1_pct": (abs(tp1 - px) / px * 100 if tp1 > 0 and px > 0 else None),
+                         "to_sl_pct": (abs(px - sl) / px * 100 if sl > 0 and px > 0 else None)})
+    except Exception as e:
+        logger.debug(f"open_rows_b81: {e}")
+    return rows
+
+
+def _usd_b81(x: float) -> str:
+    """batch81 (S1): صيغة مبلغ واحدة «−$25.35» / «+$4.10» (كان «-$25.35» و«-25.35$» في السطر نفسه)."""
+    x = float(x or 0)
+    return f"{'+' if x > 0 else '−' if x < 0 else ''}${abs(x):,.2f}"
+
+
+def open_lines_b81(open_rows: list) -> list:
+    """batch81 (S2، مبدأ رحال: بيانات كل صفقة واضحة): سطر لكل مركز قياس مفتوح.
+    open_rows: [{sym, side, hours, net, net_pct, to_tp1_pct, to_sl_pct, tp1_done}]"""
+    out = []
+    for r in open_rows or []:
+        try:
+            _d = r.get("hours") or 0
+            _dur = (f"{_d:.0f} ساعة" if _d >= 11 else "ساعة" if round(_d) <= 1 else "ساعتين" if round(_d) == 2 else f"{round(_d)} ساعات") \
+                if _d < 48 else f"{_d / 24:.1f} يوم"
+            line = (f"  ↳ {r['sym']} {'Long' if r.get('side') != 'short' else 'Short'} منذ {_dur} — الصافي غير المحقق "
+                    f"{_usd_b81(r.get('net', 0))} ({float(r.get('net_pct') or 0):+.1f}%)")
+            if r.get("tp1_done"):
+                line += " | ✅ TP1 تحقق"
+            elif r.get("to_tp1_pct") is not None:
+                line += f" | إلى TP1 {float(r['to_tp1_pct']):.1f}%"
+            if r.get("to_sl_pct") is not None:
+                line += f" | إلى الوقف {float(r['to_sl_pct']):.1f}%"
+            out.append(line)
+        except Exception:
+            continue
+    return out
+
+
+def format_auto_stats_b68(st: dict, open_rows: list = None) -> str:
     L = ["📊 *قياس التداول الآلي الافتراضي* — منطق /signal المجمّد (b68)", "━━━━━━━━━━━━━━━━━━"]
     n = st["n"]
     L.append(f"• صفقات مغلقة: {n} | مفتوحة: {st['open']}")
+    L += open_lines_b81(open_rows)   # batch81 (S2)
     if n:
         L.append(f"• نسبة الربح: {st['wins'] / n:.0%} ({st['wins']}/{n})")
-        L.append(f"• الصافي الكلي: {'+' if st['total'] >= 0 else '-'}${abs(st['total']):,.2f} | المتوسط: {st['avg']:+,.2f}$ لكل صفقة")
+        L.append(f"• الصافي الكلي: {_usd_b81(st['total'])} | المتوسط: {_usd_b81(st['avg'])} لكل صفقة")   # batch81 (S1): صيغة واحدة
         _pf = "∞" if st["pf"] == float("inf") else f"{st['pf']:.2f}"
         L.append(f"• عامل الربح: {_pf} | أقصى تراجع: ${st['dd']:,.2f} ({st['dd_pct']:.1f}%)")
         for sd, b in st["by_side"].items():
             L.append(f"  ↳ {'Long' if sd == 'long' else 'Short Futures 1x'}: {b['n']} صفقة، "
-                     f"ربح {b['w']}/{b['n']}، صافي {'+' if b['pnl'] >= 0 else '-'}${abs(b['pnl']):,.2f}")
+                     f"ربح {b['w']}/{b['n']}، صافي {_usd_b81(b['pnl'])}")
     L += ["", "🎯 *شروط العبور إلى تجربة حقيقية صغيرة*"]
     for lbl, ok, val in st["criteria"]:
         L.append(f"{'✅' if ok else '⬜'} {lbl} — الحالي: {val}")

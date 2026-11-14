@@ -760,8 +760,10 @@ async def hourly_alert_job(context: ContextTypes.DEFAULT_TYPE):
                     dir_ar  = "🟢 شراء" if signal.direction == "long" else "🔴 بيع"
                     price_d = await engine.data_layer.get_price(sym)
                     price   = float((price_d or {}).get("price") or 0)
+                    # batch81 (T2): الثقة هنا من مسار مختصر (فني + ماكرو، بلا On-Chain ولا أخبار) — ليست ثقة /signal
                     alerts.append(
-                        f"🚨 {sym} {dir_ar} | ثقة: {signal.confidence:.0%} | ${price:,.2f}")
+                        f"🚨 {sym} {dir_ar} | ثقة تقديرية: {signal.confidence:.0%} (فني + ماكرو فقط) | ${price:,.2f}"
+                        f"\n   ↳ /signal {sym} للثقة الكاملة والحكم")
                     strong_signals_data.append({
                         "symbol":       sym,
                         "direction":    signal.direction,
@@ -778,15 +780,22 @@ async def hourly_alert_job(context: ContextTypes.DEFAULT_TYPE):
             import time as _th
 
             # dedup: لا نُرسل نفس التنبيه مرتين في ساعة
-            _alert_key = "|".join(sorted(a.split()[1] for a in alerts if a.startswith("🚨")))
+            _alert_key = "|".join(sorted(a.split()[1] for a in alerts if a.startswith("🚨")))   # يبقى صالحاً: الرمز ثاني كلمة
             _last_sent = getattr(hourly_alert_job, "_last_alert_key", ("", 0))
             if _alert_key == _last_sent[0] and _th.time() - _last_sent[1] < 3600:
                 logger.info("⚡ تنبيه مكرر — تخطى (dedup)")
                 return
             hourly_alert_job._last_alert_key = (_alert_key, _th.time())
 
-            header = "⚡ *تنبيه فوري — إشارة قوية*"
-            footer = "\n\n💡 /signal للتفاصيل الكاملة"
+            # batch81 (T1): للعلم فقط منذ التجميد b68 — كان بصياغة ما قبل التجميد (حين كان التنبيه يشتري بنفسه)
+            header = "⚡ *تنبيه — إشارة قوية (للعلم فقط، لا ينفّذ)*"
+            try:
+                _nxt81 = engine.scheduler.next_scan_ar().split("—")[0].replace("⏰ المسح القادم:", "").strip()
+            except Exception:
+                _nxt81 = ""
+            from core.thresholds import DISCLAIMER_LINE as _DISC81
+            footer = (f"\n\n🤖 التداول الآلي يقرر في المسح القادم{(' (' + _nxt81 + ')') if _nxt81 else ''} بحكم /signal الكامل"
+                      f"\n\n{_DISC81}")
             msg    = header + "\n" + "\n".join(alerts) + footer
 
             # إرسال التنبيه لكل premium + autotrade users
