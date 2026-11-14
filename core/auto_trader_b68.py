@@ -77,10 +77,7 @@ def long_gate_b68(rec: dict, price: float):
     if not rec:
         return False, "لا قرار /signal", 0.0
     if str(rec.get("verdict", "")).upper() == "AUTO-FAIL":
-        # batch78 (P1): المصطلح الداخلي وحده لا يشرح شيئاً — بنية الصفقة فاشلة: R/R المرجّح 60/40 < 1:1
-        _rr78 = float(rec.get("rr") or 0)
-        return False, ("بنية الصفقة فاشلة (AUTO-FAIL): " + (f"R/R المرجّح 1:{_rr78:.2f} < 1:1" if _rr78 > 0 else "R/R المرجّح < 1:1")
-                       + " — الأهداف قريبة مقارنة بالوقف"), 0.0
+        return False, autofail_reason_b79(rec), 0.0
     if rec.get("wait") or float(rec.get("size_pct") or 0) <= 0:
         return False, "انتظار", 0.0
     if str(rec.get("direction", "")).lower() not in ("long", "bullish", "buy"):
@@ -453,6 +450,35 @@ def _auto_open_b70(vw, sym: str) -> bool:
     return False
 
 
+def rr_fmt_b79(x: float) -> str:
+    """batch79 (Q1): دون 1 يُقرَّب للأسفل (0.996 ⇒ «0.99») — كان «1:1.00 < 1:1» يبدو تناقضاً."""
+    import math
+    x = float(x or 0)
+    return f"{math.floor(x * 100) / 100:.2f}" if 0 < x < 1 else f"{x:.2f}"
+
+
+def autofail_reason_b79(rec: dict) -> str:
+    """batch78/79 (P1/Q1): سبب AUTO-FAIL الفعلي من قرار /signal (البوابات G1–G5) بدل افتراض أنه R/R دائماً. عرض فقط."""
+    import re as _re79
+    vr = str((rec or {}).get("verdict_reason") or "")
+    g = _re79.search(r"\bG(\d)\b", vr)
+    gate = g.group(1) if g else "3"
+    if gate == "1":
+        return "بنية الصفقة فاشلة (AUTO-FAIL): خطأ في بناء الإشارة — لا أساس للدخول"
+    if gate == "2":
+        return "بنية الصفقة فاشلة (AUTO-FAIL): خطة الصفقة ناقصة (الدخول أو الوقف أو الإلغاء)"
+    if gate == "4":
+        return "بنية الصفقة فاشلة (AUTO-FAIL): أصل اصطناعي بسيولة ضعيفة والسوق مغلق — خطر فجوة سعرية"
+    if gate == "5":
+        return "بنية الصفقة فاشلة (AUTO-FAIL): أصل حديث الإدراج — مؤشراته غير موثوقة"
+    rr = float((rec or {}).get("rr") or 0)
+    if not (0 < rr < 1):
+        m = _re79.search(r"R/R = 1:([\d.]+)", vr)
+        rr = float(m.group(1)) if m else rr
+    return ("بنية الصفقة فاشلة (AUTO-FAIL): " + (f"R/R المرجّح 1:{rr_fmt_b79(rr)} < 1:1" if 0 < rr < 1 else "R/R المرجّح < 1:1")
+            + " — الأهداف قريبة مقارنة بالوقف")
+
+
 def _wait_reason_b77(rec: dict, conf: float) -> str:
     """batch77 (O2): سبب «انتظار» الفعلي من قرار /signal المحفوظ (سبب الحجم 0% أو وسم القرار) بدل نص عام
     («الثقة 67% دون حد الدخول…» كان مضللاً فوق حد الدخول). عرض فقط."""
@@ -471,7 +497,7 @@ def _near_add_b73(summary: dict, sym: str, side: str, score: float, why: str) ->
         lst = summary.setdefault("near", [])
         if any(x["sym"] == sym for x in lst):
             return
-        lst.append({"sym": sym, "side": side, "score": float(score), "why": str(why or "")[:70]})
+        lst.append({"sym": sym, "side": side, "score": float(score), "why": str(why or "")[:120]})   # batch79 (Q2): كان 70 فيقطع «قريبة مقارنة بالوقف»
     except Exception:
         pass
 

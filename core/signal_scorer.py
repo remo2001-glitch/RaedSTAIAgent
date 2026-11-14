@@ -179,7 +179,8 @@ def evaluate_signal(s: SignalInput) -> dict:
     # batch67 (#939/#992): المستويات مثبّتة على الشمعة المكتملة (الدفعتان 64/65) فلا تقلب لحظي بفروق السنتات —
     # يُلغى تسامح 0.95: البوابة على القيمة غير المقرّبة < 1.0 (كانت 0.95 تمر في /quicksignal و0.94 تفشل في /signal)
     if s.rr_ratio is not None and s.rr_ratio < 1.0:
-        return _auto_fail(f"G3: R/R = 1:{s.rr_ratio:.2f} < 1:1 — لا حافة إحصائية")
+        import math as _m79   # batch79 (Q1): تقريب للأسفل — 0.996 كانت تُعرض «1:1.00 < 1:1»
+        return _auto_fail(f"G3: R/R = 1:{_m79.floor(s.rr_ratio * 100) / 100:.2f} < 1:1 — لا حافة إحصائية")
 
     if s.is_synthetic and (s.volume_multiple or 1.0) < 0.3 and not s.market_open:
         return _auto_fail("G4: أصل اصطناعي + سيولة < 0.3x + سوق مغلق — gap risk مرتفع جداً")
