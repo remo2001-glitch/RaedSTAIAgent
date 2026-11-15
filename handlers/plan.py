@@ -1055,7 +1055,8 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data["planmonth_running"] = True
 
-    args      = context.args or []
+    from core.report_cards_b84 import split_full_b84 as _sf84m
+    args, _full84m = _sf84m(context.args or [])   # batch84: «full» ليس رمزاً — يطلب التقرير الكامل
     scan_mode = len(args) == 0
     # إصلاح #964/#971: تعريف مسبق لجميع المتغيرات
     entry_syms = []
@@ -2082,7 +2083,16 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("💬 لدي ملاحظة",   callback_data="plan_comment"),
         ])
         _fb_kb = InlineKeyboardMarkup(_exec_buttons)
-        await _send_long_plan(msg, update, context, _clean("\n".join(lines)),
+        _pm_full84 = _clean("\n".join(lines))
+        if not _full84m:   # batch84 (Y المرحلة 3): بطاقة قصيرة + «📖 التفاصيل الكاملة»
+            try:
+                from core.report_cards_b84 import plan_month_card_b84 as _pmc84
+                from handlers.analysis import send_card_b84 as _scard84
+                await _scard84(msg, update, context, _pmc84(_pm_full84), _pm_full84, "الخطة الشهرية", "planmonth", markup=_fb_kb)
+                return
+            except Exception as _c84m:
+                logger.warning(f"planmonth card b84: {_c84m} — إرسال الكامل")
+        await _send_long_plan(msg, update, context, _pm_full84,
                               parse_mode=ParseMode.MARKDOWN, reply_markup=_fb_kb)
 
     except Exception as e:
@@ -2189,7 +2199,8 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _use_futures_pw = (_mkttype_pw == "futures")
     _mk_pw = "futures" if _use_futures_pw else "spot"   # batch42: نوع السوق لجلب الشموع
 
-    args    = context.args or []
+    from core.report_cards_b84 import split_full_b84 as _sf84w
+    args, _full84w = _sf84w(context.args or [])   # batch84
     # tier_pw_fix: تعريف _tier_pw مسبقاً لتجنب UnboundLocalError
     _tier_pw = _sm.get_tier(update.effective_user.id) or "silver"
     # إصلاح #971: تعريف مسبق لجميع المتغيرات
@@ -3334,6 +3345,14 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _pw_approved, _pw_text = audit_financial_content(_pw_text, source="plan")
         if not _pw_approved:
             logger.warning("auditing_agent: /plan_week مرفوض → fallback")
+        if not _full84w:   # batch84 (Y المرحلة 3): بطاقة قصيرة + «📖 التفاصيل الكاملة»
+            try:
+                from core.report_cards_b84 import plan_week_card_b84 as _pwc84
+                from handlers.analysis import send_card_b84 as _scard84
+                await _scard84(msg, update, context, _pwc84(_pw_text), _pw_text, "الخطة الأسبوعية", "planweek", markup=_fb_kb)
+                return
+            except Exception as _c84w:
+                logger.warning(f"planweek card b84: {_c84w} — إرسال الكامل")
         # batch8: الخطة الأسبوعية قد تتجاوز 4096 حرفاً (Message_too_long) → تقسيم آمن
         await _send_long_plan(msg, update, context, _pw_text,
                               parse_mode=ParseMode.MARKDOWN, reply_markup=_fb_kb)

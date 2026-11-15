@@ -1886,6 +1886,27 @@ def signal_card_b82(d: dict) -> str:
     return re.sub(r"\n{3,}", "\n\n", out)
 
 
+async def send_card_b84(msg, update, context, card: str, full: str, label: str, cmd: str,
+                        markup=None, raw: bool = False, parse_mode=None):
+    """batch84 (Y المرحلة 3): يرسل البطاقة القصيرة مع زر «📖 التفاصيل الكاملة» ويحفظ التقرير الكامل نفسه.
+    raw=True: التقرير الكامل يُرسل كما كان يُرسل (edit_text مباشرة) بلا تمريرات الاتساق الخاصة بـ /signal."""
+    pm = parse_mode or ParseMode.MARKDOWN
+    k = sigfull_put_b82(context.bot_data, int(getattr(update.effective_user, "id", 0) or 0), label, full, cmd=cmd)
+    if raw:
+        context.bot_data[_SIGFULL_CACHE_B82][k]["raw"] = True
+    rows = list(markup.inline_keyboard) if markup is not None else []
+    rows.append([InlineKeyboardButton("📖 التفاصيل الكاملة", callback_data=f"sigfull:{k}")])
+    kb = InlineKeyboardMarkup(rows)
+    if raw:
+        try:
+            await msg.edit_text(card, parse_mode=pm, reply_markup=kb)
+        except Exception as _e84:
+            logger.warning(f"send_card_b84 {cmd}: {_e84} — نص عادي")
+            await msg.edit_text(card.replace("*", ""), reply_markup=kb)
+    else:
+        await _send_long_message(msg, update, context, card, parse_mode=pm, reply_markup=kb)
+
+
 def sigfull_put_b82(bot_data: dict, uid: int, sym: str, text: str, cmd: str = "signal") -> str:
     """يحفظ التقرير الكامل في الذاكرة ويُرجع معرّفاً قصيراً لزر «📖 التفاصيل الكاملة» (≤ 64 بايت)."""
     import time as _t82
@@ -1916,7 +1937,17 @@ async def callback_sigfull_b82(update: Update, context: ContextTypes.DEFAULT_TYP
     context.user_data["_cb_message"] = q.message
     try:
         ph = await q.message.reply_text(f"📖 التفاصيل الكاملة — {ent['sym']}...")
-        await _send_long_message(ph, update, context, ent["text"], parse_mode=ParseMode.MARKDOWN)
+        if ent.get("raw"):   # batch84: /liquidity و/onchain و/regime — كما كانت تُرسل
+            for _i84, _c84 in enumerate(_split_long_message(ent["text"])):
+                try:
+                    if _i84 == 0:
+                        await ph.edit_text(_c84, parse_mode=ParseMode.MARKDOWN)
+                    else:
+                        await q.message.reply_text(_c84, parse_mode=ParseMode.MARKDOWN)
+                except Exception:
+                    (await ph.edit_text(_c84.replace("*", ""))) if _i84 == 0 else (await q.message.reply_text(_c84.replace("*", "")))
+        else:
+            await _send_long_message(ph, update, context, ent["text"], parse_mode=ParseMode.MARKDOWN)
     finally:
         if _prev is None:
             context.user_data.pop("_cb_message", None)
@@ -5048,6 +5079,8 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ النظام لم يُهيَّأ بعد")
         return
 
+    from core.report_cards_b84 import split_full_b84 as _sf84o
+    _full84o = _sf84o(context.args or [])[1]   # batch84: «/onchain full»
     msg = await update.message.reply_text("🔗 جاري جلب بيانات On-Chain...")
     try:
         data, fear, funding, oi, whale, btc_adv, cq_data = await asyncio.gather(
@@ -5386,6 +5419,23 @@ async def cmd_onchain(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _oc_approved, _onchain_text = audit_content(_onchain_text, source="onchain")
         if not _oc_approved:
             logger.warning("auditing_agent: /onchain مرفوض → fallback")
+        if not _full84o:   # batch84 (Y المرحلة 3): الخلاصة + سطر الأرقام + السيناريوهات، والتفاصيل بالزر
+            try:
+                _nums84 = []
+                if _btc_chg_live:
+                    _nums84.append(f"BTC 24h {_btc_chg_live:+.1f}%")
+                _nums84.append(f"TVL ${tvl/1e9:.0f}B ({tvl_change:+.1f}%)" if tvl > 0 else "TVL غير متاح")
+                _nums84.append(f"F&G {fear_val}")
+                if _fund_pct:
+                    _nums84.append(f"Funding {_fund_pct:+.4f}%")
+                if _oi_ok:
+                    _nums84.append(f"OI {_oi_pct_b67(_oi_chg)}% (ساعة)")
+                _c84o = ["🔗 *تحليل On-Chain — رائد*", "━━━━━━━━━━━━━━━━━━", *_summary, "", "📊 " + " | ".join(_nums84), "", *_scen,
+                         "", lines[-2], "", "📖 *التفاصيل الكاملة* (المشتقات، الدورة، ما تغيّر اليوم، المصادر): الزر أدناه أو /onchain full", _DISC]
+                await send_card_b84(msg, update, context, "\n".join(_c84o), _onchain_text, "On-Chain", "onchain", raw=True)
+                return
+            except Exception as _e84o:
+                logger.warning(f"onchain card b84: {_e84o}")
         await msg.edit_text(_onchain_text, parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         logger.error(f"cmd_onchain: {e}")
@@ -5402,7 +5452,9 @@ async def cmd_regime(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ النظام لم يُهيَّأ بعد")
         return
 
-    args   = context.args or ["BTC"]
+    from core.report_cards_b84 import split_full_b84 as _sf84r
+    _args84r, _full84r = _sf84r(context.args or [])   # batch84: «/regime BTC full»
+    args   = _args84r or ["BTC"]
     symbol = args[0].upper()
     msg = await update.message.reply_text(
         f"📊 جاري تحليل حالة السوق لـ {symbol}...")
@@ -5544,6 +5596,31 @@ async def cmd_regime(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
         text += f"\n\n📡 *المصدر:* OKX (الشموع والسعر) + Fear & Greed + هيمنة BTC | 🤖 رائد التداول الذكي"   # batch67 (#919)
+        if not _full84r:   # batch84 (Y المرحلة 3): التصنيف + سطر المؤشرات + الإجراء والتوصية والتحذيرات، والتفاصيل بالزر
+            try:
+                _m84 = getattr(result, "metrics", {}) or {}
+                _tl = text.split("\n")
+                _cls84 = [ln for ln in _tl[2:6] if ln.strip() and not ln.startswith(("ℹ️", "📈"))][:2]
+                _dp84, _dm84 = float(_m84.get("di_plus", 0) or 0), float(_m84.get("di_minus", 0) or 0)
+                _ind84 = [f"ADX {_adx_r:.1f}" + (" (−DI أعلى)" if _dm84 > _dp84 else " (+DI أعلى)" if _dp84 > _dm84 else ""),
+                          f"ATR {_atr_r:.1f}%", f"RSI {float(_m84.get('rsi', 0) or 0):.0f}", f"حجم {fmt_vol_ratio(_vol_r)}"]
+                if _m84.get("price_vs_ema50") is not None:
+                    _ind84.append(f"{float(_m84['price_vs_ema50']):+.1f}% عن EMA50".replace("-", "−"))
+                if "Fear & Greed" in text:
+                    _ind84.append(f"F&G {fear_val_r}")
+                _act84 = re.search(r"• الإجراء: [^\n]*", text)
+                _c84r = [_tl[0], _tl[1], *_cls84] + ([_sharp_r67] if _sharp_r67 else []) + ["📈 " + " | ".join(_ind84)]
+                if _act84:
+                    _c84r.append(_act84.group(0))
+                if _tip:
+                    _c84r.append(f"💡 *توصية رائد:* {_tip}")
+                if _warns:
+                    _c84r.append("⚠️ " + " · ".join(w.replace("⚠️ ", "") for w in _warns))
+                _c84r += ["", f"📖 *التفاصيل الكاملة*: الزر أدناه أو /regime {symbol} full", _DISC]
+                await send_card_b84(msg, update, context, "\n".join(_c84r), text, symbol, "regime", raw=True)
+                return
+            except Exception as _e84r:
+                logger.warning(f"regime card b84: {_e84r}")
         await msg.edit_text(text, parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         logger.error(f"cmd_regime: {e}")
@@ -6784,7 +6861,9 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _get_message(update, context).reply_text("⚠️ النظام لم يُهيَّأ بعد")
         return
 
-    args   = context.args or ["BTC"]
+    from core.report_cards_b84 import split_full_b84 as _sf84l
+    _args84l, _full84l = _sf84l(context.args or [])   # batch84: «/liquidity BTC full»
+    args   = _args84l or ["BTC"]
     # تطبيع symbol على مستوى النظام: BTCUSDT → BTC
     raw_sym = args[0].upper().strip().replace("/", "").replace("-", "")
     for _sfx in ("USDT","BUSD","USDC"):
@@ -7063,6 +7142,17 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _liq_approved, text = audit_content(text, source="liquidity")
         if not _liq_approved:
             logger.warning("auditing_agent: /liquidity مرفوض")
+        if not _full84l:   # batch84 (Y المرحلة 3): الخلاصة + المشتقات + وقت اللقطة، والتفاصيل بالزر
+            try:
+                _c84 = [_parts[0]]
+                if deriv_lines:
+                    _c84.append("📈 *مشتقات*\n" + "\n".join(deriv_lines))
+                _c84 += [p for p in _parts if str(p).startswith("🕒 لقطة الدفتر")]
+                _c84.append(f"📖 *التفاصيل الكاملة* (الدفتر، الجدران، الانزلاق لكل حجم، توزيع الحجم): الزر أدناه أو /liquidity {symbol} full\n{_DISC}")
+                await send_card_b84(msg, update, context, "\n\n".join(_c84), text, symbol, "liquidity", raw=True)
+                return
+            except Exception as _e84l:
+                logger.warning(f"liquidity card b84: {_e84l}")
         await msg.edit_text(text, parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         logger.error(f"cmd_liquidity: {e}")
