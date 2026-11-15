@@ -1658,6 +1658,264 @@ def _save_signal_decision_b58(user_id, symbol, mkttype, meta: dict, score: dict,
     return rec
 
 
+# ════════════════════════════════════════════════════════════════
+# batch82 (Y — قرار رحال 2026-11-15): بطاقة /signal القصيرة افتراضياً + «📖 التفاصيل الكاملة» (زر و/signal X full)
+# عرض فقط: تُبنى من القيم المحسوبة نفسها (meta/score/regime) — الحكم والحسابات وقرار التداول الآلي لا تتغير.
+# كل رقم مرة واحدة؛ مستويات Fibonacci تبقى في البطاقة (قرار رحال)؛ الشرح الثابت والجداول الأخرى في التفاصيل.
+# ════════════════════════════════════════════════════════════════
+_SYM_NAMES_B82 = {"LINK": "Chainlink", "BAT": "Basic Attention Token", "ONE": "Harmony", "KEY": "SelfKey", "NET": "عملة NET"}
+_FULL_WORDS_B82 = ("full", "كامل", "التفاصيل", "تفاصيل", "details")
+_SIGFULL_CACHE_B82 = "_sigfull_b82"
+_SIGFULL_MAX_B82 = 120
+
+
+def sym_note_b82(sym: str) -> str:
+    """batch82 (W1، قرار رحال: سطر توضيح بدل رسالة «رمز متضارب»): في رائد الأسهم بحرف X فلا تضارب فعلي."""
+    s = str(sym or "").upper()
+    if s not in _AMBIGUOUS_SYMBOLS:
+        return ""
+    return f"ℹ️ {s} هنا = {_SYM_NAMES_B82.get(s, s)} من بيانات OKX (الأسهم المرمّزة تُكتب بحرف X، مثل XAAPL)"
+
+
+def wants_full_b82(args) -> bool:
+    try:
+        return any(str(a).strip().lower() in _FULL_WORDS_B82 for a in list(args or [])[1:])
+    except Exception:
+        return False
+
+
+def _p82(v: float, sign: bool = True, nd: int = 1) -> str:
+    v = float(v or 0)
+    a = f"{abs(v):.{nd}f}%"
+    return (("+" if v > 0 else "−" if v < 0 else "") + a) if sign else a
+
+
+def _short_missing_b82(flags: list, fund_excluded: bool = False) -> list:
+    """تأكيدات Short غير المحققة (مرآة أعلام الشراء في core/short_eval_b68؛ Funding لا يُحتسب للسلع)."""
+    have = " ".join(str(x) for x in (flags or []))
+    out = []
+    if "Volume Spike" not in have:
+        out.append("حجم ≥1.5x بشمعة هابطة")
+    if "CVD بيع" not in have:
+        out.append("CVD بيع ≤ −20%")
+    if "Funding موجب" not in have and not fund_excluded:
+        out.append("Funding > +0.01%")
+    if "OI ارتفع" not in have:
+        out.append("ارتفاع OI > +5% مع الهبوط")
+    if "RSI ذروة شراء" not in have and "BB قرب" not in have:
+        out.append("RSI > 70 أو BB قرب الحد العلوي")
+    return out
+
+
+def _short_need_b82(reason: str, rsi=None) -> str:
+    """ما يلزم لزوال مانع Short (سبب الرفض من core/short_eval_b68 بصيغة الحالة ⇒ صيغة المطلوب)."""
+    r = str(reason or "")
+    if "ذروة بيع" in r:
+        return f"خروج RSI من ذروة البيع (≥ 30، حالياً {float(rsi or 0):.0f})"
+    if r.startswith("ميل الهبوط"):
+        return "ميل هبوط ≥ 65% (جهة هابطة مؤكدة)"
+    if "تصنيف السوق" in r:
+        return "تصنيف السوق هابطاً"
+    if "فوق المقاومة" in r:
+        return "عودة السعر دون المقاومة (السيناريو الحالي ملغى)"
+    if "لا مقاومة" in r:
+        return "مقاومة مثبتة فوق السعر للدخول عندها"
+    if r.startswith("R/R"):
+        return "R/R المرجّح ≥ 1:1"
+    return f"زوال المانع: {r}"
+
+
+def signal_card_b82(d: dict) -> str:
+    """يبني بطاقة القرار القصيرة من قيم محسوبة. d: sym, price, mkt_tag, meta, score, rec, regime_desc, adx, di_plus,
+    di_minus, pve50, fear_greed(None لغير العملات), daily_dir, h4_dir, bear_confirmed, fib_lines, pre_lines, top_lines,
+    warn_lines, futures(bool), entry_threshold."""
+    from core.auto_trader_b68 import autofail_reason_b79 as _afr, _wait_reason_b77 as _wr
+    fp = _fmt_price
+    m = d.get("meta") or {}
+    sc = d.get("score") or {}
+    rec = d.get("rec") or {}
+    sym = str(d.get("sym") or "")
+    conf = float(m.get("confidence_pct") or 0)
+    thr = float(d.get("entry_threshold") or 55)
+    n_conf = int(m.get("confirmations_met") or 0)
+    direction = str(m.get("direction") or "")
+    verdict = str(sc.get("verdict") or rec.get("verdict") or "").upper()
+    size_pct = float(rec.get("size_pct") or 0)
+    wait = bool(rec.get("wait"))
+    sh = m.get("short_b68") if isinstance(m.get("short_b68"), dict) else None
+    fut = bool(d.get("futures"))
+    long_ok = verdict != "AUTO-FAIL" and not wait and size_pct > 0 and direction == "long" and float(m.get("entry_agg") or 0) > 0
+    short_ok = bool(sh and sh.get("eligible"))
+    L = [x for x in (d.get("pre_lines") or []) if x]
+    L.append(f"📡 *{sym}* — {fp(float(d.get('price') or 0))}{d.get('mkt_tag') or ''}")
+    if long_ok:
+        L.append(f"🟢 *الحكم: دخول شراء — حجم {size_pct:g}%*")
+    elif short_ok:
+        L.append(f"🔻 *الحكم: Short مؤهل — حجم {'كامل' if float(sh.get('size_factor') or 0) >= 1 else 'نصف'} (Futures افتراضي 1x)*")
+    elif verdict == "AUTO-FAIL":
+        L.append("⛔ *الحكم: " + ("لا شراء (بنية فاشلة) ولا Short الآن*" if sh else "لا دخول — بنية الصفقة فاشلة*"))
+    else:
+        L.append("⚪ *الحكم: انتظار — " + ("لا شراء ولا Short الآن*" if sh else "لا دخول الآن*"))
+    L.append("━━━━━━━━━━━━━━━━━━")
+    L += [x for x in (d.get("top_lines") or []) if x]
+
+    # 📌 لماذا؟
+    L.append("📌 *لماذا؟*")
+    if long_ok:
+        L.append(f"• شراء: ✅ تأكيدات {n_conf}/4 — " + " · ".join(str(x).replace(" ✓", "") for x in (m.get("conf_flags_b82") or [])[:4]))
+        if sc.get("score") is not None:
+            L.append(f"• جودة البنية: {int(sc.get('score') or 0)}/100 — {str(sc.get('verdict_ar') or verdict).replace('*', '')}")
+    else:
+        if verdict == "AUTO-FAIL":
+            why_l = "⛔ " + _afr(dict(rec, verdict_reason=str(sc.get("header") or rec.get("verdict_reason") or ""))).replace("بنية الصفقة فاشلة (AUTO-FAIL): ", "بنية فاشلة — ")
+            _w = _wr(rec, conf / 100.0)
+            if d.get("bear_confirmed"):   # نفس صياغة التقرير الكامل (_bear_wording_b56)
+                _w = _w.replace("الاتجاه غير مؤكد، انتظر وضوح الجهة", "اتجاه هابط قائم، لا شراء")
+            if _w and "حافة" not in _w and "R/R" not in _w and not _w.startswith("حكم /signal"):
+                why_l += f"؛ {_w}"
+        else:
+            why_l = "⏳ " + _wr(rec, conf / 100.0)
+            if d.get("bear_confirmed"):
+                why_l = why_l.replace("الاتجاه غير مؤكد، انتظر وضوح الجهة", "اتجاه هابط قائم، لا شراء")
+        L.append(f"• شراء: {why_l}")
+    if sh:
+        if short_ok:
+            L.append(f"• Short: ✅ مؤهل — تأكيدات {int(sh.get('n_flags') or 0)}/4: " + " · ".join(str(x).replace(" ✓", "") for x in (sh.get("flags") or [])))
+        else:
+            _sr = str(sh.get("reason") or "الشروط غير مكتملة")
+            _cnt = (" — المحتسب: " + " · ".join(str(x).replace(" ✓", "") for x in sh.get("flags"))) if (sh.get("flags") and "تأكيدات Short" in _sr) else ""
+            from core.auto_trader_b68 import rr_fmt_b79 as _rrf82
+            _rr_s = (f" | R/R 1:{_rrf82(float(sh.get('rr') or 0))}" if float(sh.get("entry") or 0) > 0 and "R/R" not in _sr else "")
+            L.append(f"• Short: ⏳ {_sr}{_cnt}{_rr_s}")
+    _lean = (f" — ميل الهبوط {100 - conf:.0f}%" if (direction != "long" and conf < 50) else "")
+    L.append(f"• الثقة {conf:.0f}% (حد الدخول {thr:.0f}%){_lean}")
+    L += [x for x in (d.get("warn_lines") or []) if x]
+
+    # الخطة
+    if long_ok:
+        e, sl, t1, t2 = (float(m.get(k) or 0) for k in ("entry_agg", "pro_sl", "tp1_v", "tp2_v"))
+        rrv = float(m.get("rr_raw") or m.get("rr_real") or 0)
+        L += ["", "🟢 *خطة الشراء:*",
+              f"دخول {fp(e)} | وقف {fp(sl)} (−{abs(float(m.get('sl_pct') or 0)):.1f}%)",
+              f"TP1 {fp(t1)} (+{float(m.get('tp_pct') or 0):.1f}%، 60%) ← TP2 {fp(t2)} (+{float(m.get('tp2_pct') or 0):.1f}%، 40%)"
+              if t2 > t1 else f"TP1 {fp(t1)} (+{float(m.get('tp_pct') or 0):.1f}%)",
+              f"بعد TP1 يُنقل الوقف إلى {fp(t1)} | R/R المرجّح 1:{_fmt_rr(rrv)}"]
+    if sh and float(sh.get("entry") or 0) > 0:
+        L += ["", "🔻 *خطة Short" + ("" if short_ok else " (عند التفعيل)") + ":*",
+              f"دخول {fp(float(sh['entry']))} بعد شمعة رفض | وقف {fp(float(sh['sl']))} (+{float(sh.get('sl_pct') or 0):.1f}%)",
+              f"TP1 {fp(float(sh['tp1']))} (−{float(sh.get('tp1_pct') or 0):.1f}%، 60%) ← TP2 {fp(float(sh['tp2']))} (−{float(sh.get('tp2_pct') or 0):.1f}%، 40%)"]
+
+    # 📊 الصورة
+    adx = float(d.get("adx") or 0)
+    dp, dm = float(d.get("di_plus") or 0), float(d.get("di_minus") or 0)
+    _adx_t = (f" (ADX {adx:.1f}، " + ("−DI أعلى" if dm > dp else "+DI أعلى" if dp > dm else "DI متقاربان") + ")") if adx > 0 else ""
+    L += ["", f"📊 *الصورة:* {str(d.get('regime_desc') or '').strip()}{_adx_t} | يومي {d.get('daily_dir') or '—'} · 4H {d.get('h4_dir') or '—'}"]
+    _vr = float(m.get("vol_ratio") or 0)
+    try:
+        from core.indicators import fmt_vol_ratio as _fvr82
+        _vrs = _fvr82(_vr)
+    except Exception:
+        _vrs = f"{_vr:.1f}x"
+    _vd = str(m.get("vol_dir_b82") or "")
+    seg = [f"RSI {float(m.get('rsi') or 0):.0f}",
+           f"حجم {_vrs}" + (" (شمعة هابطة)" if _vd == "down" and _vr >= 1.0 else " (شمعة صاعدة)" if _vd == "up" and _vr >= 1.0 else ""),
+           f"ATR {float(m.get('atr_pct') or 0):.1f}%"]
+    if d.get("pve50") is not None:
+        seg.append(f"{_p82(d['pve50'])} عن EMA50")
+    if d.get("fear_greed") is not None:
+        seg.append(f"F&G {int(d['fear_greed'])}")
+    L.append(" | ".join(seg))
+    if fut:
+        dv = []
+        if m.get("fund_known_b82") and m.get("fund_pct_b82") is not None:
+            _f = float(m.get("fund_pct_b82") or 0)
+            dv.append(f"Funding {'+' if _f > 0 else '−' if _f < 0 else ''}{abs(_f):.4f}%" + (" (للعلم)" if m.get("fund_excluded_b82") else ""))
+        if m.get("oi_chg_b82") is not None:
+            dv.append(f"OI {_p82(float(m.get('oi_chg_b82') or 0), nd=2)} (ساعة)")
+        if m.get("cvd_available") and m.get("cvd_pct_b82") is not None:
+            dv.append(f"CVD {_p82(float(m.get('cvd_pct_b82') or 0))}")
+        if dv:
+            L.append("🔗 " + " | ".join(dv))
+
+    # 📐 Fibonacci (يبقى في البطاقة — قرار رحال)
+    fl = [x for x in (d.get("fib_lines") or [])
+          if not str(x).startswith("ℹ️ الدعم/المقاومة من آخر شمعة") and not str(x).startswith("⚠️ الدعم المعتمد = قاع")]
+    if fl:
+        L += [""] + fl
+
+    # ⏳ ما الذي يغيّر الحكم؟
+    ch = []
+    if long_ok:
+        ch.append(f"• ❌ الإلغاء: إغلاق يومي دون الوقف {fp(float(m.get('pro_sl') or 0))}")
+    else:
+        need = []
+        if d.get("bear_confirmed"):
+            need.append("انتهاء الهبوط القائم (ADX < 25 أو تقارب DI)")
+        if conf < thr:
+            need.append(f"ثقة ≥ {thr:.0f}%")
+        if n_conf < 2:
+            need.append(f"تأكيدات شراء 2/4 (حالياً {n_conf}/4)")
+        if verdict == "AUTO-FAIL" and "R/R" in str(sc.get("header") or ""):
+            need.append("R/R المرجّح ≥ 1:1")
+        if need:
+            ch.append("• شراء: " + " + ".join(need))
+    if sh and not short_ok:
+        _sr = str(sh.get("reason") or "")
+        if "تأكيدات Short" in _sr:
+            _miss = _short_missing_b82(sh.get("flags") or [], bool(m.get("fund_short_ex_b82")))
+            _k = max(0, 2 - int(sh.get("n_flags") or 0))
+            if _miss:
+                ch.append(f"• Short: {'تأكيد إضافي واحد' if _k <= 1 else 'تأكيدان إضافيان'} — " + "، أو ".join(_miss))
+        elif _sr:
+            ch.append(f"• Short: {_short_need_b82(_sr, m.get('rsi'))}")
+    if ch:
+        L += ["", "⏳ *ما الذي يغيّر الحكم؟*" if not long_ok else "⏳ *متابعة الصفقة*"] + ch
+
+    L += ["", f"📖 *التفاصيل الكاملة:* الزر أدناه أو /signal {sym} full"]
+    L += [x for x in (d.get("tail_lines") or []) if x]
+    L.append(_DISC)
+    out = "\n".join(L)
+    return re.sub(r"\n{3,}", "\n\n", out)
+
+
+def sigfull_put_b82(bot_data: dict, uid: int, sym: str, text: str) -> str:
+    """يحفظ التقرير الكامل في الذاكرة ويُرجع معرّفاً قصيراً لزر «📖 التفاصيل الكاملة» (≤ 64 بايت)."""
+    import time as _t82
+    c = bot_data.setdefault(_SIGFULL_CACHE_B82, {})
+    n = int(bot_data.get("_sigfull_n_b82", 0)) + 1
+    bot_data["_sigfull_n_b82"] = n
+    k = f"{n:x}"
+    c[k] = {"uid": int(uid), "sym": str(sym), "text": text, "ts": _t82.time()}
+    if len(c) > _SIGFULL_MAX_B82:
+        for old in sorted(c, key=lambda x: c[x]["ts"])[:len(c) - _SIGFULL_MAX_B82]:
+            c.pop(old, None)
+    return k
+
+
+async def callback_sigfull_b82(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """زر «📖 التفاصيل الكاملة»: يرسل التقرير الكامل المحفوظ نفسه (لا تحليل جديد)."""
+    q = update.callback_query
+    try:
+        await q.answer()
+    except Exception:
+        pass
+    k = str(q.data or "").split(":", 1)[-1]
+    ent = (context.bot_data.get(_SIGFULL_CACHE_B82) or {}).get(k)
+    if not ent:
+        await q.message.reply_text("⏳ انتهت صلاحية هذه التفاصيل (أُعيد تشغيل البوت أو مرّ وقت طويل) — أرسل /signal الرمز full")
+        return
+    _prev = context.user_data.get("_cb_message")
+    context.user_data["_cb_message"] = q.message
+    try:
+        ph = await q.message.reply_text(f"📖 التفاصيل الكاملة — {ent['sym']}...")
+        await _send_long_message(ph, update, context, ent["text"], parse_mode=ParseMode.MARKDOWN)
+    finally:
+        if _prev is None:
+            context.user_data.pop("_cb_message", None)
+        else:
+            context.user_data["_cb_message"] = _prev
+
+
 async def headless_signal_b68(engine, symbol: str, mkttype: str, user_id: int, bot_data: dict = None,
                               timeout: float = 150.0) -> dict:
     """batch68 (قرار رحال: «التنفيذ الآلي = /signal نفسه»): يشغّل /signal كاملاً دون رسالة ويُرجع القرار المحفوظ
@@ -1826,7 +2084,11 @@ def _fmt_rr(rr: float) -> str:
     if round(rr, 1) == 2.0:
         return f"{rr:.2f}"
     # batch67 (#939/#992): قرب حد الحافة 1:1 تُعرض منزلتان (0.94 لا «0.9»/«0.90»؛ 0.95 لا «1.0»)
-    if 0.9 <= rr < 1.05:
+    # batch82 (W2): دون 1 يُقرَّب للأسفل كتذييل G3 (0.936 ⇒ «0.93» في كل المواضع؛ كان 0.94 هنا و0.93 هناك)
+    if 0 < rr < 1.0:
+        import math as _m82
+        return f"{_m82.floor(rr * 100) / 100:.2f}"
+    if 1.0 <= rr < 1.05:
         return f"{rr:.2f}"
     return f"{rr:.1f}"
 
@@ -2855,8 +3117,10 @@ def _build_professional_block(
     # إصلاح #518: signal يعكس الحالة الحقيقية
     if _fund_pct < -0.02:
         _fund_sig = "🟢 سالب جداً (ضغط على Shorts — فرصة Longs)"
-    elif _fund_pct < -0.005:
+    elif _fund_pct < -0.01:
         _fund_sig = "🟢 سالب (فرصة Long)"
+    elif _fund_pct < -0.005:
+        _fund_sig = "🟢 سالب طفيف (دون حد التأكيد −0.01%)"   # batch82 (W3): كان «فرصة Long» والتأكيدات لا تحتسبه
     elif _fund_pct > 0.02:
         _fund_sig = "🔴 مرتفع جداً (ضغط على Longs)"
     elif _fund_pct > 0.01:
@@ -4186,6 +4450,17 @@ def _build_professional_block(
         "cvd_available": bool(_cvd_oc_f.get("cvd_signal")) if isinstance(_cvd_oc_f, dict) else None,
         # batch56 (1أ): بُعد الدخول عن أقرب دعم معروض (لعامل التمايز في Setup Quality)
         "support_gap_pct": (abs(entry_agg / ns - 1) * 100 if (ns and ns > 0 and entry_agg) else None),
+        # batch82 (Y — بطاقة /signal القصيرة): قيم معروضة أصلاً في التقرير الكامل تُمرَّر لبناء البطاقة — عرض فقط
+        "ns_b82": float(ns or 0), "nr_b82": float(nr or 0),
+        "vol_dir_b82": locals().get("_vdir67b", ""),
+        "fund_pct_b82": locals().get("_fund_pct"), "oi_chg_b82": locals().get("_oi_chg"),
+        "cvd_pct_b82": locals().get("_cvd_pct_f"),
+        "fund_known_b82": bool(_fund.get("source") not in (None, "unknown", "") or float(_fund_pct or 0) != 0) if isinstance(_fund, dict) else False,
+        "fund_short_ex_b82": bool(locals().get("_gold_fund_ex")),
+        "fund_excluded_b82": bool(locals().get("_gold_fund_ex") or _is_x_asset or locals().get("_is_perp_asset") or _is_commodity(symbol)),
+        "conf_flags_b82": [str(x) for x in (_conf_flags or [])],
+        "short_checks_b82": (list(_short_ev68.get("checks") or []) if isinstance(_short_ev68, dict) else []),
+        "has_targets_b82": bool(locals().get("_has_real_targets")),
     }
     _final_txt_b48 = "\n".join(parts)
     # batch48 (ملاحظات 70/98/123/148): تباعد أسطر ثابت — لا أكثر من سطر فارغ، وسطر فارغ قبل «السيناريوهات»
@@ -5298,14 +5573,10 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # TK_name_fix: حفظ الرمز الأصلي للعرض (XSPCX وليس SPCX)
     _display_symbol = raw_arg  # يُستخدم في العرض للمستخدم
 
-    # SYM_WARN (#2570/#2572): تحذير تضارب الرموز
-    if raw_arg in _AMBIGUOUS_SYMBOLS:
-        await _get_message(update, context).reply_text(
-            f"⚠️ *تنبيه — رمز متضارب:* `{raw_arg}`\n"
-            f"{_AMBIGUOUS_SYMBOLS[raw_arg]}\n\n"
-            f"جاري التحليل بناءً على البيانات المتاحة في OKX...",
-            parse_mode="Markdown"
-        )
+    # batch82 (W1، قرار رحال): لا رسالة «رمز متضارب» مستقلة — سطر توضيح واحد في رأس التقرير (sym_note_b82)
+    _sym_note82 = sym_note_b82(raw_arg)
+    # batch82 (Y): البطاقة القصيرة افتراضياً؛ «/signal X full» يعرض التقرير الكامل مباشرة
+    _full82 = wants_full_b82(args)
 
     # تطوير #221: سؤال نوع السوق (Spot/Futures)
     # إصلاح #237-A+#248: الأصول المُرمَّزة → Futures تلقائياً
@@ -5334,9 +5605,12 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 pass
         if _mkttype is None:
+            context.user_data["_sig_full82"] = bool(_full82)   # batch82: يُحفظ عبر سؤال نوع السوق
             sent = await _ask_market_type(update, context, "signal", raw_arg, _sm.get_tier(user_id))
             if sent:
                 return
+    else:
+        _full82 = _full82 or bool(context.user_data.pop("_sig_full82", False))
 
     _use_futures = (_mkttype == "futures")
     _mkt_arg_sig = "futures" if _use_futures else "spot"  # إصلاح #258
@@ -6039,7 +6313,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _score_result = evaluate_signal(_si)
                 # batch58 (#682): سجل قرار /signal المعروض — /trade ينفّذ هذا القرار نفسه لا منطقاً مستقلاً
                 try:
-                    _save_signal_decision_b58(user_id, symbol, _mkt_arg_sig, _sm_sig, _score_result,
+                    _rec82 = _save_signal_decision_b58(user_id, symbol, _mkt_arg_sig, _sm_sig, _score_result,
                                               auto=bool(context.user_data.get("_headless_b68")))
                 except Exception as _sd58:
                     logger.debug(f"signal decision save: {_sd58}")
@@ -6181,6 +6455,8 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # batch62 (#781): حدث الماكرو القادم يظهر في /signal كما في /analyze (كان غائباً عن /signal)
         try:
             _em62, _er62 = engine.event_risk.get_exposure_multiplier()
+            if _er62:
+                _macro82 = f"📅 ماكرو: {_clean_md(_er62)} — التعرض المسموح {_em62:.0%}"
             if _er62 and "📅 ماكرو:" not in full_text:
                 _k62 = full_text.find("الثقة:")
                 _e62 = full_text.find("\n", _k62) if _k62 >= 0 else -1
@@ -6189,8 +6465,60 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                  + full_text[_e62:])
         except Exception as _e62x:
             logger.debug(f"signal macro line: {_e62x}")
-        await _send_long_message(msg, update, context, full_text, parse_mode=ParseMode.MARKDOWN,
-                                  reply_markup=_sig_reply_markup)
+        if _sym_note82:
+            full_text = _sym_note82 + "\n" + full_text   # batch82 (W1)
+        # batch82 (Y): البطاقة القصيرة افتراضياً + زر «📖 التفاصيل الكاملة»؛ المسح الآلي و«full» بلا بطاقة
+        _send_text82, _markup82 = full_text, _sig_reply_markup
+        if not _hl68 and not _full82:
+            try:
+                _m82 = dict(getattr(regime, "metrics", None) or {})
+                _pve82 = _m82.get("price_vs_ema50")
+                if _ema50_sig_corrupted and _e50_sig_raw > 0:
+                    _pve82 = (price - _e50_sig_raw) / max(_e50_sig_raw, 0.0001) * 100
+                _crypto82 = not (_is_perp_sig or _is_commodity(symbol) or is_tokenized_x_ticker(symbol))
+                _pre82 = []
+                if _data_corrupted:
+                    _pre82.append("⚠️ بيانات غير موثوقة (انهيار حاد) — لا تعتمد على هذا التحليل للتداول الفعلي")
+                try:
+                    if is_tokenized_x_ticker(_display_symbol):
+                        _pre82.append(_synth_warn(_display_symbol, len(candles)))
+                    elif _commodity_note(_display_symbol):
+                        _pre82.append(_commodity_note(_display_symbol))
+                except Exception:
+                    pass
+                _pre82.append(_sym_note82)
+                _ny82 = [x for x in (_nyse_warn_sig or "").strip().split("\n") if x.strip()]
+                _ny82 = [_ny82[0]] + [x for x in _ny82[1:] if "يفتح" in x] if _ny82 else []   # سطر الإغلاق + موعد الفتح
+                _top82 = [locals().get("_mv56") or "", "\n".join(_ny82), locals().get("_macro82") or ""]
+                _tail82 = []
+                if _pair_addon:
+                    _tail82 += [""] + list(_pair_addon)
+                if _free_warning:
+                    _tail82.append(_free_warning.strip())
+                if _is_stock_sig and _STOCK_TIER_CONF.get(_tier_sig) is None:
+                    _tail82.append("🔒 *الأسهم المُرمَّزة — ذهبي وأعلى* — للترقية: /upgrade")
+                _card82 = signal_card_b82({
+                    "sym": _display_symbol, "price": price, "mkt_tag": _mkt_tag_b41(_mkttype, candles),
+                    "meta": _sig_meta or {}, "score": locals().get("_score_result") or {},
+                    "rec": locals().get("_rec82") or {},
+                    "regime_desc": getattr(regime, "description_ar", "") or "",
+                    "adx": _m82.get("adx"), "di_plus": _m82.get("di_plus"), "di_minus": _m82.get("di_minus"),
+                    "pve50": _pve82, "fear_greed": (_m82.get("fear_greed") if _crypto82 else None),
+                    "daily_dir": _daily_dir, "h4_dir": _4h_dir, "bear_confirmed": _bear_confirmed_b56(regime)[0],
+                    "fib_lines": fib_lines, "pre_lines": _pre82, "top_lines": _top82,
+                    "warn_lines": [w for w in _mtf_warns if "Counter-Trend" in w],
+                    "tail_lines": _tail82, "futures": _use_futures,
+                    "entry_threshold": float(_TIER_CONF.get(tier2, _TIER_CONF["silver"])[1]),
+                })
+                _k82 = sigfull_put_b82(context.bot_data, user_id, _display_symbol, full_text)
+                _rows82 = list(_sig_reply_markup.inline_keyboard) if _sig_reply_markup else []
+                _rows82.append([InlineKeyboardButton("📖 التفاصيل الكاملة", callback_data=f"sigfull:{_k82}")])
+                _send_text82, _markup82 = _card82, InlineKeyboardMarkup(_rows82)
+            except Exception as _c82:
+                logger.warning(f"signal card b82: {_c82} — إرسال التقرير الكامل")
+                _send_text82, _markup82 = full_text, _sig_reply_markup
+        await _send_long_message(msg, update, context, _send_text82, parse_mode=ParseMode.MARKDOWN,
+                                  reply_markup=_markup82)
 
     except Exception as e:
         logger.error(f"cmd_signal: {e}")
@@ -9554,6 +9882,11 @@ def register(app):
     app.add_handler(CommandHandler("onchain",      cmd_onchain))
     app.add_handler(CommandHandler("regime",       cmd_regime))
     app.add_handler(CommandHandler("signal",       cmd_signal))
+    try:   # batch82 (Y): زر «📖 التفاصيل الكاملة» في بطاقة /signal
+        from telegram.ext import CallbackQueryHandler as _CQH82
+        app.add_handler(_CQH82(callback_sigfull_b82, pattern=r"^sigfull:"))
+    except Exception as _r82:
+        logger.warning(f"sigfull handler: {_r82}")
     app.add_handler(CommandHandler("backtest",     cmd_backtest))
     app.add_handler(CommandHandler("liquidity",    cmd_liquidity))
     app.add_handler(CommandHandler("events",       cmd_events))

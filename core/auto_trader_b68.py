@@ -473,10 +473,9 @@ def autofail_reason_b79(rec: dict) -> str:
         return "بنية الصفقة فاشلة (AUTO-FAIL): أصل اصطناعي بسيولة ضعيفة والسوق مغلق — خطر فجوة سعرية"
     if gate == "5":
         return "بنية الصفقة فاشلة (AUTO-FAIL): أصل حديث الإدراج — مؤشراته غير موثوقة"
-    rr = float((rec or {}).get("rr") or 0)
-    if not (0 < rr < 1):
-        m = _re79.search(r"R/R = 1:([\d.]+)", vr)
-        rr = float(m.group(1)) if m else rr
+    # batch82 (W2): الرقم من تذييل G3 أولاً (مقرَّب للأسفل من القيمة غير المقرّبة) — rec["rr"] مقرَّب لمنزلة واحدة (0.9)
+    m = _re79.search(r"R/R = 1:([\d.]+)", vr)
+    rr = float(m.group(1)) if m else float((rec or {}).get("rr") or 0)
     return ("بنية الصفقة فاشلة (AUTO-FAIL): " + (f"R/R المرجّح 1:{rr_fmt_b79(rr)} < 1:1" if 0 < rr < 1 else "R/R المرجّح < 1:1")
             + " — الأهداف قريبة مقارنة بالوقف")
 
@@ -856,6 +855,16 @@ def _usd_b81(x: float) -> str:
     return f"{'+' if x > 0 else '−' if x < 0 else ''}${abs(x):,.2f}"
 
 
+def _pct_b82(x: float) -> str:
+    """batch82 (U1): نسبة بعلامة «−» نفسها في المبلغ، ومنزلتان حين تكون دون 0.1% («−0.03%» بدل «-0.0%»)."""
+    x = float(x or 0)
+    a = abs(x)
+    if a < 0.005:
+        return "0.00%"
+    v = f"{a:.2f}" if a < 0.1 else f"{a:.1f}"
+    return f"{'+' if x > 0 else '−'}{v}%"
+
+
 def open_lines_b81(open_rows: list) -> list:
     """batch81 (S2، مبدأ رحال: بيانات كل صفقة واضحة): سطر لكل مركز قياس مفتوح.
     open_rows: [{sym, side, hours, net, net_pct, to_tp1_pct, to_sl_pct, tp1_done}]"""
@@ -866,7 +875,7 @@ def open_lines_b81(open_rows: list) -> list:
             _dur = (f"{_d:.0f} ساعة" if _d >= 11 else "ساعة" if round(_d) <= 1 else "ساعتين" if round(_d) == 2 else f"{round(_d)} ساعات") \
                 if _d < 48 else f"{_d / 24:.1f} يوم"
             line = (f"  ↳ {r['sym']} {'Long' if r.get('side') != 'short' else 'Short'} منذ {_dur} — الصافي غير المحقق "
-                    f"{_usd_b81(r.get('net', 0))} ({float(r.get('net_pct') or 0):+.1f}%)")
+                    f"{_usd_b81(r.get('net', 0))} ({_pct_b82(r.get('net_pct'))})")   # batch82 (U1)
             if r.get("tp1_done"):
                 line += " | ✅ TP1 تحقق"
             elif r.get("to_tp1_pct") is not None:
