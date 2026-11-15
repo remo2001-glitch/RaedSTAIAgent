@@ -99,3 +99,15 @@ chk("Y21 Funding لا يُطلب للسلع", not any("Funding" in x for x in M(
 c4 = A.signal_card_b82(dict(d, meta=dict(meta, short_b68=dict(sh, flags=[], n_flags=0, reason="تأكيدات Short 0/4 (الحد الأدنى 2)"))))
 chk("Y22 المثنى", "• Short: تأكيدان إضافيان — حجم ≥1.5x بشمعة هابطة" in c4, c4)
 chk("Y23 تنبيه السوق المغلق مختصر", 'if "يفتح" in x' in s)
+
+# ── Y المرحلة 2: /analyze ───────────────────────────────────
+c5 = A.signal_card_b82(dict(d, title="🧠", price_suffix=" (+5.11% / 24س)", cmd="analyze", meta=dict(meta, short_b68=None),
+                            reading="الاتجاه هابط والزخم ضعيف.", h4_dir="",
+                            scenarios=["🟢 صاعد: إغلاق 4H فوق $9.3803 + حجم 1.5x+", "🔴 هابط: كسر $8.567 بإغلاق 4H"]))
+chk("Y24 رأس /analyze والقراءة", "🧠 *LINK* — $9.251 (+5.11% / 24س) · 📉 Futures" in c5 and "🧠 *القراءة:*\nالاتجاه هابط والزخم ضعيف." in c5, c5)
+chk("Y25 السيناريوهان ورابط /analyze full", "📋 *السيناريوهان:*\n🟢 صاعد: إغلاق 4H فوق $9.3803" in c5 and "/analyze LINK full" in c5
+    and "· 4H" not in c5, c5)
+chk("Y26 /analyze لا يحفظ قراراً", "save=False" in s and "if not save:" in s)
+chk("Y27 /analyze: زر وfull وحفظ عبر سؤال السوق", 'cmd="analyze"' in s and 'context.user_data["_an_full82"] = bool(_full82a)' in s
+    and "analyze card b82" in s)
+chk("Z1 سطر فارغ قبل تقييم Short", 'parts.append("")   # batch82 (Z1)' in s)

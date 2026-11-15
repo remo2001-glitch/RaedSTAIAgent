@@ -1614,7 +1614,7 @@ def _is_us_listed_symbol(sym: str) -> bool:
 SIGNAL_DECISION_TTL_B58 = 1800   # /trade يقبل قرار /signal خلال 30 دقيقة فقط
 
 
-def _save_signal_decision_b58(user_id, symbol, mkttype, meta: dict, score: dict, auto: bool = False) -> dict:
+def _save_signal_decision_b58(user_id, symbol, mkttype, meta: dict, score: dict, auto: bool = False, save: bool = True) -> dict:
     """batch58 (#682–#684): يحفظ قرار /signal المعروض للمستخدم (الحكم، الحجم، الدخول/الوقف/الأهداف)
     ليستخدمه /trade كما هو. عرض/تخزين فقط — لا يغيّر /signal."""
     import json as _js58, time as _tm58, re as _re58
@@ -1648,6 +1648,8 @@ def _save_signal_decision_b58(user_id, symbol, mkttype, meta: dict, score: dict,
         "regime_bucket": ("هابط" if "هابط" in str(meta.get("regime_desc", "")) else "صاعد" if "صاعد" in str(meta.get("regime_desc", ""))
                           else "جانبي" if str(meta.get("regime_desc", "")) else ""),
     }
+    if not save:   # batch82: بطاقة /analyze تقرأ القرار نفسه دون حفظه (/trade يبقى على قرار /signal)
+        return rec
     try:
         # batch68: تشغيل /signal الداخلي للتداول الآلي يُحفظ في مفتاح منفصل — لا يمسّ قرار /trade اليدوي للمستخدم
         _k68 = "sigdec_auto" if auto else "sigdec"
@@ -1747,7 +1749,7 @@ def signal_card_b82(d: dict) -> str:
     long_ok = verdict != "AUTO-FAIL" and not wait and size_pct > 0 and direction == "long" and float(m.get("entry_agg") or 0) > 0
     short_ok = bool(sh and sh.get("eligible"))
     L = [x for x in (d.get("pre_lines") or []) if x]
-    L.append(f"📡 *{sym}* — {fp(float(d.get('price') or 0))}{d.get('mkt_tag') or ''}")
+    L.append(f"{d.get('title') or '📡'} *{sym}* — {fp(float(d.get('price') or 0))}{d.get('price_suffix') or ''}{d.get('mkt_tag') or ''}")
     if long_ok:
         L.append(f"🟢 *الحكم: دخول شراء — حجم {size_pct:g}%*")
     elif short_ok:
@@ -1758,6 +1760,8 @@ def signal_card_b82(d: dict) -> str:
         L.append("⚪ *الحكم: انتظار — " + ("لا شراء ولا Short الآن*" if sh else "لا دخول الآن*"))
     L.append("━━━━━━━━━━━━━━━━━━")
     L += [x for x in (d.get("top_lines") or []) if x]
+    if d.get("reading"):   # /analyze: قراءة النموذج (4–5 جمل) كما هي
+        L += ["🧠 *القراءة:*", str(d["reading"]).strip(), ""]
 
     # 📌 لماذا؟
     L.append("📌 *لماذا؟*")
@@ -1809,7 +1813,7 @@ def signal_card_b82(d: dict) -> str:
     adx = float(d.get("adx") or 0)
     dp, dm = float(d.get("di_plus") or 0), float(d.get("di_minus") or 0)
     _adx_t = (f" (ADX {adx:.1f}، " + ("−DI أعلى" if dm > dp else "+DI أعلى" if dp > dm else "DI متقاربان") + ")") if adx > 0 else ""
-    L += ["", f"📊 *الصورة:* {str(d.get('regime_desc') or '').strip()}{_adx_t} | يومي {d.get('daily_dir') or '—'} · 4H {d.get('h4_dir') or '—'}"]
+    L += ["", f"📊 *الصورة:* {str(d.get('regime_desc') or '').strip()}{_adx_t} | يومي {d.get('daily_dir') or '—'}" + (f" · 4H {d['h4_dir']}" if d.get("h4_dir") else "")]
     _vr = float(m.get("vol_ratio") or 0)
     try:
         from core.indicators import fmt_vol_ratio as _fvr82
@@ -1843,6 +1847,10 @@ def signal_card_b82(d: dict) -> str:
     if fl:
         L += [""] + fl
 
+    # 📋 السيناريوهان (/analyze)
+    scn = [x for x in (d.get("scenarios") or []) if x]
+    if scn:
+        L += ["", "📋 *السيناريوهان:*"] + scn
     # ⏳ ما الذي يغيّر الحكم؟
     ch = []
     if long_ok:
@@ -1871,21 +1879,21 @@ def signal_card_b82(d: dict) -> str:
     if ch:
         L += ["", "⏳ *ما الذي يغيّر الحكم؟*" if not long_ok else "⏳ *متابعة الصفقة*"] + ch
 
-    L += ["", f"📖 *التفاصيل الكاملة:* الزر أدناه أو /signal {sym} full"]
+    L += ["", f"📖 *التفاصيل الكاملة:* الزر أدناه أو /{d.get('cmd') or 'signal'} {sym} full"]
     L += [x for x in (d.get("tail_lines") or []) if x]
     L.append(_DISC)
     out = "\n".join(L)
     return re.sub(r"\n{3,}", "\n\n", out)
 
 
-def sigfull_put_b82(bot_data: dict, uid: int, sym: str, text: str) -> str:
+def sigfull_put_b82(bot_data: dict, uid: int, sym: str, text: str, cmd: str = "signal") -> str:
     """يحفظ التقرير الكامل في الذاكرة ويُرجع معرّفاً قصيراً لزر «📖 التفاصيل الكاملة» (≤ 64 بايت)."""
     import time as _t82
     c = bot_data.setdefault(_SIGFULL_CACHE_B82, {})
     n = int(bot_data.get("_sigfull_n_b82", 0)) + 1
     bot_data["_sigfull_n_b82"] = n
     k = f"{n:x}"
-    c[k] = {"uid": int(uid), "sym": str(sym), "text": text, "ts": _t82.time()}
+    c[k] = {"uid": int(uid), "sym": str(sym), "text": text, "ts": _t82.time(), "cmd": cmd}
     if len(c) > _SIGFULL_MAX_B82:
         for old in sorted(c, key=lambda x: c[x]["ts"])[:len(c) - _SIGFULL_MAX_B82]:
             c.pop(old, None)
@@ -1902,7 +1910,7 @@ async def callback_sigfull_b82(update: Update, context: ContextTypes.DEFAULT_TYP
     k = str(q.data or "").split(":", 1)[-1]
     ent = (context.bot_data.get(_SIGFULL_CACHE_B82) or {}).get(k)
     if not ent:
-        await q.message.reply_text("⏳ انتهت صلاحية هذه التفاصيل (أُعيد تشغيل البوت أو مرّ وقت طويل) — أرسل /signal الرمز full")
+        await q.message.reply_text("⏳ انتهت صلاحية هذه التفاصيل (أُعيد تشغيل البوت أو مرّ وقت طويل) — أرسل الأمر نفسه مع full (مثال: /signal BTC full أو /analyze BTC full)")
         return
     _prev = context.user_data.get("_cb_message")
     context.user_data["_cb_message"] = q.message
@@ -4427,6 +4435,7 @@ def _build_professional_block(
                 fib_levels=(fib or {}).get("levels") if isinstance(fib, dict) else None,
                 regime_desc=getattr(regime, "description_ar", "") if regime is not None else "",
                 flags=_sfl68)
+            parts.append("")   # batch82 (Z1): سطر فارغ — كان القسم ملتصقاً بآخر سطر في Checklist الاستعداد
             parts.append(format_short_block_b68(_short_ev68, _fmt_price))
     except Exception as _se68:
         logger.debug(f"short eval b68: {_se68}")
@@ -7671,6 +7680,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
     raw_arg = args[0].upper()
     # TK_name_fix: حفظ الرمز الأصلي للعرض
     _display_symbol_an = raw_arg
+    _full82a = wants_full_b82(args)   # batch82 (Y المرحلة 2): «/analyze X full» = التقرير الكامل مباشرة
 
     # تطوير #221: سؤال نوع السوق (Spot/Futures)
     # إصلاح #237-A: الأصول المُرمَّزة → Futures تلقائياً بدون سؤال
@@ -7688,9 +7698,12 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if _pre_asset_an and not _is_x_an:
             _mkttype_an = "futures"
         else:
+            context.user_data["_an_full82"] = bool(_full82a)
             sent_an = await _ask_market_type(update, context, "analyze", raw_arg, tier_an_pre)
             if sent_an:
                 return
+    else:
+        _full82a = _full82a or bool(context.user_data.pop("_an_full82", False))
     _use_futures_an = (_mkttype_an == "futures")
     _mkt_arg_an = "futures" if _use_futures_an else "spot"  # إصلاح #258
 
@@ -8267,7 +8280,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📉 EMA50 (يومي={_fmt_price(ema50_val)}): {'✅ فوق' if not ema_bearish else '❌ تحت'} | حجم {'عالمي' if locals().get('_vol_scope_an', 'okx') == 'global' else 'OKX'} 24س: {_fmt_volume(volume_24h)}" if volume_24h > 0 else f"📉 EMA50: {'✅ فوق' if not ema_bearish else '❌ تحت'}",
             *_analyze_summary_lines(_sig_a, _sig_meta_an, locals().get("regime_obj")),
             "━━━━━━━━━━━━━━━━━━",
-            _fmt_llm_numbers(_guard_llm_claims(_sanitize_analysis_numbers(
+            _llm82 := _fmt_llm_numbers(_guard_llm_claims(_sanitize_analysis_numbers(
                 analysis,
                 # groq_numbers_guard v2: المرجع = نص التقرير الفعلي (pro_block + فيبو + مستويات)
                 # + قيم EMA من سياق النموذج (لا تظهر في مكان آخر). كان المرجع سياق النموذج
@@ -8485,9 +8498,64 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not _an_approved:
             logger.warning("auditing_agent: /analyze مرفوض → fallback")
 
+        # batch82 (Y المرحلة 2، قرار رحال): بطاقة /analyze القصيرة افتراضياً + «📖 التفاصيل الكاملة» (زر و«full»)
+        _send82a, _mk82a = full, None
+        if not _full82a:
+            try:
+                _ro82 = locals().get("regime_obj")
+                _m82a = dict(getattr(_ro82, "metrics", None) or {})
+                _sm82a = _sig_meta_an or {}
+                _crypto82a = not (_is_perp_an or _is_commodity(symbol) or is_tokenized_x_ticker(_display_symbol_an))
+                _pre82a = []
+                if _data_corrupted_an:
+                    _pre82a.append("⚠️ بيانات غير موثوقة (انهيار حاد) — لا تعتمد على هذا التحليل للتداول الفعلي")
+                try:
+                    if is_tokenized_x_ticker(_display_symbol_an):
+                        _pre82a.append(_synth_warn(_display_symbol_an, len(candles)))
+                    elif _commodity_note(_display_symbol_an):
+                        _pre82a.append(_commodity_note(_display_symbol_an))
+                except Exception:
+                    pass
+                _pre82a.append(sym_note_b82(raw_arg))
+                _ny82a = [x for x in (_nyse_warn_an or "").strip().split("\n") if x.strip()]
+                _ny82a = [_ny82a[0]] + [x for x in _ny82a[1:] if "يفتح" in x] if _ny82a else []
+                try:
+                    _em82a, _er82a = engine.event_risk.get_exposure_multiplier()
+                except Exception:
+                    _em82a, _er82a = 1.0, ""
+                _top82a = [locals().get("_mv56a") or "", "\n".join(_ny82a),
+                           (f"📅 ماكرو: {_clean_md(_er82a)} — التعرض المسموح {_em82a:.0%}" if _er82a else "")]
+                _scn82 = [ln.strip() for ln in _clean_md(str(pro_block_a or "")).split("\n")
+                          if ln.strip().startswith(("🟢 صاعد:", "🔴 هابط:"))]
+                _sc82a = locals().get("_sc_an") or {}
+                _tail82a = (([""] + list(_pair_addon_a)) if _pair_addon_a else [])
+                _card82a = signal_card_b82({
+                    "title": "🧠", "sym": _display_symbol_an, "price": price,
+                    "price_suffix": f" ({change_sign}{change_24h:.2f}% / 24س)",
+                    "mkt_tag": _mkt_tag_b41(_mkttype_an, locals().get("candles")),
+                    "meta": _sm82a, "score": _sc82a,
+                    "rec": _save_signal_decision_b58(user_id, symbol, _mkt_arg_an, _sm82a, _sc82a, save=False),
+                    "regime_desc": regime_desc, "adx": _m82a.get("adx"), "di_plus": _m82a.get("di_plus"),
+                    "di_minus": _m82a.get("di_minus"), "pve50": _m82a.get("price_vs_ema50"),
+                    "fear_greed": (fear_val if _crypto82a else None),
+                    "daily_dir": locals().get("_dd49") or _daily_dir_di_b73(
+                        "🟢 صاعد" if "صاعد" in str(regime_desc) else "🔴 هابط" if ("هابط" in str(regime_desc) or _bear_confirmed_b56(_ro82)[0]) else "🟡 محايد", _ro82),
+                    "h4_dir": locals().get("_t4h_an") or "",
+                    "bear_confirmed": _bear_confirmed_b56(_ro82)[0],
+                    "fib_lines": fib_lines_a, "pre_lines": _pre82a, "top_lines": _top82a,
+                    "reading": _bear_wording_b56(_clean_md(str(locals().get("_llm82") or "")), _ro82) if locals().get("_llm82") else "",
+                    "scenarios": _scn82, "tail_lines": _tail82a, "futures": _use_futures_an, "cmd": "analyze",
+                    "entry_threshold": float(_TIER_CONF.get(tier_an, _TIER_CONF["silver"])[1]),
+                })
+                _k82a = sigfull_put_b82(context.bot_data, user_id, _display_symbol_an, full, cmd="analyze")
+                _send82a = _card82a
+                _mk82a = InlineKeyboardMarkup([[InlineKeyboardButton("📖 التفاصيل الكاملة", callback_data=f"sigfull:{_k82a}")]])
+            except Exception as _c82a:
+                logger.warning(f"analyze card b82: {_c82a} — إرسال التقرير الكامل")
+                _send82a, _mk82a = full, None
         # msg_split_fix (#317): تقسيم يحترم حدود الفقرات بدل قصّ خام عند
         # حرف 4000 بالضبط (كان قد يقطع Markdown في المنتصف)
-        await _send_long_message(msg, update, context, full, parse_mode="Markdown")
+        await _send_long_message(msg, update, context, _send82a, parse_mode="Markdown", reply_markup=_mk82a)
 
     except Exception as e:
         logger.error(f"cmd_analyze CRASH: {type(e).__name__}: {e}", exc_info=True)
