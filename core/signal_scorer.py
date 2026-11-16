@@ -393,7 +393,7 @@ def evaluate_signal(s: SignalInput) -> dict:
     # "بيانات غير موثوقة — لا تعتمد على التحليل" وبثقة 54% < حد الدخول 55%
     # وإجراء "انتظر". بنية SL/TP وحدها لا تكفي لحكم الدخول:
     if s.data_unreliable and verdict in ("PASS", "CONDITIONAL"):
-        reasons.append("ط: بيانات غير موثوقة (انهيار حاد/شموع غير كافية) — "
+        reasons.append("ط: هبوط حاد تحت EMA50 أو بيانات غير موثوقة/شموع غير كافية — "
                        "الحكم مُقيَّد بحالة «انتظار»")
         verdict = "WATCH ONLY"
     # batch13 (قبل خفض PASS): ثقة دون حد الدخول لا تُنتج "مقبولة بشروط" (SOL 41% < 55% ظهر CONDITIONAL).

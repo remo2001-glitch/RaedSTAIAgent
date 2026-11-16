@@ -109,6 +109,8 @@ def evaluate_short_b68(*, price: float, conf: float, rsi: float, atr_pct: float,
             ("R/R المرجّح" + (f" 1:{out['rr']:.2f} < 1:1" if out["entry"] else " غير محسوب — لا نقطة دخول")),
         ]
         out["reason"] = next((_fail76[i] if i < len(_fail76) else lbl for i, (lbl, c) in enumerate(checks) if not c), "")
+        # batch86 (BB2، عرض فقط): كل الشروط الفاشلة بصيغة الحالة — البطاقة كانت تعرض الأول فقط
+        out["fails_b86"] = [(_fail76[i] if i < len(_fail76) else lbl) for i, (lbl, c) in enumerate(checks) if not c]
     return out
 
 

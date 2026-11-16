@@ -1671,6 +1671,19 @@ _SIGFULL_CACHE_B82 = "_sigfull_b82"
 _SIGFULL_MAX_B82 = 120
 
 
+def deep_drop_line_b86(pve: float) -> str:
+    """batch86 (BB1-ب): هبوط حقيقي أعمق من ~23% تحت EMA50 — كان يُعرض «بيانات غير موثوقة» والبيانات سليمة."""
+    return (f"⚠️ هبوط حاد {'−' if pve < 0 else '+'}{abs(pve):.1f}% تحت EMA50 — الثقة مقيّدة ≤ 49% "
+            f"والمستويات محسوبة على آخر 30 يوماً")
+
+
+def deep_drop_block_b86(pve: float, atr: float, rsi: float) -> str:
+    return ("\n\n⚠️ *هبوط حاد تحت EMA50*\n"
+            f"• السعر {'−' if pve < 0 else '+'}{abs(pve):.1f}% تحت EMA50 — حماية تلقائية: الثقة ≤ 49%، "
+            "الحكم «انتظار» كحد أقصى، Fibonacci على آخر 30 يوماً\n"
+            f"• ATR={atr:.1f}% | RSI={rsi:.0f}")
+
+
 def sym_note_b82(sym: str) -> str:
     """batch82 (W1، قرار رحال: سطر توضيح بدل رسالة «رمز متضارب»): في رائد الأسهم بحرف X فلا تضارب فعلي."""
     s = str(sym or "").upper()
@@ -1786,7 +1799,8 @@ def signal_card_b82(d: dict) -> str:
         if short_ok:
             L.append(f"• Short: ✅ مؤهل — تأكيدات {int(sh.get('n_flags') or 0)}/4: " + " · ".join(str(x).replace(" ✓", "") for x in (sh.get("flags") or [])))
         else:
-            _sr = str(sh.get("reason") or "الشروط غير مكتملة")
+            _fl86 = [str(x) for x in (sh.get("fails_b86") or [])]
+            _sr = "؛ ".join(_fl86) if len(_fl86) > 1 else str(sh.get("reason") or "الشروط غير مكتملة")   # batch86 (BB2)
             _cnt = (" — المحتسب: " + " · ".join(str(x).replace(" ✓", "") for x in sh.get("flags"))) if (sh.get("flags") and "تأكيدات Short" in _sr) else ""
             from core.auto_trader_b68 import rr_fmt_b79 as _rrf82
             _rr_s = (f" | R/R 1:{_rrf82(float(sh.get('rr') or 0))}" if float(sh.get("entry") or 0) > 0 and "R/R" not in _sr else "")
@@ -1867,7 +1881,14 @@ def signal_card_b82(d: dict) -> str:
             need.append("R/R المرجّح ≥ 1:1")
         if need:
             ch.append("• شراء: " + " + ".join(need))
-    if sh and not short_ok:
+    if sh and not short_ok and len(sh.get("fails_b86") or []) > 1:   # batch86 (BB2): كل ما ينقص Short لا أوله فقط
+        _nd = [_short_need_b82(f, m.get("rsi")) for f in sh["fails_b86"] if "تأكيدات Short" not in f]
+        if any("تأكيدات Short" in f for f in sh["fails_b86"]):
+            _miss = _short_missing_b82(sh.get("flags") or [], bool(m.get("fund_short_ex_b82")))
+            _k = max(0, 2 - int(sh.get("n_flags") or 0))
+            _nd.append(("تأكيد إضافي واحد" if _k <= 1 else "تأكيدان إضافيان") + (" — " + "، أو ".join(_miss) if _miss else ""))
+        ch.append("• Short: " + " + ".join(_nd))
+    elif sh and not short_ok:
         _sr = str(sh.get("reason") or "")
         if "تأكيدات Short" in _sr:
             _miss = _short_missing_b82(sh.get("flags") or [], bool(m.get("fund_short_ex_b82")))
@@ -6056,6 +6077,12 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _e50_sig_raw = price
             _ema50_sig_corrupted = False
         _data_corrupted = (atr_pct > 25 or rsi < 5 or _pve50_chk < -50 or _ema50_sig_corrupted)
+        # batch86 (BB1-ب، قرار رحال): السبب الوحيد = EMA50 > السعر×1.30 من شموع كاملة ⇒ هبوط حقيقي حاد لا بيانات تالفة.
+        # المنطق كما هو (سقف الثقة 49%، الحكم «انتظار» كحد أقصى، Fibonacci على 30 يوماً) — يتغير النص فقط.
+        _deep86 = None
+        if _data_corrupted and _ema50_sig_corrupted and len(candles or []) >= 50 and _e50_sig_raw > 0 \
+                and not (atr_pct > 25 or rsi < 5 or _pve50_chk < -50):
+            _deep86 = (price - _e50_sig_raw) / max(_e50_sig_raw, 0.0001) * 100
         if _data_corrupted:
             if hasattr(signal, "suggested_leverage"):
                 signal.suggested_leverage = 1
@@ -6316,7 +6343,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "\n\n⚠️ *تحذير مالي: بيانات غير موثوقة*\n"
                 f"• السعر انهار بشكل حاد — المؤشرات التقنية مشوهة\n"
                 f"• ATR={atr_pct:.1f}% | RSI={rsi:.0f} | EMA50={_pve50_sig_display:.0f}%"
-            )
+            ) if _deep86 is None else deep_drop_block_b86(_deep86, atr_pct, rsi)
         # NYSE_hours_fix: تنبيه في بداية الرسالة (بعد header مباشرة)
         try:
             _sm_sig = context.bot_data.get("subscription_manager")
@@ -6479,7 +6506,8 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # batch54 (#483): تحذير «بيانات غير موثوقة» الأهم يُذكر موجزاً في أعلى الرسالة (تفاصيله أسفلها)
         try:
             if _data_corrupted:
-                full_text = "⚠️ بيانات غير موثوقة (انهيار حاد) — لا تعتمد على هذا التحليل للتداول الفعلي\n\n" + full_text
+                full_text = (deep_drop_line_b86(_deep86) if _deep86 is not None else
+                             "⚠️ بيانات غير موثوقة (انهيار حاد) — لا تعتمد على هذا التحليل للتداول الفعلي") + "\n\n" + full_text
         except Exception:
             pass
         # تحذير المجاني
@@ -6564,7 +6592,8 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _crypto82 = not (_is_perp_sig or _is_commodity(symbol) or is_tokenized_x_ticker(symbol))
                 _pre82 = []
                 if _data_corrupted:
-                    _pre82.append("⚠️ بيانات غير موثوقة (انهيار حاد) — لا تعتمد على هذا التحليل للتداول الفعلي")
+                    _pre82.append(deep_drop_line_b86(_deep86) if _deep86 is not None else
+                                  "⚠️ بيانات غير موثوقة (انهيار حاد) — لا تعتمد على هذا التحليل للتداول الفعلي")
                 try:
                     if is_tokenized_x_ticker(_display_symbol):
                         _pre82.append(_synth_warn(_display_symbol, len(candles)))
@@ -7989,6 +8018,12 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 _ema50_corrupted = False
         _data_corrupted_an = (_atr_an > 25 or rsi < 5 or _pve50_an < -50 or _ema50_corrupted)
+        _deep86a = None   # batch86 (BB1-ب): هبوط حقيقي حاد لا بيانات تالفة — النص فقط
+        try:
+            if _data_corrupted_an and _ema50_corrupted and not (_atr_an > 25 or rsi < 5 or _pve50_an < -50) and _e50_an_raw > 0:
+                _deep86a = (price - _e50_an_raw) / max(_e50_an_raw, 0.0001) * 100
+        except Exception:
+            _deep86a = None
         # EE2 (#1922): تقييد conf ورافعة في /analyze عند بيانات مشوهة
         if _data_corrupted_an:
             # نحتاج تقييد الـ signal الذي سيُبنى لاحقاً
@@ -8247,7 +8282,9 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 market_phase=_mp_ar_for_groq,
                 decision_ctx=_llm_decision_ctx(_sig_a, locals().get("regime_obj")),
                 facts_ctx=_llm_facts_ctx(_sig_a) + _llm_levels_ctx_b61(fib_a) + _llm_event_ctx_b62(engine) + (
-                    "؛ تحذير أساسي: بيانات غير موثوقة بعد انهيار حاد — اذكر ذلك في أول جملة" if _data_corrupted_an else ""))
+                    ("؛ تحذير أساسي: بيانات غير موثوقة بعد انهيار حاد — اذكر ذلك في أول جملة" if _deep86a is None else
+                     f"؛ تحذير أساسي: هبوط حاد {_deep86a:.1f}% تحت EMA50 — الثقة مقيّدة ≤ 49% والحكم انتظار؛ اذكر ذلك في أول جملة")
+                    if _data_corrupted_an else ""))
             if not analysis or len(analysis.strip()) < 20:
                 raise ValueError("تحليل فارغ")
             # analyze_name_fix: النموذج يرى الأساس (SPCX/SPY) فيكتبه في النص؛
@@ -8423,7 +8460,9 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parts.append(_clean_md(_btc_corr_an.strip()))
         # رابط /chart يُلحَق في ذيل التقرير (بعد تفاصيل الجودة) كما في /signal
         # DD1c (#1891/#1905): تحذير بيانات مشوهة في /analyze
-        if _data_corrupted_an:
+        if _data_corrupted_an and _deep86a is not None:
+            parts += ["", deep_drop_block_b86(_deep86a, _atr_an, rsi).strip()]
+        elif _data_corrupted_an:
             parts += [
                 "",
                 "⚠️ *تحذير مالي: بيانات غير موثوقة*",
@@ -8544,7 +8583,8 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # batch54 (#483): نفس /signal — تحذير البيانات غير الموثوقة موجزاً في الأعلى
         try:
             if _data_corrupted_an:
-                full = "⚠️ بيانات غير موثوقة (انهيار حاد) — لا تعتمد على هذا التحليل للتداول الفعلي\n\n" + full
+                full = (deep_drop_line_b86(_deep86a) if _deep86a is not None else
+                        "⚠️ بيانات غير موثوقة (انهيار حاد) — لا تعتمد على هذا التحليل للتداول الفعلي") + "\n\n" + full
         except Exception:
             pass
         # batch31: نفس ترتيب ذيل /signal — التنبيه الاسترشادي ثم رابط التحليل البصري
@@ -8598,7 +8638,8 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _crypto82a = not (_is_perp_an or _is_commodity(symbol) or is_tokenized_x_ticker(_display_symbol_an))
                 _pre82a = []
                 if _data_corrupted_an:
-                    _pre82a.append("⚠️ بيانات غير موثوقة (انهيار حاد) — لا تعتمد على هذا التحليل للتداول الفعلي")
+                    _pre82a.append(deep_drop_line_b86(_deep86a) if _deep86a is not None else
+                                   "⚠️ بيانات غير موثوقة (انهيار حاد) — لا تعتمد على هذا التحليل للتداول الفعلي")
                 try:
                     if is_tokenized_x_ticker(_display_symbol_an):
                         _pre82a.append(_synth_warn(_display_symbol_an, len(candles)))
