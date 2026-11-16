@@ -699,7 +699,7 @@ async def auto_weekly_report_job_b68(context: ContextTypes.DEFAULT_TYPE):
     try:
         import datetime as _dtw
         from core.state_manager import state_manager as _smw
-        from core.auto_trader_b68 import ledger_get, auto_stats_b68, format_auto_stats_b68
+        from core.auto_trader_b68 import ledger_get, auto_stats_b68, format_auto_stats_b68, open_rows_b81, week_summary_b85
         now = _dtw.datetime.now(_dtw.timezone.utc) + _dtw.timedelta(hours=3)
         if now.weekday() != 0 or now.hour != 13:
             return
@@ -708,7 +708,14 @@ async def auto_weekly_report_job_b68(context: ContextTypes.DEFAULT_TYPE):
             k = f"autoweekly_b68:{uid}"
             if _smw.kv_get(k, "") == wk:
                 continue
-            txt = "🗓️ *التقرير الأسبوعي للقياس*\n\n" + format_auto_stats_b68(auto_stats_b68(ledger_get(uid)))
+            _led85 = ledger_get(uid)
+            try:   # batch85 (AA1): سطر لكل مركز قياس مفتوح كما في /autostats
+                _rows85 = await open_rows_b81(context.bot_data.get("raed_engine"), uid)
+            except Exception as _e85:
+                logger.warning(f"weekly open rows: {_e85}")
+                _rows85 = None
+            txt = ("🗓️ *التقرير الأسبوعي للقياس*\n" + week_summary_b85(_led85) + "\n\n"   # batch85 (AA2)
+                   + format_auto_stats_b68(auto_stats_b68(_led85), _rows85))
             try:
                 await context.bot.send_message(chat_id=uid, text=txt, parse_mode="Markdown")
                 _smw.kv_set(k, wk)

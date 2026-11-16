@@ -178,21 +178,37 @@ def format_section(title: str, s: Dict) -> List[str]:
 
 
 def wallet_status_lines(vw_data: Optional[dict]) -> List[str]:
+    """batch85 (AA3): كانت تقرأ مراكز Spot فقط ⇒ «مراكز مفتوحة: 0» ومراكز القياس Futures مفتوحة، وقيمة المحفظة ناقصة بهامشها.
+    الآن: نقد + Spot بالتكلفة + هامش Futures، والعدد يميّز مراكز القياس الآلي (logic_ver)."""
     if not vw_data:
         return []
     try:
         bal = float(vw_data.get("balance", 0) or 0)
         pos = vw_data.get("positions") or {}
+        fut = vw_data.get("futures") or {}
         cost = sum(float((p or {}).get("cost", 0) or 0) for p in pos.values())
-        return [f"• المحفظة الافتراضية الآن: ${bal + cost:,.2f} (نقد ${bal:,.2f} + مراكز ${cost:,.2f} بالتكلفة)",
-                f"• مراكز افتراضية مفتوحة: {len(pos)}"]
+        marg = sum(float((p or {}).get("margin", 0) or 0) for p in fut.values())
+        n_auto = sum(1 for p in fut.values() if (p or {}).get("logic_ver"))
+        parts = [f"نقد ${bal:,.2f}"]
+        if pos:
+            parts.append(f"Spot ${cost:,.2f} بالتكلفة")
+        if fut:
+            parts.append(f"Futures ${marg:,.2f} هامش")
+        n = len(pos) + len(fut)
+        det = []
+        if n_auto:
+            det.append(f"قياس آلي {n_auto}")
+        if n - n_auto:
+            det.append(f"يدوية {n - n_auto}")
+        return [f"• المحفظة الافتراضية الآن: ${bal + cost + marg:,.2f} ({' + '.join(parts)})",
+                f"• مراكز افتراضية مفتوحة: {n}" + (f" ({'، '.join(det)})" if det else "")]
     except Exception:
         return []
 
 
 def build_user_report(uid: int, period: str, vw_data: Optional[dict], redis_client=None,
                       has_exchange: bool = False, comments: Optional[List[dict]] = None,
-                      now: Optional[datetime] = None) -> str:
+                      now: Optional[datetime] = None, auto_report_sent: bool = False) -> str:
     start, end, label = period_window(period, now)
     is_m = period == "monthly"
     head = "📅 *التقرير الشهري — رائد التداول الذكي*" if is_m else "📊 *التقرير الأسبوعي — رائد التداول الذكي*"
@@ -202,14 +218,17 @@ def build_user_report(uid: int, period: str, vw_data: Optional[dict], redis_clie
     va = summarize(virtual_closed(vw_data, start, end, auto=True))
     vm = summarize(virtual_closed(vw_data, start, end, auto=False))
     v = {"count": va["count"] + vm["count"]}
-    lines += format_section("🤖 *القياس الآلي — منطق /signal المجمّد (b68)*", va)
+    if auto_report_sent:   # batch85 (AA4-ب، قرار رحال: تقريران بلا تكرار)
+        lines += ["🤖 *القياس الآلي:* أرقامه ومراكزه المفتوحة وشروط العبور في «🗓️ التقرير الأسبوعي للقياس» المرسل معه"]
+    else:
+        lines += format_section("🤖 *القياس الآلي — منطق /signal المجمّد (b68)*", va)
     if vm["count"]:
         lines += [""] + format_section("✋ *صفقات افتراضية يدوية (تدريب — ليست أداء رائد)*", vm)
     lines += wallet_status_lines(vw_data)
     rl = real_closed(uid, start, end, redis_client)
     if rl or has_exchange:
         lines += [""] + format_section("💱 *الصفقات الحقيقية*", summarize(rl))
-    if v["count"] == 0 and not rl:
+    if v["count"] == 0 and not rl and not auto_report_sent:
         lines += ["", "ℹ️ لم تُغلق أي صفقة خلال هذه الفترة — الأرقام أعلاه ليست أداءً صفرياً بل غياب صفقات."]
     recent = [c for c in (comments or []) if (_ts(c.get("ts")) or 0) >= max(start, COMMENTS_CUTOFF_B73)
               and not c.get("reported")]   # batch73 (G2، قرار رحال): غير المعالجة فقط

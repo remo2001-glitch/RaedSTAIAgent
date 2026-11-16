@@ -390,8 +390,12 @@ class Scheduler:
                         comments = _sm.get_user_comments(uid)
                     except Exception:
                         comments = []
+                    try:   # batch85 (AA4-ب): صاحب التداول الآلي يصله تقرير القياس الأسبوعي المنفصل — لا تكرار لأرقامه هنا
+                        _auto85 = period == "weekly" and int(uid) in {int(x) for x in (_sm.get_autotrade_users() or [])}
+                    except Exception:
+                        _auto85 = False
                     text = _pr.build_user_report(uid, period, _sm.get_virtual_wallet(uid), r,
-                                                 has_exchange=has_ex, comments=comments)
+                                                 has_exchange=has_ex, comments=comments, auto_report_sent=_auto85)
                     if owner and uid == owner and system_txt:
                         text += "\n\n" + system_txt
                     await self._notify_user(uid, text)

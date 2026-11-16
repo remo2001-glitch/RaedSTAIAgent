@@ -888,6 +888,37 @@ def open_lines_b81(open_rows: list) -> list:
     return out
 
 
+_WHY_AR_B85 = {"sl": "الوقف", "sl_tp1": "الوقف بعد TP1", "tp1": "TP1 جزئي 60%", "tp2": "TP2", "time": "خروج زمني"}
+
+
+def week_summary_b85(ledger: list, now_ts: float = None, days: int = 7) -> str:
+    """batch85 (AA2): ما حدث في سجل القياس خلال آخر 7 أيام — فتح وإغلاق (مع السبب) والصافي المحقق."""
+    import time as _t85
+    now_ts = float(now_ts or _t85.time())
+    start = now_ts - days * 86400
+    wk = [r for r in (ledger or []) if start <= float(r.get("ts") or 0) <= now_ts]
+    opened = [r for r in wk if r.get("ev") == "open"]
+    closes = [r for r in wk if r.get("ev") == "close"]
+    if not opened and not closes:
+        return "📅 *هذا الأسبوع:* لا فتح ولا إغلاق"
+    def _sd(r):
+        return "Long" if str(r.get("side", "long")) == "long" else "Short"
+
+    def _why(r):
+        w = str(r.get("reason") or "")
+        return _WHY_AR_B85.get(w, w)
+
+    parts = ["فُتحت %d" % len(opened) + (" (" + "، ".join("%s %s" % (r.get("symbol"), _sd(r)) for r in opened) + ")" if opened else "")]
+    fin = [r for r in closes if r.get("final")]
+    part = [r for r in closes if not r.get("final")]
+    if closes:
+        parts.append("أُغلقت %d" % len(fin) + (" (" + "، ".join("%s — %s" % (r.get("symbol"), _why(r)) for r in fin) + ")" if fin else ""))
+        if part:
+            parts.append("إغلاق جزئي %d (" % len(part) + "، ".join(str(r.get("symbol")) for r in part) + ")")
+        parts.append("الصافي المحقق " + _usd_b81(sum(float(r.get("pnl") or 0) for r in closes)))
+    return "📅 *هذا الأسبوع:* " + "، ".join(parts)
+
+
 def format_auto_stats_b68(st: dict, open_rows: list = None) -> str:
     L = ["📊 *قياس التداول الآلي الافتراضي* — منطق /signal المجمّد (b68)", "━━━━━━━━━━━━━━━━━━"]
     n = st["n"]
