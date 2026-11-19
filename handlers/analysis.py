@@ -123,6 +123,64 @@ def normalize_symbol_alias(raw: str) -> str:
     return s
 
 
+# NN1 (b95): أوامر تأخذ رمز أصل — يُطبَّق عليها تعيين اسم التطبيق ⇒ معرّف الـAPI مركزياً (main._install_symbol_alias_b95)
+SYMBOL_CMDS_B95 = frozenset({
+    "signal", "analyze", "quicksignal", "regime", "liquidity", "onchain", "backtest", "outlook", "news", "drift",
+    "planweek", "planmonth", "planweek_full", "planmonth_full", "trade", "trade_plan", "trade_plan_month",
+    "execute", "whaletest",
+})
+
+
+def alias_token_b95(tok: str):
+    """«ANT» أو «ANTUSDT» أو «ANT-USDT-SWAP» ⇒ ANT (مفتاح جدول أسماء التطبيق)؛ غير ذلك None (زوج ANT/BTC لا يُمس)."""
+    try:
+        from core.data_layer import PERP_DISPLAY_ALIASES_B93 as _al
+        t = str(tok or "").upper().strip().replace("/", "").replace("-", "").replace("_", "")
+        if t.endswith("SWAP"):
+            t = t[:-4]
+        if t.endswith("PERP"):
+            t = t[:-4]
+        if t in _al:
+            return t
+        if t.endswith("USDT") and t[:-4] in _al:
+            return t[:-4]
+    except Exception:
+        pass
+    return None
+
+
+async def alias_args_b95(update, context) -> str:
+    """NN1 (b95): يستبدل في context.args رمز التطبيق بمعرّف العقد (ANT ⇒ ANTHROPIC) حين لا يكون للاسم نفسه إدراج على OKX،
+    ويُرسل سطر توضيح واحد. يعيد نص التوضيح ("" إن لم يتغير شيء). لا يرمي استثناءً أبداً."""
+    try:
+        args = getattr(context, "args", None)
+        if not args:
+            return ""
+        eng = (getattr(context, "bot_data", None) or {}).get("raed_engine")
+        dl = getattr(eng, "data_layer", None)
+        if dl is None or not hasattr(dl, "resolve_display_alias_b95"):
+            return ""
+        for i, a in enumerate(list(args)):
+            k = alias_token_b95(a)
+            if not k:
+                continue
+            api = await dl.resolve_display_alias_b95(k)
+            if api and api != k:
+                args[i] = api
+                note = (f"ℹ️ {k} في تطبيق OKX = عقد {api}-USDT-SWAP (Futures/Perp) — التحليل التالي لهذا العقد"
+                        f"؛ لا زوج فوري باسم {k} على OKX")
+                try:
+                    msg = getattr(update, "effective_message", None)
+                    if msg is not None:
+                        await msg.reply_text(note)
+                except Exception:
+                    pass
+                return note
+    except Exception as e:
+        logger.debug(f"alias_args_b95: {e}")
+    return ""
+
+
 # OKX_LIST (#2574/#2577/#2579): قائمة الأسهم المُرمَّزة المدرجة في OKX
 # NET هو Cloudflare على OKX (CLOUDFLARE-USDT) — لكن NET أيضاً عملة مشفرة
 _OKX_TOKENIZED_STOCKS = {
@@ -464,7 +522,8 @@ def chart_missed_levels_b91(analysis: str, leg) -> str:
         return ""
     raw = leg.get("raw") or {}
     miss = []
-    for k, nm in _LEVEL_NAMES_B91.items():
+    _nm95 = dict(_LEVEL_NAMES_B91, **{str(k): str(k) for k in (leg.get("ema") or ())})   # b95 (MM4): + خطوط EMA
+    for k, nm in _nm95.items():
         v = leg.get(k)
         if not isinstance(v, (int, float)) or not v:
             continue
@@ -478,7 +537,7 @@ def chart_market_line_b91(analysis: str, is_futures: bool) -> str:
     """II2 (b91): البند «0- نوع السوق» يطابق النوع المعتمد (الوسم/الكابشن) لا قول النموذج وحده."""
     import re as _r
     lbl = "Futures/Perp" if is_futures else "Spot"
-    return _r.sub(r"(?m)^(\s*0\s*[-–.)]\s*نوع السوق\s*:\s*).*$", lambda m: m.group(1) + lbl, analysis or "", count=1)
+    return _r.sub(r"(?m)^(\s*0\s*(?:[-–)]|\.(?!\d))\s*نوع السوق\s*:\s*).*$", lambda m: m.group(1) + lbl, analysis or "", count=1)
 
 
 def _chart_tf_word_b51(tf_label: str) -> str:
@@ -507,7 +566,7 @@ def _chart_fix_size_line_b50(analysis: str) -> str:
         txt = analysis or ""
         rec = ""
         for ln in txt.split("\n"):
-            mm = _r.match(r"\s*5\s*[-–.)]\s*(.*)", ln)
+            mm = _r.match(r"\s*5\s*(?:[-–)]|\.(?!\d))\s*(.*)", ln)
             if mm:
                 rec = mm.group(1)
                 break
@@ -515,7 +574,7 @@ def _chart_fix_size_line_b50(analysis: str) -> str:
             return txt
         out = []
         for ln in txt.split("\n"):
-            if _r.match(r"\s*13\s*[-–.)]", ln) and "%" in ln:
+            if _r.match(r"\s*13\s*(?:[-–)]|\.(?!\d))", ln) and "%" in ln:
                 ln = "13- حجم الصفقة المقترح: لا حجم قبل تأكيد الدخول"
             out.append(ln)
         return "\n".join(out)
@@ -593,6 +652,8 @@ def _chart_cleanup_b54(analysis: str, leg: dict) -> str:
             if cur in ("5", "6") and no_vol:
                 # batch56 (#564/#580): «مع تأكيد الحجم» شرط لا يمكن التحقق منه حين لا يظهر VOL في الشارت
                 ln = _r.sub(r"\s*(?:مع|و|\+)\s*(?:تأكيد|ارتفاع|زيادة)\s+(?:في\s+)?(?:ال)?(?:حجم|أحجام)(?:\s+التداول)?", "", ln)
+                # b95 (MM5): «مع حجم تداول مرتفع» / «بحجم قوي» — الصيغة الأخرى للشرط نفسه
+                ln = _r.sub(r"\s*(?:مع|و|\+|ب)\s*(?:ال)?(?:حجم|أحجام)\s+(?:(?:ال)?تداول\s+)?(?:مرتفع[ةه]?|قوي[ةه]?|عال[ٍيةه]*|كبير[ةه]?|متزايد[ةه]?|أعلى)(?:\s+من\s+المتوسط)?", "", ln)
             if cur == "3" and leg:
                 # batch56 (#563): «كسر مستويات الدعم» بينما دعم الشارت ما زال تحت السعر
                 try:
@@ -607,7 +668,7 @@ def _chart_cleanup_b54(analysis: str, leg: dict) -> str:
             if cur == "14":
                 ln = _r.sub(r"\s*\([A-Za-z][A-Za-z /\-]{2,}\)", "", ln)
                 # batch56 (#565): العنوان نفسه كان إنجليزياً
-                ln = _r.sub(r"^(\s*14\s*[-–.)]\s*)Market Phase\s*:", r"\1مرحلة السوق:", ln)
+                ln = _r.sub(r"^(\s*14\s*(?:[-–)]|\.(?!\d))\s*)Market Phase\s*:", r"\1مرحلة السوق:", ln)
             out.append(ln)
         return "\n".join(out)
     except Exception:
@@ -623,12 +684,25 @@ _ITEM_CANON_B93 = (   # الترتيب مهم: الأخص أولاً
 )
 
 
+_TF_VALUE_B95 = (r"(?<![A-Za-z0-9])\d{1,3}\s*(?:[mhdwMHDW]|min|ي|س|د|أ)(?![A-Za-z])|يومي|اليومي|أسبوعي|الأسبوعي|شهري|الشهري|"
+                 r"ساع[ةي]|ساعات|دقيق[ةه]|دقائق|\b(?:Daily|Weekly|Monthly|Hourly)\b")
+
+
 def _item_canon_b93(label: str):
+    """b95 (MM1): البند يُعرف بأبكر عنوان يطابقه — «تحليل الشموع الأخيرة على الإطار الزمني اليومي» = الشموع (4) لا الإطار؛
+    وبند الإطار نفسه يُقبل فقط حين يبدأ العنوان به (كان أي ذكر لـ«الإطار الزمني» يحوّل البند إلى TIMEFRAME ويُسقطه)."""
     import re as _r
-    for k, pat in _ITEM_CANON_B93:
-        if _r.search(pat, label or "", _r.I):
-            return k
-    return None
+    lab = label or ""
+    best = None
+    for order, (k, pat) in enumerate(_ITEM_CANON_B93):
+        m = _r.search(pat, lab, _r.I)
+        if not m:
+            continue
+        if k == "TF" and lab[:m.start()].strip(" \t*_-–:•"):
+            continue   # «الإطار الزمني» في وسط العنوان صفةٌ للبند لا عنوانه
+        if best is None or (m.start(), order) < best[0]:
+            best = ((m.start(), order), k)
+    return best[1] if best else None
 
 
 def chart_normalize_items_b93(analysis: str) -> str:
@@ -649,8 +723,10 @@ def chart_normalize_items_b93(analysis: str) -> str:
                     rest = m.group(4).split(":", 1)[1].strip() if ":" in m.group(4) else ""
                     if not rest:
                         rest = next((l.strip() for l in lines[i + 1:] if l.strip()), "")
-                    tf_val, skip = rest.split("(")[0].strip(), True
-                    continue
+                    if _r.search(_TF_VALUE_B95, rest[:40]):   # b95 (MM1): يُحذف السطر فقط إن كانت قيمته إطاراً فعلاً
+                        tf_val, skip = rest.split("(")[0].strip(), True
+                        continue
+                    canon = None
                 skip = False
                 parsed.append((len(out), m, canon))
                 out.append(ln)
@@ -666,12 +742,47 @@ def chart_normalize_items_b93(analysis: str) -> str:
                 if c is not None:
                     out[j] = f"{m.group(1)}{c}{m.group(3)}{m.group(4)}"
         txt = "\n".join(out)
-        txt = _r.sub(r"(?m)^(\s*14\s*[-–.)]\s*)Market Phase", r"\1مرحلة السوق", txt)
+        txt = _r.sub(r"(?m)^(\s*14\s*(?:[-–)]|\.(?!\d))\s*)Market Phase", r"\1مرحلة السوق", txt)
         if tf_val and "TIMEFRAME:" not in txt:
             txt = f"TIMEFRAME:{tf_val}\n" + txt
         return txt
     except Exception:
         return analysis
+
+
+_ITEM_NAMES_B95 = ("نوع السوق", "الاتجاه", "الدعم والمقاومة", "النماذج الفنية", "الشموع الأخيرة", "التوصية",
+                   "نقطة الدخول", "وقف الخسارة", "الأهداف", "مستوى المخاطرة", "RSI", "KDJ", "MACD", "حجم الصفقة",
+                   "مرحلة السوق")
+
+
+def chart_no_vol_note_b95(analysis: str, leg) -> str:
+    """MM5 (b95): الشريط مقروء بلا لوحة حجم (VOL) والنص ما زال يذكر حجم التداول ⇒ سطر توضيح بدل شرط لا يمكن التحقق منه من الصورة."""
+    import re as _r
+    try:
+        if not isinstance(leg, dict) or not leg or "VOL" in leg or "VOL_MA5" in leg:
+            return ""
+        body = "\n".join(l for l in (analysis or "").split("\n")
+                         if not _r.match(r"\s*13\s*(?:[-–)]|\.(?!\d))", l))
+        body = _r.sub(r"حجم\s+(?:الصفقة|المركز)|لا\s+حجم", "", body)
+        if _r.search(r"(?:ال)?حجم(?:\s+(?:ال)?تداول)?|أحجام", body):
+            return "ℹ️ لا لوحة حجم (VOL) في الصورة — أي شرط «تأكيد الحجم» يُراجع في التطبيق قبل الدخول"
+    except Exception:
+        pass
+    return ""
+
+
+def chart_missing_items_b95(analysis: str) -> str:
+    """MM3 (b95): بند من 0–14 لم يرد في قراءة النموذج يُذكر صراحةً بدل أن يختفي بصمت (التحليل المرقّم فقط: ≥ 6 بنود)."""
+    import re as _r
+    try:
+        have = {int(m.group(1)) for m in _r.finditer(r"(?m)^\s*(\d{1,2})\s*(?:[-–)]|\.(?!\d))", analysis or "")}
+        have &= set(range(15))
+        if len(have) < 6:
+            return ""
+        miss = [f"{n} — {_ITEM_NAMES_B95[n]}" for n in range(15) if n not in have]
+        return ("⚠️ لم يرد في قراءة النموذج: " + "، ".join(f"البند {x}" for x in miss)) if miss else ""
+    except Exception:
+        return ""
 
 
 def chart_price_mismatch_b93(live: float, ref: float, tol: float = 0.30) -> bool:
@@ -790,7 +901,7 @@ def _chart_fix_item_labels_b56(analysis: str, leg: dict) -> str:
             return b and abs(a / b - 1) <= 0.0005
         out, cur = [], None
         for ln in (analysis or "").split("\n"):
-            mm = _r.match(r"\s*(\d{1,2})\s*[-–.)]", ln)
+            mm = _r.match(r"\s*(\d{1,2})\s*(?:[-–)]|\.(?!\d))", ln)
             if mm:
                 cur = mm.group(1)
             if cur in ("3", "4", "5", "6", "7", "8"):
@@ -837,7 +948,7 @@ def _chart_usd_fmt_b56(text: str) -> str:
     try:
         out, cur = [], None
         for ln in (text or "").split("\n"):
-            mm = _r.match(r"\s*(\d{1,2})\s*[-–.)]", ln)
+            mm = _r.match(r"\s*(\d{1,2})\s*(?:[-–)]|\.(?!\d))", ln)
             if mm:
                 cur = mm.group(1)
             if cur in ("3", "4", "5", "6", "7", "8") or ln.startswith(("📐 R/R", "⚠️", "ℹ️ سيناريوان")):
@@ -2016,7 +2127,9 @@ def signal_card_b82(d: dict) -> str:
             from core.auto_trader_b68 import rr_fmt_b79 as _rrf82
             _rr_s = (f" | R/R 1:{_rrf82(float(sh.get('rr') or 0))}" if float(sh.get("entry") or 0) > 0 and "R/R" not in _sr else "")
             L.append(f"• Short: ⏳ {_sr}{_cnt}{_rr_s}")
-    _lean = (f" — ميل الهبوط {100 - conf:.0f}%" if (direction != "long" and conf < 50) else "")
+    elif fut and "لا عقد دائم" in str(d.get("mkt_tag") or ""):
+        L.append("• Short: غير متاح — لا عقد دائم للأصل على OKX (البيانات مرجعية)")   # b95: ميل الهبوط بلا سطر Short كان يبدو نقصاً
+    _lean =(f" — ميل الهبوط {100 - conf:.0f}%" if (direction != "long" and conf < 50) else "")
     if direction != "long" and thr <= conf < DIR_THR_B87:   # batch87: 56% «فوق حد الدخول» والحكم انتظار — يُذكر سببه
         _lean += f" — فوق حد الدخول لكن جهة الشراء غير مؤكدة (حد تحديد الجهة {DIR_THR_B87}%)"
     L.append(f"• الثقة {conf:.0f}% (حد الدخول {thr:.0f}%){_lean}")
@@ -5744,7 +5857,7 @@ async def cmd_regime(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # batch67 (#911/#912/#950): اسم الأصل في الترويسة، أساس الأرقام، ولا مؤشرات كريبتو لغير الكريبتو
         try:
             from core.regime_detector import strip_crypto_refs_b67 as _scr67, anchor_basis_note_b67 as _abn67
-            text = text.replace("📊 *حالة السوق الحالية*", f"📊 *حالة السوق الحالية — {symbol}*{_mkt_tag_b41(_mk87, candles)}", 1)
+            text = text.replace("📊 *حالة السوق الحالية*", f"📊 *حالة السوق الحالية — {symbol}*{_mkt_tag_b41(_mk87, candles, symbol)}", 1)
             # batch87: RSI الحي في سطر الإجراء يُوسم كما في /signal (كان «RSI 25» و«RSI=22» بلا تمييز)
             _rsi87 = float((getattr(result, "metrics", {}) or {}).get("rsi", 0) or 0)
             if _rsi87 > 0:
@@ -5863,10 +5976,17 @@ async def cmd_regime(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-        _crypto87 = not (_is_commodity(symbol) or is_tokenized_x_ticker(symbol) or symbol.upper() in _OKX_TOKENIZED_STOCKS)
+        try:   # b95: أصل بعقد دائم فقط (سهم/شركة مُرمَّزة مثل ANTHROPIC) ليس كريبتو — نفس قاعدة /signal (_is_perp_sig)
+            _perp_only95 = bool(await engine.data_layer.is_tokenized_stock(symbol)) and not _is_commodity(symbol)
+        except Exception:
+            _perp_only95 = False
+        _crypto87 = not (_is_commodity(symbol) or is_tokenized_x_ticker(symbol) or symbol.upper() in _OKX_TOKENIZED_STOCKS
+                         or _perp_only95)
         text += ("\n\n📡 *المصدر:* OKX (الشموع والسعر)" + (" + Fear & Greed + هيمنة BTC" if _crypto87 else "")   # batch67 (#919) + batch87
                  + " | 🤖 رائد التداول الذكي")
         _note_ee3 = regime_mkt_note_ee3(_mk_src_ee3, _mk87, symbol).strip()   # EE3: سبب اختيار السوق وطريقة التبديل
+        if _perp_only95 and _note_ee3:   # b95: لا سوق فوري للأصل ⇒ لا يُعرض تبديل إلى spot
+            _note_ee3 = "ℹ️ لا سوق فوري لهذا الأصل على OKX — العقد الدائم فقط"
         if _note_ee3:
             text += "\n" + _note_ee3
         if not _full84r:   # batch84 (Y المرحلة 3): التصنيف + سطر المؤشرات + الإجراء والتوصية والتحذيرات، والتفاصيل بالزر
@@ -5959,18 +6079,36 @@ def regime_mkt_note_ee3(src, mkt, symbol) -> str:
     return f"\nℹ️ {why} — للتبديل: /regime {symbol} {other}"
 
 
-def _mkt_tag_b41(mkttype, candles=None) -> str:
+def _mkt_tag_b41(mkttype, candles=None, symbol: str = "") -> str:
     """batch41: وسم نوع السوق في سطر السعر (لا يُعرض إن لم يُعرف النوع).
-    batch42: إن اختير الفيوتشر وجاءت الشموع من الفوري (لا عقد دائم للأصل مثل XAUT) يُصرَّح بذلك."""
-    if mkttype == "futures":
+    batch42: إن اختير الفيوتشر وجاءت الشموع من الفوري (لا عقد دائم للأصل مثل XAUT) يُصرَّح بذلك.
+    b95 (NN3): مصدر الشموع يُسمّى كما هو (CoinGecko + معرّف الأصل فيه) لا «الفوري» — أصل غير مدرج على OKX لا يُعرض كأنه منه.
+    b95 (NN2): اختير Spot وجاءت الشموع من العقد الدائم (أصل بلا سوق فوري) ⇒ يُصرَّح بأن البيانات من العقد."""
+    src = ""
+    try:
+        if candles and isinstance(candles[-1], dict):
+            src = str(candles[-1].get("source", "") or "")
+    except Exception:
+        src = ""
+    _cg = ""
+    if src == "coingecko":
         try:
-            if candles and isinstance(candles[-1], dict) \
-                    and str(candles[-1].get("source", "")) in ("okx", "binance", "coingecko"):
-                return " · 📉 Futures (مرجعي: لا عقد دائم للأصل — البيانات من الفوري)"   # batch67 (#960)
+            from core.data_layer import _cg_id as _cgid95
+            _cg = _cgid95(symbol) if symbol else ""
         except Exception:
-            pass
+            _cg = ""
+    _cg_txt = f"CoinGecko ({_cg})" if _cg else "CoinGecko"
+    if mkttype == "futures":
+        if src == "coingecko":
+            return f" · 📉 Futures (مرجعي: لا عقد دائم للأصل ولا إدراج على OKX — البيانات من {_cg_txt})"
+        if src in ("okx", "binance"):
+            return " · 📉 Futures (مرجعي: لا عقد دائم للأصل — البيانات من الفوري)"   # batch67 (#960)
         return " · 📉 Futures"
     if mkttype == "spot":
+        if src.endswith("_perp"):
+            return " · 📈 Futures/Perp (لا سوق فوري للأصل على OKX — البيانات من العقد الدائم)"
+        if src == "coingecko":
+            return f" · 💱 Spot (غير مدرج على OKX — البيانات من {_cg_txt})"
         return " · 💱 Spot"
     return ""
 
@@ -6598,7 +6736,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _lines_b40 = _sig_head_b40.split("\n")
                 for _i_b40, _l_b40 in enumerate(_lines_b40[:4]):
                     if _l_b40.startswith("━"):
-                        _lines_b40.insert(_i_b40 + 1, f"💰 السعر: {_fmt_price(price)}{_mkt_tag_b41(_mkttype, candles)}")
+                        _lines_b40.insert(_i_b40 + 1, f"💰 السعر: {_fmt_price(price)}{_mkt_tag_b41(_mkttype, candles, symbol)}")
                         break
                 _sig_head_b40 = "\n".join(_lines_b40)
         except Exception:
@@ -6922,7 +7060,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if _is_stock_sig and _STOCK_TIER_CONF.get(_tier_sig) is None:
                     _tail82.append("🔒 *الأسهم المُرمَّزة — ذهبي وأعلى* — للترقية: /upgrade")
                 _card82 = signal_card_b82({
-                    "sym": _display_symbol, "price": price, "mkt_tag": _mkt_tag_b41(_mkttype, candles),
+                    "sym": _display_symbol, "price": price, "mkt_tag": _mkt_tag_b41(_mkttype, candles, symbol),
                     "meta": _sig_meta or {}, "score": locals().get("_score_result") or {},
                     "rec": locals().get("_rec82") or {},
                     "regime_desc": getattr(regime, "description_ar", "") or "",
@@ -8705,7 +8843,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if _nyse_warn_an:
             parts.append(f"\n{_nyse_warn_an}\n")
         parts += [
-            f"💰 السعر: {_fmt_price(price)} ({change_sign}{change_24h:.2f}% / 24س){_mkt_tag_b41(_mkttype_an, locals().get('candles'))}",   # batch73 (#17)
+            f"💰 السعر: {_fmt_price(price)} ({change_sign}{change_24h:.2f}% / 24س){_mkt_tag_b41(_mkttype_an, locals().get('candles'), symbol)}",   # batch73 (#17)
             f"📊 RSI: {rsi_lbl} | Fear & Greed: {fear_val} ({_fgz_an_hdr(fear_val)[0]})",
             *([_sharp_warn(change_24h, _atr_an67)] if _sharp_warn(change_24h, (_atr_an67 := (_calc_atr(locals().get("candles")) if locals().get("candles") else 0.0))) else []),   # batch67: تعريف موحّد
             # quicksignal_trend_fix: تنبيه إذا "هابط" مع ارتفاع حاد
@@ -8973,7 +9111,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _card82a = signal_card_b82({
                     "title": "🧠", "sym": _display_symbol_an, "price": price,
                     "price_suffix": f" ({change_sign}{change_24h:.2f}% / 24س)",
-                    "mkt_tag": _mkt_tag_b41(_mkttype_an, locals().get("candles")),
+                    "mkt_tag": _mkt_tag_b41(_mkttype_an, locals().get("candles"), symbol),
                     "meta": _sm82a, "score": _sc82a,
                     "rec": _save_signal_decision_b58(user_id, symbol, _mkt_arg_an, _sm82a, _sc82a, save=False),
                     "regime_desc": regime_desc, "adx": _m82a.get("adx"), "di_plus": _m82a.get("di_plus"),
@@ -9545,6 +9683,12 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _miss_b91 = chart_missed_levels_b91(_analysis_clean, _legend_b51)
             if _miss_b91:
                 _chart_rr_notes.append(_miss_b91)
+            _mi95 = chart_missing_items_b95(_analysis_clean)   # b95 (MM3)
+            if _mi95:
+                _chart_rr_notes.append(_mi95)
+            _nv95 = chart_no_vol_note_b95(_analysis_clean, _legend_b51)   # b95 (MM5)
+            if _nv95:
+                _chart_rr_notes.append(_nv95)
         except Exception:
             pass
         _why_b92 = str(getattr(engine.news_engine, "legend_fail_reason_b92", "") or "")
@@ -10143,7 +10287,7 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "━━━━━━━━━━━━━━━━━━",
             f"💰 السعر: {_fmt_price(price, quote)} ({change_sign}{change_24h:.2f}% / 24س"
             + (" · من تداول الزوج نفسه على OKX" if pair_primary else "")   # batch62 (#811): ليس فرق تغيّر ETH وBTC بالدولار
-            + f"){_mkt_tag_b41(_mkttype_qs, locals().get('candles'))}",
+            + f"){_mkt_tag_b41(_mkttype_qs, locals().get('candles'), symbol)}",
             f"⏱️ الإطار الزمني: يومي (1D)",
             # الأزواج: الاتجاه محسوب من شموع الزوج نفسه لا من سوق الكريبتو
             f"🌍 {'اتجاه الزوج' if pair_primary else 'السوق'}: {regime_desc}" + _qs_basis_b62(regime_obj, locals().get("ema_below_count")),
@@ -10152,13 +10296,14 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📈 RSI: {rsi:.0f}"
             + (" (ذروة بيع)" if rsi <= 30 else " (قرب ذروة البيع)" if rsi <= 35
                else " (ذروة شراء)" if rsi >= 70 else "")
-            + f" | Fear & Greed: {fear_val} ({_fgz_q(fear_val)[0]}{' — مؤشر عام لسوق الكريبتو بالدولار' if pair_primary else ''})",
+            + ("" if (is_perp_stock or _is_commodity(symbol)) else   # b95: F&G مؤشر الكريبتو — لا يُعرض لسهم/عقد شركة أو سلعة (كما في /signal و/regime)
+               f" | Fear & Greed: {fear_val} ({_fgz_q(fear_val)[0]}{' — مؤشر عام لسوق الكريبتو بالدولار' if pair_primary else ''})"),
             "",
             f"🎯 *التوصية: {direction}*",
             "📌 الأساس: " + " | ".join(x for x in (
                 f"RSI {rsi:.0f}",
                 # batch67 (#995): Fear & Greed لا يدخل أساس توصية زوج نسبي أو أصل غير كريبتو
-                ("" if (pair_primary or _is_commodity(qs_sym) or is_tokenized_x_ticker(qs_sym)) else f"{_fgz_q(fear_val)[0]} ({fear_val})"),
+                ("" if (pair_primary or is_perp_stock or _is_commodity(qs_sym) or is_tokenized_x_ticker(qs_sym)) else f"{_fgz_q(fear_val)[0]} ({fear_val})"),   # b95: + عقد الشركة/السهم
                 # batch61 (#758): صياغة مقروءة بدل «تحت 0 من 4»
                 ((lambda _n: ("السعر فوق المتوسطات الأسية الأربعة (EMA 5/10/20/50)" if _n == 0 else
                               "السعر تحت المتوسطات الأسية الأربعة (EMA 5/10/20/50)" if _n == 4 else

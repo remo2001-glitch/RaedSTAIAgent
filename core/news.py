@@ -1874,7 +1874,7 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
                     part["_strip_only"] = True
                     return part
                 return await self._strip_only_b92(image_data)
-            logger.info(f"chart legend ✅ keys={[k for k in leg if k not in ('raw','rsi')]}")
+            logger.info(f"chart legend ✅ keys={[k for k in leg if k not in ('raw','rsi','ema')]}")
             return leg
         except Exception as e:
             logger.warning(f"chart legend pass: {e}")

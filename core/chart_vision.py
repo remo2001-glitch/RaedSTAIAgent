@@ -21,6 +21,8 @@ LEGEND_KEYS = (
     "KDJ_K", "KDJ_D", "KDJ_J", "VOL", "VOL_MA5",
     # batch53
     "CHART_HIGH", "CHART_LOW", "PERF_7D", "PERF_30D", "AXIS_TICKS",
+    # b95 (MM4): خطوط EMA/MA الظاهرة في الشريط (مثل EMA20/EMA25/EMA70) — آخراً كي لا يُفقد ما قبلها عند البتر
+    "EMA_A", "EMA_B", "EMA_C",
 )
 
 _LEVEL_KEYS = ("VWAP", "BOLL_MID", "BOLL_UB", "BOLL_LB", "RESISTANCE", "SUPPORT",
@@ -85,6 +87,7 @@ def legend_prompt() -> str:
         "CHART_HIGH وCHART_LOW هما أعلى وأدنى سعر مكتوبين كتسمية على الشارت نفسه (مثل 0.0016590 و0.0013195). "
         "PERF_7D وPERF_30D نسبتا الأداء في الشريط السفلي (7 أيام و30 يوماً) مع الإشارة: ‎+1.37%‎ للأخضر و‎-7.28%‎ للأحمر (علامة - بعد الرقم تعني سالب). "
         "AXIS_TICKS هي أرقام محور السعر الرأسي على يمين الشارت مفصولة بفواصل. "
+        "EMA_A وEMA_B وEMA_C هي خطوط المتوسطات المتحركة الظاهرة في الشريط بالترتيب بالشكل EMA20=101.23 (أو MA7=…)، وإن لم تظهر فاكتب -- . "
         "لا تضف أي نص آخر."
     )
 
@@ -104,7 +107,7 @@ def _to_float(s: str) -> Optional[float]:
 
 def parse_legend(text: str) -> Dict[str, object]:
     """يحلّل ناتج المرحلة 1 إلى قاموس: قيم رقمية + النصوص الأصلية (raw) للمستويات (لحفظ تنسيق الأرقام)."""
-    res: Dict[str, object] = {"raw": {}, "rsi": []}
+    res: Dict[str, object] = {"raw": {}, "rsi": [], "ema": []}
     for line in (text or "").splitlines():
         if ":" not in line:
             continue
@@ -141,6 +144,20 @@ def parse_legend(text: str) -> Dict[str, object]:
                     pass
             if ticks:
                 res["AXIS_TICKS"] = ticks
+            continue
+        if k in ("EMA_A", "EMA_B", "EMA_C"):   # b95 (MM4): «EMA20=101.23» ⇒ مفتاح EMA20 ضمن المستويات
+            m = re.match(r"\s*((?:EMA|SMA|MA)\s*\d{1,3})\s*[=:]?\s*([-+]?\d[\d.,]*)", v, re.I)
+            if m:
+                nm = m.group(1).replace(" ", "").upper()
+                rv = m.group(2).replace(",", "").rstrip(".")
+                try:
+                    fv = float(rv)
+                except ValueError:
+                    continue
+                if fv > 0 and nm not in res:
+                    res[nm] = fv
+                    res["raw"][nm] = rv  # type: ignore[index]
+                    res["ema"].append(nm)  # type: ignore[union-attr]
             continue
         if k in ("RSI_A", "RSI_B", "RSI_C"):
             m = re.match(r"\s*(RSI\s*\d+)\s*[=:]?\s*([-+]?\d[\d.,]*)", v, re.I)
@@ -227,6 +244,15 @@ def build_facts(leg: Dict[str, object], ref_price: float = 0.0, quote_unit: str 
                     else:
                         bear += 1
             lines.append(line)
+    for k in (leg.get("ema") or ()):   # b95 (MM4): خطوط EMA المقروءة — موضع السعر منها (لا تدخل ميزان المؤشرات)
+        try:
+            v = float(leg[k])
+        except (KeyError, TypeError, ValueError):
+            continue
+        line = f"{k} = {fmt(k)}{unit}"
+        if price > 0 and v:
+            line += f" (السعر {_rel(price, v)}ه بنحو {abs(price / v - 1) * 100:.1f}%)"
+        lines.append(line)
     for k, nm in (("SUPERTREND_GREEN", "SuperTrend الأخضر"), ("SUPERTREND_RED", "SuperTrend الأحمر"), ("SAR", "SAR")):
         if k in leg:
             v = float(leg[k])
@@ -351,7 +377,7 @@ def round_indicator_lines(text: str) -> str:
     """بنود 10/11 (RSI/KDJ): الأرقام الطويلة تُعرض بمنزلتين (37.3988948 → 37.40) بدل نسخ سبع منازل بلا فائدة."""
     out = []
     for ln in (text or "").split("\n"):
-        if re.match(r"\s*1[01]\s*[-–.)]", ln):
+        if re.match(r"\s*1[01]\s*(?:[-–)]|\.(?!\d))", ln):
             ln = re.sub(r"(?<![\d.])(-?\d+\.\d{4,})(?!\d)", lambda m: f"{float(m.group(1)):.2f}", ln)
         out.append(ln)
     return "\n".join(out)
@@ -374,7 +400,7 @@ _NUM_TOKEN = re.compile(r"(?<![\d.])\d[\d,]*\.\d{3,}(?![\d])")
 
 def _lvl_values(leg: Dict[str, object]) -> Dict[str, float]:
     out = {}
-    for k in _LEVEL_KEYS:
+    for k in tuple(_LEVEL_KEYS) + tuple(leg.get("ema") or ()):   # b95 (MM4): + خطوط EMA المقروءة
         if k in leg:
             try:
                 out[k] = float(leg[k])
@@ -425,11 +451,15 @@ def verify_name_value(text: str, leg: Dict[str, object]) -> Tuple[str, int]:
     return "\n".join(lines), count
 
 
+# b95 (MM2): نفس قاعدة II1 — «92.91» في سطر مستقل سعرٌ لا البند 92؛ «6. 109.18» و«8) 1.2» بنود
+_ITEM_RX_B95 = re.compile(r"\s*(\d{1,2})\s*(?:[-–)]|\.(?!\d))")
+
+
 def _item_span(lines: List[str], num: int) -> Tuple[int, int]:
     """نطاق أسطر البند المرقَّم num (من سطره حتى قبل البند التالي)."""
     start = -1
     for i, ln in enumerate(lines):
-        mm = re.match(r"\s*(\d{1,2})\s*[-–.)]", ln)
+        mm = _ITEM_RX_B95.match(ln)
         if mm and int(mm.group(1)) == num:
             start = i
             break
@@ -437,7 +467,7 @@ def _item_span(lines: List[str], num: int) -> Tuple[int, int]:
         return -1, -1
     end = len(lines)
     for j in range(start + 1, len(lines)):
-        mm = re.match(r"\s*(\d{1,2})\s*[-–.)]", lines[j])
+        mm = _ITEM_RX_B95.match(lines[j])
         if mm and int(mm.group(1)) != num:
             end = j
             break
@@ -596,11 +626,19 @@ def strip_unseen_mas(text: str, leg: Dict[str, object]) -> Tuple[str, int]:
         return text, 0
     count = 0
     out = text or ""
-    for pat, rep in _MA_PHRASES:
-        out, n = re.subn(pat, rep, out)
-        count += n
-    out, n = re.subn(r"\s*\(?\b(?:EMA|MA|SMA)\s*\d+(?:\s*(?:و|,|،|/)\s*(?:EMA|MA|SMA)?\s*\d+)*\)?", "", out)
-    count += n
+    seen = {re.sub(r"\D", "", str(k)) for k in (leg.get("ema") or ())}   # b95 (MM4): الفترات الظاهرة فعلاً في الشريط
+    if not seen:
+        for pat, rep in _MA_PHRASES:
+            out, n = re.subn(pat, rep, out)
+            count += n
+
+    def _drop(m):
+        nonlocal count
+        if seen and set(re.findall(r"\d+", m.group(0))) <= seen:
+            return m.group(0)   # كلها ظاهرة على الشارت ⇒ تبقى
+        count += 1
+        return ""
+    out = re.sub(r"\s*\(?\b(?:EMA|MA|SMA)\s*\d+(?:\s*(?:و|,|،|/)\s*(?:EMA|MA|SMA)?\s*\d+)*\)?", _drop, out)
     return out, count
 
 

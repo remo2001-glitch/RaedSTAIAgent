@@ -324,6 +324,29 @@ def _with_timeout(cb, limit: float = HANDLER_TIMEOUT_SEC):
     return _wrapped
 
 
+def _install_symbol_alias_b95(app) -> int:
+    """NN1 (b95): كل أمر يأخذ رمز أصل يمرّ بتعيين اسم التطبيق ⇒ معرّف العقد (ANT ⇒ ANTHROPIC) مركزياً قبل التنفيذ."""
+    import functools
+    n = 0
+    for _grp in app.handlers.values():
+        for h in _grp:
+            if not isinstance(h, CommandHandler) or getattr(h.callback, "_raed_alias_b95", False):
+                continue
+            if not (set(getattr(h, "commands", ()) or ()) & analysis_handlers.SYMBOL_CMDS_B95):
+                continue
+            _cb = h.callback
+
+            @functools.wraps(_cb)
+            async def _wrapped(update, context, *a, __cb=_cb, **k):
+                await analysis_handlers.alias_args_b95(update, context)
+                return await __cb(update, context, *a, **k)
+            _wrapped._raed_alias_b95 = True
+            h.callback = _wrapped
+            n += 1
+    logger.info(f"🔤 تعيين أسماء التطبيق (b95) طُبِّق على {n} أمراً")
+    return n
+
+
 def _install_handler_timeouts(app, limit: float = HANDLER_TIMEOUT_SEC) -> int:
     """يطبّق _with_timeout على معالجات الأوامر والأزرار المسجَّلة (لا المحادثات)."""
     n = 0
@@ -668,7 +691,8 @@ def build_app() -> Application:
 
     # T1/T2/T4 مُسجَّلة في trading_handlers.register() ✅
 
-    # ── مهلة عليا لكل أمر (batch39) ──
+    # ── تعيين أسماء التطبيق ⇒ معرّف العقد (b95، NN1) ثم مهلة عليا لكل أمر (batch39) ──
+    _install_symbol_alias_b95(app)
     _install_handler_timeouts(app)
 
     # ── معالج الأخطاء ──
