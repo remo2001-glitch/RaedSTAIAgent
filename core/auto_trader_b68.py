@@ -733,7 +733,7 @@ async def check_auto_exits_b68(engine, send_fn=None) -> int:
                     if final:
                         _track_close_b68(engine, pos.get("signal_id"), xp, kind)
                     closed += 1
-                    notes.append(_close_msg(_bs, side, kind, t))
+                    notes.append(_close_msg(_bs, side, kind, t, pos=pos, final=final))
                     if final:
                         break
                 _book = vw.positions if book == "spot" else vw.futures
@@ -777,14 +777,51 @@ def _ledger_close(uid, t: dict, why: str, final: bool, pos: dict = None):
                      "ts": time.time(), "ver": AUTO_LOGIC_VER})
 
 
-def _close_msg(sym, side, why, t) -> str:
-    _w = {"sl": "🛑 وقف الخسارة", "tp1": "🎯 الهدف 1 (60%) — الوقف الجديد للباقي = سعر الهدف 1",
-          "tp2": "🎯 الهدف 2 (الباقي)", "sl_tp1": "🔒 الوقف المنقول إلى سعر الهدف 1 (الباقي 40%)",
+def _fmt_px_pp1(v) -> str:
+    v = float(v or 0)
+    return f"${v:,.2f}" if v >= 100 else (f"${v:,.4f}" if v >= 1 else f"${v:.6g}")
+
+
+def _close_msg(sym, side, why, t, pos: dict = None, final: bool = True) -> str:
+    """PP1 (b97، رحال 2026-11-20): إشعار إغلاق القياس بتفاصيل السجل نفسها — الدخول ⇒ الخروج، الصافي $ و% من الهامش،
+    الرسوم، المدة، أفضل/أسوأ حركة خلال الصفقة، وللإغلاق الجزئي الكمية والوقف الجديد. عرض فقط."""
+    _w = {"sl": "🛑 وقف الخسارة", "tp1": "🎯 الهدف 1 (60%)",
+          "tp2": "🎯 الهدف 2 (الباقي 40%)", "sl_tp1": "🔒 الوقف المنقول إلى سعر الهدف 1 (الباقي 40%)",
           "time": "⏰ الخروج الزمني"}.get(why, why)
     p = float(t.get("pnl") or 0)
-    return (f"🤖 *إغلاق آلي افتراضي* — {sym} {'Long' if side == 'long' else 'Short'}\n"
-            f"• السبب: {_w}\n• الصافي: {'+' if p >= 0 else '-'}${abs(p):,.2f} (بعد الرسوم والانزلاق)\n"
-            "/autostats لنتائج القياس")
+    lines = [f"🤖 *إغلاق آلي افتراضي* — {sym} {'Long' if side == 'long' else 'Short'} "
+             f"{int(float(t.get('leverage') or (pos or {}).get('leverage') or 1))}x"
+             + (" (جزئي)" if not final else ""),
+             f"• السبب: {_w}"]
+    try:
+        ep = float(t.get("entry") or (pos or {}).get("entry") or 0)
+        xp = float(t.get("price") or 0)
+        if ep > 0 and xp > 0:
+            mv = (xp / ep - 1) * 100 * (-1 if side == "short" else 1)
+            lines.append(f"• الدخول: {_fmt_px_pp1(ep)} → الخروج: {_fmt_px_pp1(xp)} (حركة السعر على المركز {mv:+.2f}%)")
+    except Exception:
+        pass
+    _pct = t.get("pnl_pct")
+    _fees = float(t.get("fees") or 0)
+    lines.append(f"• الصافي: {'+' if p >= 0 else '-'}${abs(p):,.2f}"
+                 + (f" ({float(_pct):+.1f}% من الهامش)" if _pct is not None else "")
+                 + (f" — بعد رسوم ${_fees:,.2f} وانزلاق الإغلاق" if _fees > 0 else " — بعد الرسوم والانزلاق"))
+    d = close_details_b80(pos) if pos else {}
+    if d.get("held_h") is not None:
+        h = float(d["held_h"])
+        lines.append(f"• المدة: {h / 24:.1f} يوم ({h:.0f} ساعة)" if h >= 24 else f"• المدة: {h:.1f} ساعة")
+    if d.get("mfe_pct") is not None or d.get("mae_pct") is not None:
+        _f = f"{d['mfe_pct']:+.2f}%" if d.get("mfe_pct") is not None else "—"
+        _a = f"{d['mae_pct']:+.2f}%" if d.get("mae_pct") is not None else "—"
+        lines.append(f"• خلال الصفقة: أفضل حركة {_f} · أسوأ حركة {_a} (من سعر الدخول)")
+    if why == "tp1" and not final:
+        try:
+            lines.append(f"• أُغلق 60% — الباقي 40% بوقف جديد = سعر الهدف 1 {_fmt_px_pp1((pos or {}).get('tp1'))}"
+                         + (f" وهدف {_fmt_px_pp1((pos or {}).get('tp2'))}" if (pos or {}).get("tp2") else ""))
+        except Exception:
+            pass
+    lines.append("/autostats لنتائج القياس")
+    return "\n".join(lines)
 
 
 # ── الإحصاء ومعايير العبور ──────────────────────────────────────────────
