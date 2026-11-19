@@ -212,6 +212,36 @@ async def _equity_for(engine, user_id: int, live: bool):
     except Exception as e:
         logger.debug(f"_equity_for: {e}")
         return None
+async def risk_equity_state_ee1(engine, user_id: int, live: bool):
+    """EE1: (القيمة أو None، الحالة "ok" | "zero" | "fail") — يميّز تعذّر الجلب عن الرصيد الصفري."""
+    try:
+        if live:
+            info = engine.get_user_exchange(user_id)
+            bal = await info["exchange"].get_balance("USDT")
+            if bal is None:
+                return None, "fail"
+            eq = float(getattr(bal, "total", 0) or 0) + sum(_open_positions_map(engine, user_id, True).values())
+        else:
+            from core.state_manager import state_manager as _s_e1
+            from core.virtual_wallet import VirtualWallet as _V_e1
+            eq = float(_V_e1(_s_e1.get_virtual_wallet(user_id) or {}).total_value or 0)
+        return (eq, "ok") if eq > 0 else (0.0, "zero")
+    except Exception as e:
+        logger.debug(f"risk_equity_state_ee1: {e}")
+        return None, "fail"
+
+
+def risk_portfolio_line_ee1(state: str, portfolio: float, ref: float, live: bool) -> str:
+    """EE1: سطر المحفظة في /risk — لا تُعرض القيمة المرجعية كأنها رصيدك."""
+    if state == "ok":
+        return f"💰 المحفظة: ${float(portfolio or 0):,.0f}"
+    tail = f" — الحدود محسوبة على القيمة المرجعية ${ref:,.0f}"
+    if state == "zero":
+        # المنصات تُرجع رصيد USDT صفراً أيضاً عند خطأ الاتصال — لا يمكن التمييز هنا، فيُصرَّح بالاحتمالين
+        return ("💰 المحفظة: رصيد المنصة $0 أو تعذّر جلبه" if live else "💰 المحفظة: $0") + tail
+    return "💰 المحفظة: غير متاحة الآن (" + ("تعذّر جلب رصيد المنصة" if live else "تعذّر قراءة المحفظة") + ")" + tail
+
+
 def _um(context):   return _eng(context).user_manager if _eng(context) else None
 
 def _clean(text: str) -> str:
@@ -2266,29 +2296,35 @@ async def cmd_risk(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _uid   = update.effective_user.id
         _live  = engine.user_has_live_trading(_uid)
         # محفظة هذا المستخدم الفعلية (حقيقية أو افتراضية)، وإلا القيمة الافتراضية للإعدادات
-        pv     = await _equity_for(engine, _uid, _live) \
-                 or float(engine.risk_engine.cfg.get("portfolio_size") or 10000)
+        # EE1: الحدود تُحسب كما كانت (المحفظة الفعلية، وإلا القيمة المرجعية) — لكن العرض يصرّح بالمصدر
+        _ref_ee1 = float(engine.risk_engine.cfg.get("portfolio_size") or 10000)
+        _eq_ee1, _st_ee1 = await risk_equity_state_ee1(engine, _uid, _live)
+        pv     = _eq_ee1 if (_eq_ee1 or 0) > 0 else _ref_ee1
         report = engine.risk_engine.status_report(pv, user_id=_uid) or {}
         report["open_positions"] = len(_open_positions_map(engine, _uid, _live))
         _auto87 = 0
-        if not _live:   # batch87: مراكز Futures (ومنها مراكز القياس الآلي) كانت لا تُعدّ هنا ⇒ «صفقات مفتوحة: 0» خلاف /autostats
-            try:
-                from core.state_manager import state_manager as _s87
-                from core.virtual_wallet import VirtualWallet as _V87
-                _f87 = _V87(_s87.get_virtual_wallet(_uid) or {}).futures or {}
+        try:   # batch87 + EE2: مراكز Futures الافتراضية ومنها القياس الآلي
+            from core.state_manager import state_manager as _s87
+            from core.virtual_wallet import VirtualWallet as _V87
+            _vw87 = _V87(_s87.get_virtual_wallet(_uid) or {})
+            _f87 = _vw87.futures or {}
+            _auto87 = sum(1 for _p in _f87.values() if (_p or {}).get("logic_ver")) \
+                      + sum(1 for _p in (_vw87.positions or {}).values() if (_p or {}).get("logic_ver"))
+            if not _live:   # محفظة افتراضية: مراكز Futures جزء منها
                 report["open_positions"] += len(_f87)
-                _auto87 = sum(1 for _p in _f87.values() if (_p or {}).get("logic_ver"))
-            except Exception as _e87:
-                logger.debug(f"cmd_risk futures count: {_e87}")
+        except Exception as _e87:
+            logger.debug(f"cmd_risk futures count: {_e87}")
         ev_mult, _ = engine.event_risk.get_exposure_multiplier()
         cfg    = engine.risk_engine.cfg
         lines  = [
             "⚖️ *حالة Risk Engine*" + (" — حسابك الحقيقي" if _live else " — محفظتك الافتراضية"),
             "━━━━━━━━━━━━━━━━━━",
-            f"💰 المحفظة: ${report.get('portfolio',0):,.0f}",
+            risk_portfolio_line_ee1(_st_ee1, report.get('portfolio', 0), _ref_ee1, _live),
             f"📉 Drawdown: {report.get('drawdown_pct',0):.1f}%",
             f"💸 PnL اليوم: ${report.get('today_pnl',0):+,.2f}",
-            f"📊 صفقات مفتوحة: {report.get('open_positions',0)}" + (f" (منها قياس آلي {_auto87})" if _auto87 else ""),
+            f"📊 صفقات مفتوحة: {report.get('open_positions',0)}" + (f" (منها قياس آلي {_auto87})" if (_auto87 and not _live) else ""),
+        ] + ([f"🤖 القياس الآلي (افتراضي، خارج الحساب الحقيقي): {_auto87} {'مركز مفتوح' if _auto87 == 1 else 'مراكز مفتوحة'} — /autostats"]
+             if (_auto87 and _live) else []) + [
             f"📅 تعرض الأحداث: {ev_mult:.0%}",
             "",
             f"• عتبة الثقة: {float(cfg.get('min_confidence',0.65)):.0%}",

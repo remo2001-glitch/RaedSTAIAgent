@@ -5444,10 +5444,12 @@ async def cmd_regime(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from core.report_cards_b84 import split_full_b84 as _sf84r
     _args84r, _full84r = _sf84r(context.args or [])   # batch84: «/regime BTC full»
     # batch87: أساس الشموع كأمر /signal Futures ومركز القياس (العقد الدائم، والفوري إن لم يوجد) — «spot» لشموع الفوري
-    _mk87 = "spot" if any(str(a).lower() == "spot" for a in _args84r) else "futures"
+    _explicit_ee3 = next((str(a).lower() for a in _args84r if str(a).lower() in ("spot", "futures")), None)
     _args84r = [a for a in _args84r if str(a).lower() not in ("spot", "futures")]
     args   = _args84r or ["BTC"]
     symbol = args[0].upper()
+    # EE3: الوسيط الصريح أولاً، ثم آخر سوق اختاره المستخدم في /signal أو /analyze (للأصل نفسه ثم عموماً)، ثم Futures
+    _mk87, _mk_src_ee3 = regime_market_ee3(getattr(context, "user_data", None), symbol, _explicit_ee3)
     msg = await update.message.reply_text(
         f"📊 جاري تحليل حالة السوق لـ {symbol}...")
 
@@ -5464,6 +5466,7 @@ async def cmd_regime(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 candles = await engine.data_layer.get_ohlcv(symbol, "1d", 400) or []
                 _mk87 = "spot"
+                _mk_src_ee3 = "fallback"   # EE3: لا عقد دائم — الوسم يشرح السبب
             except Exception:
                 candles = []
         fear    = fear    if isinstance(fear, dict)    else {"value": 50}
@@ -5610,6 +5613,9 @@ async def cmd_regime(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _crypto87 = not (_is_commodity(symbol) or is_tokenized_x_ticker(symbol) or symbol.upper() in _OKX_TOKENIZED_STOCKS)
         text += ("\n\n📡 *المصدر:* OKX (الشموع والسعر)" + (" + Fear & Greed + هيمنة BTC" if _crypto87 else "")   # batch67 (#919) + batch87
                  + " | 🤖 رائد التداول الذكي")
+        _note_ee3 = regime_mkt_note_ee3(_mk_src_ee3, _mk87, symbol).strip()   # EE3: سبب اختيار السوق وطريقة التبديل
+        if _note_ee3:
+            text += "\n" + _note_ee3
         if not _full84r:   # batch84 (Y المرحلة 3): التصنيف + سطر المؤشرات + الإجراء والتوصية والتحذيرات، والتفاصيل بالزر
             try:
                 _m84 = getattr(result, "metrics", {}) or {}
@@ -5623,7 +5629,7 @@ async def cmd_regime(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if _crypto87:   # batch87: F&G للعملات الرقمية فقط (كان يظهر للذهب لأن سطر المصدر يذكره)
                     _ind84.append(f"F&G {fear_val_r}")
                 _act84 = re.search(r"• الإجراء: [^\n]*", text)
-                _c84r = [_tl[0], _tl[1], *_cls84] + ([_sharp_r67] if _sharp_r67 else []) + ["📈 " + " | ".join(_ind84)]
+                _c84r = [_tl[0], *([_note_ee3] if _note_ee3 else []), _tl[1], *_cls84] + ([_sharp_r67] if _sharp_r67 else []) + ["📈 " + " | ".join(_ind84)]
                 if _act84:
                     _c84r.append(_act84.group(0))
                 if _tip:
@@ -5644,6 +5650,46 @@ async def cmd_regime(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ════════════════════════════════════════════════════════════════
 # /signal
 # ════════════════════════════════════════════════════════════════
+def remember_mkt_ee3(context, symbol, mkt) -> None:
+    """EE3 (رحال 2026-11-19): يحفظ آخر سوق اختاره المستخدم في /signal أو /analyze — عرض فقط، لا أثر على القرار."""
+    try:
+        ud = getattr(context, "user_data", None)
+        if not isinstance(ud, dict) or ud.get("_headless_b68"):
+            return
+        m = "futures" if str(mkt).lower() == "futures" else "spot"
+        ud["_last_mkt_ee3"] = m
+        per = ud.setdefault("_last_mkt_sym_ee3", {})
+        per[str(symbol or "").upper()] = m
+        if len(per) > 50:
+            per.pop(next(iter(per)))
+    except Exception:
+        pass
+
+
+def regime_market_ee3(user_data, symbol, explicit=None):
+    """EE3: سوق /regime ومصدره — (السوق، "arg" | "sym" | "last" | "default")."""
+    if explicit in ("spot", "futures"):
+        return explicit, "arg"
+    ud = user_data if isinstance(user_data, dict) else {}
+    m = (ud.get("_last_mkt_sym_ee3") or {}).get(str(symbol or "").upper())
+    if m in ("spot", "futures"):
+        return m, "sym"
+    m = ud.get("_last_mkt_ee3")
+    if m in ("spot", "futures"):
+        return m, "last"
+    return "futures", "default"
+
+
+def regime_mkt_note_ee3(src, mkt, symbol) -> str:
+    """EE3: سطر يوضّح لماذا اختير هذا السوق وكيف يُبدَّل."""
+    other = "spot" if mkt == "futures" else "futures"
+    why = {"sym": "حسب آخر اختيار لك لهذا الأصل في /signal", "last": "حسب آخر سوق اخترته في /signal",
+           "default": "الافتراضي: سوق القياس الآلي"}.get(src)
+    if not why:
+        return ""
+    return f"\nℹ️ {why} — للتبديل: /regime {symbol} {other}"
+
+
 def _mkt_tag_b41(mkttype, candles=None) -> str:
     """batch41: وسم نوع السوق في سطر السعر (لا يُعرض إن لم يُعرف النوع).
     batch42: إن اختير الفيوتشر وجاءت الشموع من الفوري (لا عقد دائم للأصل مثل XAUT) يُصرَّح بذلك."""
@@ -5714,6 +5760,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     _use_futures = (_mkttype == "futures")
     _mkt_arg_sig = "futures" if _use_futures else "spot"  # إصلاح #258
+    remember_mkt_ee3(context, (context.args or ["BTC"])[0], _mkt_arg_sig)   # EE3: /regime يتبع آخر سوق اختاره المستخدم
 
     # TK2/TK1b: التحقق من توفر الأصل في Spot
     if not _use_futures:
@@ -7817,6 +7864,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         _full82a = _full82a or bool(context.user_data.pop("_an_full82", False))
     _use_futures_an = (_mkttype_an == "futures")
+    remember_mkt_ee3(context, (context.args or ["BTC"])[0], "futures" if _use_futures_an else "spot")   # EE3
     _mkt_arg_an = "futures" if _use_futures_an else "spot"  # إصلاح #258
 
     # TK4/TK1b: التحقق من Spot (X-prefix يتجاوز مباشرة)
