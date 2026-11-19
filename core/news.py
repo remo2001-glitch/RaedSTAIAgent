@@ -1578,66 +1578,52 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
                     f"RSI: {rsi:.0f} | Fear & Greed: {fear_greed}\n"
                     f"السوق: {regime_desc}")
 
-    async def detect_market_type_from_image(self, image_data: bytes) -> str:
-        """
-        R1 (#1024): تحديد نوع السوق من الصورة بسؤال مباشر وبسيط.
-        يُستدعى قبل analyze_chart_image لتجاوز خطأ Groq في تصنيف Futures.
-        يُعيد: 'futures' أو 'spot'
-        """
+    async def read_strip_groq_b92(self, image_data: bytes) -> dict:
+        """JJ1 (ج، b92): احتياط حين يتعذّر Gemini — قراءة الشريط العلوي الصغير فقط (الزوج ووسم السوق) عبر Groq.
+        طلب صغير (قصّ أعلى 14% مصغَّراً، 120 توكن إخراج) كي لا يستهلك حد Groq الذي يحتاجه التحليل نفسه.
+        حلّ محل detect_market_type_from_image (نموذج llama-4-scout المُزال، ولم يكن مستدعى). يعيد {} عند أي فشل."""
         if not self.groq_key:
-            return "spot"
-
-        import base64, ssl, urllib.request, urllib.error, asyncio, json
-
+            return {}
+        import base64, ssl, urllib.request
         try:
-            b64_image = base64.b64encode(image_data).decode("utf-8")
-            ctx  = ssl.create_default_context()
-            loop = asyncio.get_event_loop()  # TODO: استبدل بـ asyncio.get_running_loop() في Python 3.10+
-
-            # سؤال مباشر جداً — إجابة كلمة واحدة فقط
-            detect_prompt = (
-                "Look at this trading chart carefully. "
-                "Is this a Futures/Perpetual contract chart or a Spot chart? "
-                "Check for ANY of these indicators: "
-                "Arabic text 'العقود الدائمة' or 'عقود آجلة', "
-                "English text: Perp, Perpetual, Swap, USDT-SWAP, Mark Price, Funding Rate. "
-                "Reply with ONLY one word: 'futures' or 'spot'. No explanation."
-            )
-
+            from core import chart_vision as _cv
+            crop = _cv.crop_top_strip_b92(image_data)
+            if not crop:
+                return {}
+            prompt = ("انسخ حرفياً من أعلى شاشة التداول، بلا شرح:\n"
+                      "SYMBOL: اسم الزوج كما يظهر (مثل ANTUSDT أو BTC/USDT)\n"
+                      "MARKET: PERP إن ظهر «العقود الدائمة» أو Perpetual أو Swap أو «عقود آجلة»، "
+                      "وSPOT إن ظهر «التداول الفوري» أو Spot، وإلا --")
             payload = json.dumps({
-                "model": "meta-llama/llama-4-scout-17b-16e-instruct",
+                "model": "qwen/qwen3.8-27b",
                 "messages": [{"role": "user", "content": [
-                    {"type": "image_url",
-                     "image_url": {"url": f"data:image/jpeg;base64,{b64_image}"}},
-                    {"type": "text", "text": detect_prompt}
-                ]}],
-                "temperature": 0.0, "max_tokens": 10,
+                    {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + base64.b64encode(crop).decode()}},
+                    {"type": "text", "text": prompt}]}],
+                "temperature": 0.0, "max_tokens": 120, "reasoning_effort": "none",
             }, ensure_ascii=False).encode("utf-8")
-
-            req = urllib.request.Request(
-                GROQ_API_URL, data=payload,
-                headers={"Authorization": f"Bearer {self.groq_key}",
-                         "Content-Type": "application/json",
-                         "User-Agent": "RaedTradingAgent/3.0"},
-                method="POST")
-
-            resp = await loop.run_in_executor(
-                None,
-                lambda r=req: urllib.request.urlopen(r, context=ctx, timeout=15).read().decode())
-            data    = json.loads(resp)
-            answer  = data["choices"][0]["message"]["content"].strip().lower()
-            result  = "futures" if "futures" in answer else "spot"
-            logger.info(f"detect_market_type: '{answer}' → {result}")
-            return result
-
+            req = urllib.request.Request(GROQ_API_URL, data=payload, method="POST",
+                                         headers={"Authorization": f"Bearer {self.groq_key}",
+                                                  "Content-Type": "application/json", "User-Agent": "RaedTradingAgent/3.0"})
+            ctx = ssl.create_default_context()
+            loop = asyncio.get_event_loop()
+            resp = await loop.run_in_executor(None, lambda r=req: urllib.request.urlopen(r, context=ctx, timeout=15).read().decode())
+            txt = (json.loads(resp)["choices"][0]["message"]["content"] or "").strip()
+            import re as _r
+            txt = _r.sub(r"<think>.*?</think>", "", txt, flags=_r.S | _r.I)
+            leg = _cv.parse_legend(txt)
+            out = {k: leg[k] for k in ("SYMBOL", "MARKET") if k in leg}
+            logger.info(f"chart strip (Groq): {out}")
+            return out
         except Exception as e:
-            logger.warning(f"detect_market_type error: {e}")
-            return "spot"  # fallback آمن
+            logger.warning(f"chart strip (Groq): {e}")
+            return {}
 
     # ── batch52: Gemini (طبقة مجانية) مساراً أول لرؤية الشارت؛ Groq احتياطي ─────────
     _gemini_models_cache_b52 = None  # آخر نموذج Gemini نجح (يُجرَّب أولاً)
     _gemini_cooldown_b54 = {}        # batch54: نموذج → وقت انتهاء تبريد 429 (يتخطّاه بدل طلب مرفوض)
     _gemini_last_b54 = {}            # batch54: آخر finishReason/thoughtsTokenCount (للتشخيص)
+    _gemini_no_thinking_b92 = set()  # JJ1 (أ): نماذج رفضت thinkingConfig (HTTP 400) — لا يُرسل لها مجدداً
+    _gemini_last_reason_b92 = ""     # JJ1 (هـ): سبب آخر فشل بصيغة مقروءة
 
     @staticmethod
     def _gemini_key_b52() -> str:
@@ -1654,7 +1640,8 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
 
     async def _gemini_vision_b52(self, images, system_text: str, user_text: str,
                                  max_tokens: int = 3500, thinking: int = 0,
-                                 timeout: int = 60, thinking_level: str = "", budget: float = 0.0):
+                                 timeout: int = 60, thinking_level: str = "", budget: float = 0.0,
+                                 retry_5xx: bool = True):
         """يعيد (نص|None، حالة). الحالة: ok / nokey / rate / auth / error.
         لا يرفع استثناءً؛ أي فشل يُترجَم لحالة فيُجرَّب Groq."""
         import os, base64, ssl, urllib.request, urllib.error
@@ -1672,11 +1659,15 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
             # batch56 (#554): 503 «ضغط عالٍ» يُعاد مرة واحدة فقط (كان مرتين لكل نموذج × 4 نماذج ≈ 84ث قبل Groq)
             for _i in range(3):
                 try:
+                    # JJ1 (ب): مهلة الطلب لا تتجاوز ما بقي من السقف الكلي (كان طلب معلّق واحد يستهلك السقف كله)
+                    _to = timeout
+                    if budget:
+                        _to = max(5.0, min(float(timeout), budget - (_tm54.time() - _t0_b56)))
                     return await loop.run_in_executor(
-                        None, lambda r=rq: urllib.request.urlopen(r, context=ctx, timeout=timeout).read().decode())
+                        None, lambda r=rq, t=_to: urllib.request.urlopen(r, context=ctx, timeout=t).read().decode())
                 except urllib.error.HTTPError as _he:
                     _max_re = 1 if _he.code == 503 else 2
-                    if _he.code in (500, 502, 503, 504) and _i < _max_re and not _over_budget():
+                    if retry_5xx and _he.code in (500, 502, 503, 504) and _i < _max_re and not _over_budget():
                         logger.warning(f"Gemini Vision: HTTP {_he.code} مؤقت — إعادة محاولة {_i + 1}")
                         await asyncio.sleep(1.5 * (_i + 1))
                         continue
@@ -1688,6 +1679,7 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
             # batch56 (#554/#556): سقف زمني كلي لمحاولات Gemini ثم الانتقال لـGroq
             return bool(budget) and (_tm54.time() - _t0_b56 + extra) > budget
         status = "error"
+        NewsEngine._gemini_last_reason_b92 = ""
         tried = set()
         retried_429 = set()
         discovered = False
@@ -1695,6 +1687,7 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
         while queue:
             if _over_budget():
                 logger.warning(f"Gemini Vision: تجاوز السقف الزمني {budget:.0f}ث — الانتقال للبديل")
+                NewsEngine._gemini_last_reason_b92 = NewsEngine._gemini_last_reason_b92 or "انتهت مهلة Gemini"
                 break
             model = queue.pop(0)
             if model in tried:
@@ -1707,7 +1700,8 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
                 continue
             tried.add(model)
             # batch54: نماذج 3.x تفكّر افتراضياً وتوكنات التفكير تُحسب من سقف الإخراج فيُبتر الرد؛ نحدّد مستوى التفكير
-            for use_thinking in ((True, False) if ("2.5" in model or thinking_level) else (False,)):
+            _thk_ok = model not in NewsEngine._gemini_no_thinking_b92   # JJ1 (أ)
+            for use_thinking in ((True, False) if (_thk_ok and ("2.5" in model or thinking_level)) else (False,)):
                 gen_cfg = {"temperature": 0.1, "maxOutputTokens": int(max_tokens) * (2 if "2.5" not in model else 1)}
                 if use_thinking:
                     gen_cfg["thinkingConfig"] = ({"thinkingBudget": int(thinking)} if "2.5" in model
@@ -1756,10 +1750,12 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
                         # batch56 (#558): الخطأ المؤقت سطر WARNING واحد بلا جسم JSON؛ (#555) تبريد 60ث للنموذج المرهَق
                         logger.warning(f"Gemini Vision ({model}) HTTP {e.code} مؤقت (ضغط عالٍ) — تبريد 60ث والانتقال للتالي")
                         NewsEngine._gemini_cooldown_b54[model] = _tm54.time() + 60.0
+                        NewsEngine._gemini_last_reason_b92 = "ضغط عالٍ لدى Gemini"
                     else:
                         logger.error(f"Gemini Vision ({model}) HTTP {e.code}: {err[:200]}")
                     if e.code == 429:
                         status = "rate"
+                        NewsEngine._gemini_last_reason_b92 = "حد طلبات Gemini"
                         # batch54: retryDelay قصير ← انتظار وإعادة مرة واحدة؛ وإلا تبريد النموذج فلا نكرر طلباً مرفوضاً
                         _dm = _re54.search(r'"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"', err)
                         _delay = float(_dm.group(1)) if _dm else 0.0
@@ -1776,11 +1772,14 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
                     if e.code in (401, 403):
                         return None, "auth"
                     if e.code == 400 and use_thinking:
+                        if "thinking" in err.lower():
+                            NewsEngine._gemini_no_thinking_b92.add(model)   # JJ1 (أ)
                         continue  # أعد المحاولة بلا thinkingConfig
                     status = "error"
                     break
                 except Exception as ge:
                     logger.warning(f"Gemini Vision ({model}): {ge}")
+                    NewsEngine._gemini_last_reason_b92 = ("انتهت مهلة Gemini" if "timed out" in str(ge).lower() else "خطأ اتصال بـ Gemini")
                     status = "error"
                     break
             # كل النماذج المعروفة فشلت بـ404/خطأ → اكتشاف أحدث نموذج flash متاح لمرة واحدة
@@ -1806,32 +1805,43 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
                     logger.warning(f"Gemini model discovery: {le}")
         return None, status
 
+    async def _strip_only_b92(self, image_data: bytes) -> dict:
+        """JJ1 (ج): الزوج ووسم السوق فقط عبر Groq — يُعلَّم _strip_only فلا يُعامَل كقراءة شريط كاملة."""
+        part = await self.read_strip_groq_b92(image_data)
+        if part:
+            part["_strip_only"] = True
+        return part
+
     async def read_chart_legend(self, image_data: bytes) -> dict:
         """batch51/52: مرحلة النسخ الحرفي — قصّ الشريط العلوي ولوحات المؤشرات وتكبيرهما ثم نسخ القيم دون تفسير.
         batch52: تعمل عبر Gemini فقط؛ مع Groq وحده (حد 7000 توكن إدخال/دقيقة) لا تتسع مرحلتان فتُتخطّى
         ويُكمَل بالتحليل الحر كما كان قبل الدفعة 51. يعيد قاموس core.chart_vision.parse_legend أو {}."""
         try:
+            self.legend_fail_reason_b92 = ""
             if not self._gemini_key_b52():
-                return {}
+                self.legend_fail_reason_b92 = "لا مفتاح Gemini"
+                return await self._strip_only_b92(image_data)
             from core import chart_vision as _cv
             crops = _cv.crop_legend_images(image_data)
             if not crops:
                 return {}
             _sys_lg = "أنت أداة نسخ دقيقة للأرقام. أجب بالأسطر المطلوبة فقط بلا تفكير ولا شرح."
+            # JJ1 (ب): مهلة الطلب 12ث، سقف كلي 40ث، وبلا إعادة عند 503 — الانتقال فوراً للنموذج التالي
             txt, st = await self._gemini_vision_b52(
-                crops, _sys_lg, _cv.legend_prompt(), max_tokens=2500, thinking=0, timeout=30,
-                thinking_level="minimal", budget=30.0)
+                crops, _sys_lg, _cv.legend_prompt(), max_tokens=2500, thinking=0, timeout=12,
+                thinking_level="minimal", budget=40.0, retry_5xx=False)
             if not txt:
-                logger.info(f"chart legend: Gemini {st} — يُكمَل بالقراءة الحرة")
-                return {}
+                self.legend_fail_reason_b92 = NewsEngine._gemini_last_reason_b92 or {"rate": "حد طلبات Gemini", "auth": "مفتاح Gemini مرفوض"}.get(st, "Gemini غير متاح")
+                logger.info(f"chart legend: Gemini {st} ({self.legend_fail_reason_b92}) — قراءة الشريط عبر Groq ثم القراءة الحرة")
+                return await self._strip_only_b92(image_data)
             import re as _re_lg
             txt = _re_lg.sub(r"<think>.*?</think>", "", txt, flags=_re_lg.S | _re_lg.I).strip()
             # batch54: رد مبتور (7 مفاتيح فقط وآخر رقم مقطوع) ← إعادة مرة واحدة بسقف أكبر، وإلا حذف آخر سطر مقطوع
             if _cv.legend_is_truncated(txt):
                 logger.warning(f"chart legend: رد مبتور ({len(txt)} حرف، ناقص {len(_cv.legend_missing_keys(txt))} مفتاحاً) — {self._gemini_last_b54}")
                 txt2, st2 = await self._gemini_vision_b52(
-                    crops, _sys_lg, _cv.legend_prompt(), max_tokens=4000, thinking=0, timeout=30,
-                    thinking_level="minimal")
+                    crops, _sys_lg, _cv.legend_prompt(), max_tokens=4000, thinking=0, timeout=12,
+                    thinking_level="minimal", budget=25.0, retry_5xx=False)
                 if txt2:
                     txt2 = _re_lg.sub(r"<think>.*?</think>", "", txt2, flags=_re_lg.S | _re_lg.I).strip()
                     if len(_cv.legend_missing_keys(txt2)) < len(_cv.legend_missing_keys(txt)):
@@ -1841,7 +1851,12 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
             leg = _cv.parse_legend(txt)
             if not _cv.legend_is_usable(leg):
                 logger.info("chart legend: غير قابلة للاستخدام — يُكمَل بالقراءة الحرة")
-                return {}
+                self.legend_fail_reason_b92 = "رد Gemini غير صالح"
+                part = {k: leg[k] for k in ("SYMBOL", "MARKET") if k in leg}
+                if part:
+                    part["_strip_only"] = True
+                    return part
+                return await self._strip_only_b92(image_data)
             logger.info(f"chart legend ✅ keys={[k for k in leg if k not in ('raw','rsi')]}")
             return leg
         except Exception as e:
@@ -1919,7 +1934,7 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
                 "قبل كل شيء اكتب في سطر مستقل الإطار الزمني المحدَّد (الأزرق/المظلَّل) في شريط الإطارات أعلى الشارت هكذا:\n"
                 "TIMEFRAME:[القيمة] مثل TIMEFRAME:1W أو 1D أو 4H أو 1H أو 15m (إن لم يظهر شريط الإطارات اكتب TIMEFRAME:؟). في واجهة OKX العربية: «ي»=يوم و«س»=ساعة و«د»=دقيقة و«أ»=أسبوع و«ش»=شهر (مثلاً «1 ي» = 1D)\n"
                 "اتبع هذا الهيكل بالضبط:\n\n"
-                "0- نوع السوق: Spot أو Futures/Perp\n"
+                "0- نوع السوق: Spot أو Futures/Perp — انظر الوسم بجانب اسم الزوج أعلى الشاشة: «العقود الدائمة» أو Perpetual أو Swap أو «عقود آجلة» = Futures/Perp، و«التداول الفوري» أو Spot = Spot؛ وانسخ الوسم كما يظهر بين قوسين\n"
                 "1- الاتجاه العام وقوته: صاعد/هابط/جانبي + قوة الاتجاه\n"
                 "2- مستويات الدعم والمقاومة: أسعار دقيقة من الشارت\n"
                 "3- النماذج الفنية الظاهرة: أنماط شموع أو مخططات\n"

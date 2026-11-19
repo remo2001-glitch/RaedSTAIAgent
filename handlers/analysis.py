@@ -580,7 +580,7 @@ def _chart_cleanup_b54(analysis: str, leg: dict) -> str:
         no_vol = bool(leg) and ("VOL" not in leg) and ("VOL_MA5" not in leg)
         out, cur = [], None
         for ln in (analysis or "").split("\n"):
-            mm = _r.match(r"\s*(\d{1,2})\s*[-–.)]", ln)
+            mm = _r.match(r"\s*(\d{1,2})\s*(?:[-–)]|\.(?!\d))", ln)   # b92: نفس قاعدة II1 (سعر في سطر مستقل ليس بنداً)
             if mm:
                 cur = mm.group(1)
             if cur in ("3", "4") and no_vol:
@@ -747,7 +747,13 @@ def _chart_rr_block_b53(analysis: str, quote: str = "USDT", live_px: float = 0.0
             short_ok = tp1 < e < sl
             if not (long_ok or short_ok):
                 if (sl < e and tp1 <= e * 1.001) or (sl > e and tp1 >= e * 0.999):
-                    warns.append(f"⚠️ الدخول {e:g} يساوي الهدف الأول {tp1:g} أو يتجاوزه — لا عائد حتى الهدف الأول؛ راجع المستويات")
+                    if len(entries) > 1 and idx > 0:
+                        # JJ3 (b92): دخول بديل (اختراق) تشترك أهدافه مع سيناريو الدخول الأول — الهدف الأول يخصّ الأول
+                        _nt = next((t for t in tps if (t > e * 1.001 if sl < e else t < e * 0.999)), None)
+                        warns.append(f"ℹ️ سيناريو الدخول البديل {e:g}: لا هدف أول مستقل له — الهدف الأول {tp1:g} يخص سيناريو الدخول {entries[0]:g}"
+                                     + (f"؛ أقرب هدف بعده {_nt:g}" if _nt else "؛ لا هدف بعده في التحليل"))
+                    else:
+                        warns.append(f"⚠️ الدخول {e:g} يساوي الهدف الأول {tp1:g} أو يتجاوزه — لا عائد حتى الهدف الأول؛ راجع المستويات")
                 continue
             risk = abs(e - sl)
             if risk <= 0 or risk / e > 0.5:
@@ -782,6 +788,13 @@ def _chart_rr_block_b53(analysis: str, quote: str = "USDT", live_px: float = 0.0
                 e0 = entries[0]
                 gap = (e0 / trig - 1) * 100
                 _sup_b56 = any(sv and abs(e0 / sv - 1) <= 0.005 for sv in _chart_support_levels_b56(leg or {}))
+                if not _sup_b56:
+                    # JJ2 (b92): بلا شريط مقروء — النص نفسه يصف الدخول ارتداداً عند دعم أو بديلاً بـ«أو»
+                    _it92 = _chart_item_lines_b51(analysis, nums=("5", "6"))
+                    _t5, _t6 = _it92.get("5", ""), _it92.get("6", "")
+                    import re as _r92
+                    _sup_b56 = bool(_r92.search(r"ارتداد|عند الدعم|من الدعم|قرب الدعم", _t6)) or (
+                        bool(_r92.search(r"ارتداد|الدعم", _t5)) and bool(_r92.search(r"\bأو\b", _t5 + " " + _t6)))
                 if gap <= -0.5 and _sup_b56 and (not live_px or e0 < live_px):
                     # batch56 (#561): الدخول عند دعم = سيناريو ارتداد منفصل عن سيناريو الاختراق، لا «دخول بعد الاختراق»
                     warns.append(f"ℹ️ سيناريوان منفصلان: الدخول {e0:g} ارتداد عند الدعم (بشمعة انعكاسية)، "
@@ -9004,9 +9017,14 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # batch53: مرحلة قراءة الشريط أولاً — الرمز/الزوج المكتوب أعلى الصورة يُستعمل عند غياب الكابشن (كان السعر بالدولار والزوج مجهولاً)
         _legend_b51 = {}
         _chart_img_note_b53 = ""
+        _leg_mkt_b92, _strip_only_b92 = None, False
         try:
             _legend_b51 = await engine.news_engine.read_chart_legend(bytes(image_bytes)) or {}
+            _leg_mkt_b92 = _legend_b51.get("MARKET") if isinstance(_legend_b51, dict) else None
             _img_pair_b53 = _legend_b51.get("SYMBOL") if _legend_b51 else None
+            if isinstance(_legend_b51, dict) and _legend_b51.get("_strip_only"):
+                # JJ1 (ج): قراءة جزئية (الزوج والوسم فقط) — لا تُعامَل قراءةَ شريط كاملة في بقية المسار
+                _strip_only_b92, _legend_b51 = True, {}
             if _img_pair_b53:
                 _b53, _q53 = _img_pair_b53
                 if not symbol:
@@ -9188,7 +9206,7 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                                  "فيوتشر", "عقد دائم", "عقد مستمر",
                                                  "العقود الدائمة", "عقود دائمة"))
         # b91 (II2): وسم السوق المنسوخ من الشريط العلوي يتقدّم على قول النموذج (ما لم يصرّح الكابشن بـ Spot)
-        _leg_mkt_b91 = (_legend_b51 or {}).get("MARKET") if isinstance(_legend_b51, dict) else None
+        _leg_mkt_b91 = _leg_mkt_b92
         if _leg_mkt_b91 == "PERP" and not _is_spot_explicit:
             _chart_is_futures = True
         elif _leg_mkt_b91 == "SPOT" and not any(kw in _caption_upper for kw in _futures_keywords):
@@ -9323,8 +9341,13 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _chart_rr_notes.append(_miss_b91)
         except Exception:
             pass
-        if not _legend_b51:
-            _chart_rr_notes.append("ℹ️ تعذّرت القراءة الآلية للشريط العلوي (الرمز والمؤشرات) — الأرقام من قراءة النموذج وحدها")
+        _why_b92 = str(getattr(engine.news_engine, "legend_fail_reason_b92", "") or "")
+        if not _legend_b51 and _strip_only_b92:
+            _chart_rr_notes.append("ℹ️ قراءة جزئية للشريط العلوي (الرمز ونوع السوق فقط)" + (f" — {_why_b92}" if _why_b92 else "")
+                                   + "؛ أرقام المؤشرات من قراءة النموذج وحدها")
+        elif not _legend_b51:
+            _chart_rr_notes.append("ℹ️ تعذّرت القراءة الآلية للشريط العلوي (الرمز والمؤشرات)" + (f" — {_why_b92}" if _why_b92 else "")
+                                   + " — الأرقام من قراءة النموذج وحدها")
         elif not symbol:
             _chart_rr_notes.append("ℹ️ لم يُقرأ رمز الأصل من الصورة — اكتب الرمز في تعليق الصورة (مثل ANT) لمقارنة السعر الحي")
         if _chart_rr_notes:
