@@ -65,7 +65,7 @@ m = src("main.py")
 import main as MN
 listed = {c for _, items in MN.COMMAND_GROUPS_B87 for c, _ in items}
 reg = set(re.findall(r'CommandHandler\(\s*"([a-z_0-9]+)"', m + src("handlers/analysis.py") + p + t + src("handlers/trade.py") + src("handlers/access.py")))
-hidden = {"start", "help", "upgrade", "premium", "reject", "access", "killswitch", "drift", "review", "survey_report", "whaletest", "scanstatus", "planweek_full", "planmonth_full"}
+hidden = {"start", "help", "upgrade", "premium", "reject", "access", "killswitch", "drift", "review", "survey_report", "whaletest", "scanstatus", "backup", "planweek_full", "planmonth_full"}
 chk("S1 كل أمر مسجّل مذكور في /start (عدا المخفية والمدراء)", not (reg - listed - hidden), sorted(reg - listed - hidden))
 chk("S2 بلا أقسام الباقات والاشتراكات", "فضي+" not in m and "ذهبي+" not in m and "ماسي حصراً" not in m and "أوامر إضافية بالترقية" not in m
     and "باقتك: {tier_name}" not in m)

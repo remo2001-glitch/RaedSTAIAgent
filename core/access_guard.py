@@ -27,7 +27,7 @@ PROBE_NOTIFY_AFTER = 3          # محاولات أوامر مخفية في ال
 DENY_REPLY_EVERY_SEC = 12 * 3600
 
 # أوامر فنية — للمالك فقط
-OWNER_COMMANDS = {"killswitch", "drift", "whaletest", "survey_report", "review", "scanstatus"}
+OWNER_COMMANDS = {"killswitch", "drift", "whaletest", "survey_report", "review", "scanstatus", "backup"}
 # أوامر إدارة — للمالك والمدراء
 ADMIN_COMMANDS = {"access"}
 # أوامر لها خيارات إدارية (الأمر نفسه عام، والخيار للمدراء)
@@ -283,7 +283,7 @@ PUBLIC_MENU = [
 ADMIN_MENU_EXTRA = [("access", "إدارة الحسابات المسموح لها")]
 OWNER_MENU_EXTRA = [("killswitch", "Kill Switch"), ("drift", "حالة النموذج"), ("review", "المراجعة الأسبوعية"),
                     ("survey_report", "تقرير الاستبيان"), ("whaletest", "اختبار Whale"),
-                    ("scanstatus", "حالة المسح والمجدول")]
+                    ("scanstatus", "حالة المسح والمجدول"), ("backup", "النسخ الاحتياطي السحابي")]
 
 
 async def apply_command_menus(bot) -> None:

@@ -220,6 +220,7 @@ def _build_commands_text(user_id: int, tier: str, tier_name: str) -> str:
             "/killswitch — إيقاف طارئ", "/drift — حالة النموذج", "/review — المراجعة الأسبوعية",
             "/survey\\_report — تقرير الاستبيان", "/whaletest — اختبار Whale التاريخي",
             "/scanstatus — حالة المسح والمجدول",
+            "/backup — النسخ الاحتياطي السحابي لبيانات القياس",
         ]))
 
     lines = ["📋 *أوامرك*", ""]
@@ -639,6 +640,7 @@ def build_app() -> Application:
     # ── الأوامر الرئيسية ──
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("scanstatus", cmd_scanstatus_b71))
+    app.add_handler(CommandHandler("backup", cmd_backup_gg2))   # GG2
     app.add_handler(CommandHandler("help",  cmd_help))
     app.add_handler(CommandHandler("about", cmd_about))
 
@@ -684,6 +686,8 @@ def build_app() -> Application:
 
     # ── batch68: خروج مراكز القياس الآلي (TP1 60% / TP2 / وقف / مدة) كل 5 دقائق ──
     app.job_queue.run_repeating(auto_exit_job_b68, interval=300, first=90)
+    # ── GG2: نسخ احتياطي سحابي لبيانات القياس (GitHub خاص) كل 30 دقيقة — عند التغيّر فقط ──
+    app.job_queue.run_repeating(cloud_backup_job_gg2, interval=1800, first=420)
     # ── batch68: تقرير القياس الأسبوعي (الاثنين 1 ظهراً بتوقيت السعودية) ──
     app.job_queue.run_repeating(auto_weekly_report_job_b68, interval=1800, first=300)
 
@@ -695,6 +699,36 @@ def build_app() -> Application:
     )
 
     return app
+
+
+async def cloud_backup_job_gg2(context: ContextTypes.DEFAULT_TYPE):
+    """GG2: نسخ احتياطي سحابي لبيانات القياس — كل 30 دقيقة (يرفع عند التغيّر فقط). يُشعر المالك بالفشل مرة كل 12 ساعة."""
+    try:
+        from core.cloud_backup_gg2 import run_backup_gg2, configured_gg2, status_get, _status_put
+        if not configured_gg2():
+            return
+        res = await run_backup_gg2(context.bot_data.get("raed_engine"))
+        if res.get("error"):
+            st = status_get()
+            if time.time() - float(st.get("fail_notified_ts", 0) or 0) > 12 * 3600:
+                from core.access_guard import owner_id as _oid_gg2
+                if _oid_gg2():
+                    await context.bot.send_message(_oid_gg2(), "⚠️ تعذّر النسخ الاحتياطي السحابي لبيانات القياس: "
+                                                   + res["error"] + "\nالبيانات باقية في Redis. التفاصيل: /backup")
+                st["fail_notified_ts"] = time.time()
+                _status_put(st)
+    except Exception as e:
+        logger.warning(f"cloud_backup_job_gg2: {e}")
+
+
+async def cmd_backup_gg2(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/backup — للمالك: نسخة احتياطية الآن + الحالة."""
+    from core.access_guard import is_owner as _io_gg2
+    if not _io_gg2(update.effective_user.id):
+        return
+    from core.cloud_backup_gg2 import run_backup_gg2, status_text_gg2, configured_gg2
+    res = await run_backup_gg2(context.bot_data.get("raed_engine"), force=True) if configured_gg2() else None
+    await update.message.reply_text(status_text_gg2(res))   # نص عادي: المسارات فيها «_» و«/»
 
 
 async def auto_exit_job_b68(context: ContextTypes.DEFAULT_TYPE):
