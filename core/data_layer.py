@@ -107,6 +107,13 @@ _TOKENIZED_STOCK_MAP = {
     "XPCY":  {"okx_spot": "xPCY",   "okx_futures": "PCY",   "yahoo": "PCY",        "base": "PCY",   "is_stock": True, "cg_id": None},
     "XEWY":  {"okx_spot": "XEWY",   "okx_futures": "EWY",   "yahoo": "EWY",        "base": "EWY",   "is_stock": True, "cg_id": None},
     "XSPY":  {"okx_spot": "XSPY",   "okx_futures": "SPY",   "yahoo": "SPY",        "base": "SPY",   "is_stock": True, "cg_id": None},
+    # OO1 (b96، رحال 2026-11-20): Anthropic — السهم الفوري XANT-USDT (قاعدة X) لكن العقد الدائم باسم ANTHROPIC-USDT-SWAP
+    # (لا XANTHROPIC ولا ANT-USDT-SWAP؛ و«ANT» في CoinGecko = Aragon). شركة خاصة ⇒ لا مرجع Yahoo.
+    # perp_daily: شموع Futures اليومية من العقد نفسه (كما كانت قبل إضافته للقاموس) — لا يتغير قرار القياس.
+    "ANTHROPIC": {"okx_spot": "XANT", "okx_futures": "ANTHROPIC", "yahoo": None, "base": "ANTHROPIC", "is_stock": True, "cg_id": None,
+                  "perp_daily": True, "private": True},
+    "XANT":      {"okx_spot": "XANT", "okx_futures": "ANTHROPIC", "yahoo": None, "base": "ANTHROPIC", "is_stock": True, "cg_id": None,
+                  "private": True},   # private: شركة غير مدرجة في NYSE/NASDAQ ⇒ لا تنبيه ساعات السوق الأمريكي
 }
 
 
@@ -1024,6 +1031,69 @@ class DataLayer:
             _store(key, out, "pairchk")
         return out
 
+    async def _swap_bases_list_b96(self) -> list:
+        """أسس عقود SWAP-USDT على OKX (مخزَّنة ساعة) — مشتركة بين الدفعتين 93 و96."""
+        import time as _t
+        ts, bases = DataLayer._swap_bases_b93
+        if _t.time() - ts > 3600 or not bases:
+            data = await _fetch(self.session, "https://www.okx.com/api/v5/public/instruments?instType=SWAP",
+                                headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"}, retries=2)
+            bases = [str(x.get("instId", "")).rsplit("-USDT-SWAP", 1)[0] for x in ((data or {}).get("data") or [])
+                     if str(x.get("instId", "")).endswith("-USDT-SWAP")]
+            if bases:
+                DataLayer._swap_bases_b93 = (_t.time(), bases)
+        return list(bases or [])
+
+    async def discover_x_stock_b96(self, symbol: str) -> str:
+        """OO3 (b96): سهم مرمّز فوري (قاعدة X) غير موجود في القاموس ⇒ يُضاف للقاموس أثناء التشغيل مع عقده الدائم:
+        العقد = اسم السهم بلا X إن وُجد، وإلا عقد يبدأ اسمه به ويطابق سعره سعر الفوري (±5%) — مثل XANT ⇒ ANTHROPIC.
+        لا يجرّد X إلى رمز عملة أخرى (كان XANT ⇒ ANT ⇒ «غير مدرج» أو Aragon). يعيد اسم العقد أو ""."""
+        sym = (symbol or "").upper().strip()
+        if (not sym.startswith("X") or len(sym) < 3 or sym in REAL_CRYPTO_X_TICKERS or sym in _TOKENIZED_STOCK_MAP
+                or sym in _OKX_SPOT_ALIASES):
+            return _TOKENIZED_STOCK_MAP.get(sym, {}).get("okx_futures", "") or ""
+        key = f"xdisc_b96:{sym}"
+        cached = _cached(key, "pairchk")
+        if cached is not None:
+            return cached
+        perp = ""
+        try:
+            inst = await _fetch(self.session, f"https://www.okx.com/api/v5/public/instruments?instType=SPOT&instId={sym}-USDT",
+                                headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"}, retries=1)
+            rows = (inst or {}).get("data") or []
+            if not rows:
+                return ""   # لا زوج فوري بهذا الاسم — لا تخزين (قد يُدرج لاحقاً)
+            if str(rows[0].get("instCategory", "")) != "3":   # 3 = سهم مرمّز على OKX؛ 1 = عملة رقمية (XRP/XLM…)
+                _store(key, "", "pairchk")
+                return ""
+            sp = await self._price_okx(sym)
+            spx = float((sp or {}).get("price", 0) or 0)
+            if spx <= 0:
+                return ""
+            base = sym[1:]
+
+            def _near(pp):
+                p = float((pp or {}).get("price", 0) or 0)
+                return p > 0 and abs(p / spx - 1) <= 0.05
+            if _near(await self._price_okx_perp(base)):
+                perp = base
+            else:
+                for cand in [b for b in await self._swap_bases_list_b96() if b.startswith(base) and b != base][:6]:
+                    if _near(await self._price_okx_perp(cand)):
+                        perp = cand
+                        break
+            entry = {"okx_spot": sym, "okx_futures": perp or base, "yahoo": None, "base": perp or base,
+                     "is_stock": True, "cg_id": None, "perp_daily": True, "discovered_b96": True}
+            _TOKENIZED_STOCK_MAP[sym] = entry
+            if perp and perp not in _TOKENIZED_STOCK_MAP and not (await self._price_okx(perp)):
+                _TOKENIZED_STOCK_MAP[perp] = dict(entry)   # اسم العقد ⇒ السهم الفوري نفسه (Spot) والعقد (Futures)
+            logger.info(f"OO3: {sym} سهم فوري مكتشف ⇒ عقد {perp or '(لا عقد)'}")
+        except Exception as e:
+            logger.debug(f"discover_x_stock_b96 {sym}: {e}")
+            return ""
+        _store(key, perp, "pairchk")
+        return perp
+
     async def perp_price_display_b93(self, symbol: str, ref_price: float = 0.0):
         """KK1 (b93): سعر العقد الدائم لاسم كما يعرضه تطبيق OKX — قد يختلف عن معرّف الـAPI
         (تطبيق OKX: «ANTUSDT» = ANTHROPIC-USDT-SWAP). يعيد (dict السعر، المعرّف الفعلي) أو (None، symbol).
@@ -1037,7 +1107,10 @@ class DataLayer:
                 r = float(pp["price"]) / float(ref_price)
                 return 1 / 1.3 <= r <= 1.3
             return True
-        for cand in [sym] + ([PERP_DISPLAY_ALIASES_B93[sym]] if sym in PERP_DISPLAY_ALIASES_B93 else []):
+        _mf96 = _TOKENIZED_STOCK_MAP.get(sym, {}).get("okx_futures")   # OO4 (b96): XANT ⇒ ANTHROPIC من القاموس
+        _cands96 = [sym] + ([PERP_DISPLAY_ALIASES_B93[sym]] if sym in PERP_DISPLAY_ALIASES_B93 else []) \
+            + ([_mf96] if _mf96 and _mf96 != sym else [])
+        for cand in _cands96:
             pp = await self._price_okx_perp(cand)
             if _ok(pp):
                 return pp, cand
@@ -1244,7 +1317,7 @@ class DataLayer:
             try:
                 _sw_sym = symbol.upper()
                 _sw_info = _TOKENIZED_STOCK_MAP.get(_sw_sym, {})
-                _is_stk = bool(_sw_info.get("is_stock")) or (
+                _is_stk = (bool(_sw_info.get("is_stock")) and not _sw_info.get("perp_daily")) or (
                     _sw_sym.startswith("X") and len(_sw_sym) > 2 and _sw_sym not in REAL_CRYPTO_X_TICKERS
                     and _sw_sym not in _OKX_SPOT_ALIASES)
                 if not _is_stk:
@@ -1334,6 +1407,21 @@ class DataLayer:
                 logger.info(f"T10b_DL_fix: {symbol} ← OKX Spot ({len(x_spot_candles)} شمعة)")
                 _store(key, x_spot_candles, "ohlcv")
                 return x_spot_candles
+            # OO1 (b96): سهم فوري حديث الإدراج (XANT: شمعة يومية واحدة) ⇒ شموع العقد الدائم للأصل نفسه، موسومة صراحةً
+            try:
+                _perp_nm = _TOKENIZED_STOCK_MAP.get(symbol.upper(), {}).get("okx_futures") or _stock_info.get("base")
+                if _perp_nm and interval == "1d" and quote == "USDT":
+                    _pc = await self._hist_okx_perp(_perp_nm, min(limit, 300))
+                    if len(_pc) >= 30:
+                        for _r in _pc:
+                            _r["source"] = "okx_perp"
+                            _r["spot_young"] = len(x_spot_candles)
+                            _r["perp_inst"] = f"{_perp_nm.upper()}-USDT-SWAP"
+                        logger.info(f"OO1: {symbol} فوري حديث ({len(x_spot_candles)} شمعة) ← شموع {_perp_nm}-USDT-SWAP ({len(_pc)})")
+                        _store(key, _pc, "ohlcv")
+                        return _pc
+            except Exception as _e_oo1:
+                logger.debug(f"OO1 perp fallback ({symbol}): {_e_oo1}")
             # T10b_scaling_fix + RSI_Fib_fix: X-prefix Yahoo fallback
             # /signal (limit>90): يستخدم Yahoo للحصول على بيانات كافية
             # /analyze (limit≤90): يتجنب Yahoo لأنه يُعطي RSI/Fib خاطئ
@@ -2828,7 +2916,7 @@ class DataLayer:
                     "spot_symbol":  _okx_spot_sym,
                     "message":      f"✅ {_okx_spot_sym} مدرج في Spot على OKX"
                 }
-                _store(_cache_key, result, ttl=600)  # 10 دقائق فقط
+                _store(_cache_key, result, "spot_available")   # b96: كان ttl= غير مدعوم ⇒ استثناء دائم ⇒ «متاح» بلا فحص
                 return result
 
             if spot_price > 0:
@@ -2838,7 +2926,7 @@ class DataLayer:
                     "spot_symbol":  spot_sym,
                     "message":      f"✅ {spot_sym} متاح في Spot على OKX"
                 }
-                _store(_cache_key, result, ttl=1800)
+                _store(_cache_key, result, "spot_available")
                 return result
 
             # غير متاح في Spot بعد كل المحاولات
@@ -2852,7 +2940,7 @@ class DataLayer:
                     f"• أو جرّب في Futures"
                 )
             }
-            _store(_cache_key, result, ttl=900)
+            _store(_cache_key, result, "spot_available")
             return result
 
         except Exception as e:
