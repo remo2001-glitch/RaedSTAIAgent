@@ -72,7 +72,7 @@ try:
     b = io.BytesIO(); Image.new("RGB", (1159, 2576), "black").save(b, format="JPEG")
     crop = CV.crop_top_strip_b92(b.getvalue())
     w, h = Image.open(io.BytesIO(crop)).size
-    chk("JJ1c قصّ أعلى الشاشة مصغّراً", w == 800 and 240 <= h <= 260, (w, h))
+    chk("JJ1c قصّ أعلى الشاشة (24%) مصغّراً", w == 800 and 415 <= h <= 435, (w, h))
 except ImportError:
     chk("JJ1c (Pillow غير متاح — تخطٍّ)", True)
 a = src("handlers/analysis.py")

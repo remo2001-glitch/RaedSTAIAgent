@@ -41,6 +41,7 @@ SYMBOL_ALIASES = {
     "NVIDIA": "NVDA", "COINBASE": "COIN",
     "SPACEX": "SPCX", "MICROSTRATEGY": "MSTR",
     "OPENAI": "OPENAI", "CHATGPT": "OPENAI",
+    "ANTHROPIC": "ANTHROPIC", "CLAUDE": "ANTHROPIC",   # b93
     "GOLD": "XAU", "XAUUSD": "XAU",
     "BITCOIN": "BTC", "ETHEREUM": "ETH",
     "SOLANA": "SOL", "DOGECOIN": "DOGE",
@@ -554,6 +555,8 @@ def _chart_postprocess_b53(analysis: str, leg: dict, price: float, quote: str = 
 def _chart_nums_b53(body: str):
     import re as _r
     body = body.split(":", 1)[1] if ":" in body else body
+    # b93: «104.00 (بعد إغلاق يومي تحت 104.46)» — رقم الشرط بين القوسين ليس دخولاً/هدفاً ثانياً
+    body = _r.sub(r"\([^()]*?(?:بعد|إغلاق|تحت|فوق|اختراق|كسر)[^()]*?\)", " ", body)
     body = _r.sub(r"[+-]?\d+(?:\.\d+)?\s*%", " ", body)
     body = _r.sub(r"\b\d+\s*:\s*\d+(?:\.\d+)?\b", " ", body)
     body = _r.sub(r"(?:هدف|الهدف)\s*(?:ال)?(?:أول|ثاني|1|2)", " ", body)
@@ -565,7 +568,9 @@ def _chart_trigger_level_b54(analysis: str) -> float:
     import re as _r
     try:
         body = _chart_item_lines_b51(analysis, nums=("5",)).get("5", "")
-        body = body.split("\n")[0]
+        # b93: التوصية قد تُكتب في السطر التالي لعنوان البند — العنوان + أول سطر محتوى
+        _bl = [l for l in body.split("\n") if l.strip()]
+        body = " ".join(_bl[:2]) if (_bl and _bl[0].rstrip().endswith(":")) else (_bl[0] if _bl else "")
         m = _r.search(r"(?:فوق|اختراق|أعلى من|اعلى من)([^\d]{0,70}?)(\d[\d,]*\.\d+)", body)
         return float(m.group(2).replace(",", "")) if m else 0.0
     except Exception:
@@ -609,13 +614,146 @@ def _chart_cleanup_b54(analysis: str, leg: dict) -> str:
         return analysis
 
 
+_ITEM_CANON_B93 = (   # الترتيب مهم: الأخص أولاً
+    ("TF", r"الإطار الزمني|الفريم"), ("0", r"نوع السوق"), ("13", r"حجم الصفقة|حجم المركز"),
+    ("9", r"مستوى المخاطرة|نسبة المخاطرة"), ("6", r"نقطة الدخول|الدخول المقترح|سعر الدخول"),
+    ("7", r"وقف الخسارة|وقف الخساره"), ("8", r"هدف|أهداف"), ("5", r"التوصية"), ("14", r"مرحلة السوق|Market Phase"),
+    ("10", r"RSI"), ("11", r"KDJ"), ("12", r"MACD"), ("2", r"الدعم|المقاومة"), ("3", r"النماذج|نموذج"),
+    ("4", r"الشموع|الشمعة"), ("1", r"الاتجاه"),
+)
+
+
+def _item_canon_b93(label: str):
+    import re as _r
+    for k, pat in _ITEM_CANON_B93:
+        if _r.search(pat, label or "", _r.I):
+            return k
+    return None
+
+
+def chart_normalize_items_b93(analysis: str) -> str:
+    """KK2/KK3/KK5 (b93): النموذج رقّم البنود 1–16 بدل 0–14 (الإطار الزمني بنداً، الدخول 8، الوقف 9…) فقرأ المحلّل
+    البنود 6/7/8 فارغة ⇒ لا R/R ولا تحذيرات. يُعاد الترقيم من **عناوين** البنود (حين يخالف رقمان فأكثر عناوينهما)،
+    ويتحوّل بند «الإطار الزمني» إلى سطر TIMEFRAME: (فيُقرأ في الترويسة)، و«Market Phase» ⇒ «مرحلة السوق»."""
+    import re as _r
+    try:
+        rx = _r.compile(r"(\s*)(\d{1,2})(\s*(?:[-–)]|\.(?!\d))\s*)(.*)")
+        out, parsed, tf_val, skip = [], [], "", False
+        lines = (analysis or "").split("\n")
+        for i, ln in enumerate(lines):
+            m = rx.match(ln)
+            if m:
+                label = m.group(4).split(":")[0][:60]
+                canon = _item_canon_b93(label)
+                if canon == "TF":
+                    rest = m.group(4).split(":", 1)[1].strip() if ":" in m.group(4) else ""
+                    if not rest:
+                        rest = next((l.strip() for l in lines[i + 1:] if l.strip()), "")
+                    tf_val, skip = rest.split("(")[0].strip(), True
+                    continue
+                skip = False
+                parsed.append((len(out), m, canon))
+                out.append(ln)
+            elif skip:
+                continue
+            else:
+                out.append(ln)
+        if not parsed:
+            return analysis
+        mism = sum(1 for _, m, c in parsed if c is not None and c != m.group(2))
+        if mism >= 2:
+            for j, m, c in parsed:
+                if c is not None:
+                    out[j] = f"{m.group(1)}{c}{m.group(3)}{m.group(4)}"
+        txt = "\n".join(out)
+        txt = _r.sub(r"(?m)^(\s*14\s*[-–.)]\s*)Market Phase", r"\1مرحلة السوق", txt)
+        if tf_val and "TIMEFRAME:" not in txt:
+            txt = f"TIMEFRAME:{tf_val}\n" + txt
+        return txt
+    except Exception:
+        return analysis
+
+
+def chart_price_mismatch_b93(live: float, ref: float, tol: float = 0.30) -> bool:
+    """KK1 (b93): السعر الحي لا يخص الأصل المصوَّر (رمز مشترك بين أصلين) — فرق يتجاوز tol (0.30 = 30%؛ 2.0 = ×3)."""
+    try:
+        live, ref = float(live or 0), float(ref or 0)
+        if live <= 0 or ref <= 0:
+            return False
+        r = live / ref
+        return r > 1 + tol or r < 1 / (1 + tol)
+    except Exception:
+        return False
+
+
+def chart_levels_median_b93(analysis: str) -> float:
+    """وسيط أرقام الدخول/الوقف/الأهداف (البنود 6–8) — مرجع سعر الصورة حين لا يُقرأ السعر نفسه."""
+    try:
+        it = _chart_item_lines_b51(analysis)
+        xs = sorted(x for k in ("6", "7", "8") for x in _chart_nums_b53(it.get(k, "")))
+        return xs[len(xs) // 2] if xs else 0.0
+    except Exception:
+        return 0.0
+
+
+def chart_drop_live_px_b93(analysis: str) -> str:
+    """KK1: يزيل PRICE_NOW الحي وتعليق النموذج على اختلاف السعر الحي (لأصل آخر) من النص."""
+    import re as _r
+    t = _r.sub(r"PRICE_NOW:[^\n]*\n?", "", analysis or "")
+    return "\n".join(l for l in t.split("\n")
+                     if not (_r.search(r"يختلف|لا يتطابق|لا يتوافق", l) and _r.search(r"السعر", l)))
+
+
+def chart_short_side_warns_b93(analysis: str, entries, sl: float, live_px: float) -> list:
+    """KK4 (b93): ما يقابل تحذيرات الشراء للجهة الهابطة + مستويات في غير موضعها من السعر.
+    (أ) «Short بعد إغلاق تحت X» والسعر تحته أصلاً ⇒ الشرط متحقق والدخول المقترح ارتداد لأعلى.
+    (ب) «دعم» فوق السعر الحالي = مقاومة؛ «مقاومة» تحته = دعم."""
+    import re as _r
+    out = []
+    try:
+        lp = float(live_px or 0)
+        if lp <= 0:
+            return out
+        it = _chart_item_lines_b51(analysis, nums=("2", "5"))
+        if entries and sl and sl > entries[0]:
+            _b5 = [l for l in (it.get("5", "") or "").split("\n") if l.strip()]
+            _b5t = " ".join(_b5[:2]) if (_b5 and _b5[0].rstrip().endswith(":")) else (_b5[0] if _b5 else "")
+            # آخر «تحت X» في التوصية = شرط الكسر («تحت SuperTrend (117.80)» وصفٌ لا شرط)
+            _ms = list(_r.finditer(r"(?:إغلاق[^\d]{0,20}?تحت|كسر|أدنى من)([^\d]{0,40}?)(\d[\d,]*\.\d+|\d{2,}[\d,]*)", _b5t))
+            m = _ms[-1] if _ms else None
+            if m:
+                b = float(m.group(2).replace(",", ""))
+                if b > 0 and lp < b * 0.995:
+                    e0 = entries[0]
+                    out.append(f"ℹ️ شرط الكسر تحت {b:g} متحقق أصلاً (السعر {lp:g}) — "
+                               + (f"الدخول {e0:g} فوق السعر الحالي: Short عند ارتداد لأعلى نحو {e0:g} لا بعد كسر جديد"
+                                  if e0 > lp * 1.005 else f"الدخول {e0:g} قرب السعر الحالي"))
+        seen = set()
+        for ln in (it.get("2", "") or "").split("\n"):
+            kind = "دعم" if "دعم" in ln else ("مقاومة" if "مقاومة" in ln else "")
+            if not kind:
+                continue
+            for x in _chart_nums_b53(ln if ":" in ln else ": " + ln)[:1]:
+                if x in seen:
+                    continue
+                if kind == "دعم" and x > lp * 1.005:
+                    out.append(f"⚠️ «دعم» {x:g} فوق السعر الحالي {lp:g} — يعمل مقاومة لا دعماً")
+                    seen.add(x)
+                elif kind == "مقاومة" and x < lp * 0.995:
+                    out.append(f"⚠️ «مقاومة» {x:g} تحت السعر الحالي {lp:g} — تعمل دعماً لا مقاومة")
+                    seen.add(x)
+    except Exception:
+        pass
+    return out
+
+
 def _chart_renumber_b56(analysis: str) -> str:
     """batch56 (#577): النموذج رقّم «نوع السوق» بالرقم 1 بدل 0 فاستبدل الكود البند 2 (وهو «الاتجاه» عنده) بقائمة المستويات
     وضاع بند الاتجاه وتكررت المستويات. إن بدأ الترقيم بـ1 لبند «نوع السوق» ولا يوجد بند 0 يُنقص كل رقم بند بواحد."""
     import re as _r
     try:
         lines = (analysis or "").split("\n")
-        nums = [(i, _r.match(r"(\s*)(\d{1,2})(\s*[-–.)]\s*)(.*)", l)) for i, l in enumerate(lines)]
+        nums = [(i, _r.match(r"(\s*)(\d{1,2})(\s*(?:[-–)]|\.(?!\d))\s*)(.*)", l)) for i, l in enumerate(lines)]   # b93: «92.91» ليس بنداً
         nums = [(i, m) for i, m in nums if m]
         if not nums or any(m.group(2) == "0" for _, m in nums):
             return analysis
@@ -805,6 +943,7 @@ def _chart_rr_block_b53(analysis: str, quote: str = "USDT", live_px: float = 0.0
                     warns.append(f"ℹ️ مستوى التفعيل {trig:g} والدخول المقترح {e0:g} (أعلى بنحو {gap:.1f}% — دخول بعد تأكيد الاختراق)")
         except Exception:
             pass
+        warns += chart_short_side_warns_b93(analysis, entries, sl, live_px)   # KK4
         out = "\n".join(lines + warns)
         return out, rr_first, stop_first
     except Exception:
@@ -812,27 +951,46 @@ def _chart_rr_block_b53(analysis: str, quote: str = "USDT", live_px: float = 0.0
 
 
 def _chart_fix_risk_size_b53(analysis: str, rr1, stop_pct):
-    """batch53 (#399): المخاطرة والحجم لا يتناقضان: R/R<1 → لا حجم؛ وإلا المخاطرة الفعلية = الحجم × مسافة الوقف."""
+    """batch53 (#399): المخاطرة والحجم لا يتناقضان: R/R<1 → لا حجم؛ وإلا المخاطرة الفعلية = الحجم × مسافة الوقف.
+    b93: البند كتلة (العنوان + الأسطر التالية حتى البند التالي) — كان يُستبدل سطر العنوان وحده فيبقى «2% من رأس المال»
+    تحته متناقضاً مع «لا حجم»؛ والنسبة تُقرأ من الكتلة كلها (قد تُكتب في السطر التالي)."""
     import re as _r
     try:
         lines = (analysis or "").split("\n")
-        i13 = next((i for i, l in enumerate(lines) if _r.match(r"\s*13\s*[-–.)]", l)), -1)
-        i9 = next((i for i, l in enumerate(lines) if _r.match(r"\s*9\s*[-–.)]", l)), -1)
-        if i13 < 0:
+        rx = _r.compile(r"\s*(\d{1,2})\s*(?:[-–)]|\.(?!\d))")
+        starts = [(i, rx.match(l).group(1)) for i, l in enumerate(lines) if rx.match(l)]
+
+        def _blk(num):
+            for k, (i, n) in enumerate(starts):
+                if n == num:
+                    end = starts[k + 1][0] if k + 1 < len(starts) else len(lines)
+                    while end > i + 1 and not lines[end - 1].strip():
+                        end -= 1
+                    return i, end
+            return -1, -1
+        a13, b13 = _blk("13")
+        a9, b9 = _blk("9")
+        if a13 < 0:
             return analysis
-        m = _r.search(r"(\d+(?:\.\d+)?)\s*%", lines[i13])
-        # batch54 (#416/#431/#535): «لا حجم» مع «مخاطرة 2%» تناقض ظاهري — تُعرض المخاطرة كحد عند التفعيل فقط
-        # batch56 (#562/#578): «مستوى المخاطرة: 10% من رأس المال» مع «لا حجم» يُقرأ مخاطرةً فعلية (10% حجم لا مخاطرة)
-        if "لا حجم" in lines[i13] and i9 >= 0 and "غير محدد" not in lines[i9]:
-            lines[i9] = "9- مستوى المخاطرة: غير محدد قبل تفعيل الدخول (لا حجم الآن)"
+        t13 = "\n".join(lines[a13:b13])
+        t9 = "\n".join(lines[a9:b9]) if a9 >= 0 else ""
+        m = _r.search(r"(\d+(?:\.\d+)?)\s*%", t13)
+        new9 = new13 = None
+        # batch54 (#416/#431/#535) + batch56 (#562/#578): «لا حجم» مع «مخاطرة 2%» تناقض ظاهري
+        if "لا حجم" in t13 and a9 >= 0 and "غير محدد" not in t9:
+            new9 = "9- مستوى المخاطرة: غير محدد قبل تفعيل الدخول (لا حجم الآن)"
         if rr1 is not None and rr1 < 1.0:
-            lines[i13] = "13- حجم الصفقة المقترح: لا حجم قبل تأكيد الدخول وتحسّن R/R (الحالي دون 1:1)"
-            if i9 >= 0:  # noqa
-                lines[i9] = "9- مستوى المخاطرة: غير محدد قبل تأكيد الدخول (لا حجم الآن)"
-        elif m and stop_pct and i9 >= 0:
+            new13 = "13- حجم الصفقة المقترح: لا حجم قبل تأكيد الدخول وتحسّن R/R (الحالي دون 1:1)"
+            if a9 >= 0:
+                new9 = "9- مستوى المخاطرة: غير محدد قبل تأكيد الدخول (لا حجم الآن)"
+        elif m and stop_pct and a9 >= 0:
             size = float(m.group(1))
-            lines[i9] = (f"9- مستوى المخاطرة: المخاطرة الفعلية ≈ {size * stop_pct / 100.0:.2f}% من رأس المال "
-                         f"(حجم {size:g}% × مسافة الوقف {stop_pct:.1f}%)")
+            new9 = (f"9- مستوى المخاطرة: المخاطرة الفعلية ≈ {size * stop_pct / 100.0:.2f}% من رأس المال "
+                    f"(حجم {size:g}% × مسافة الوقف {stop_pct:.1f}%)")
+        # الاستبدال من الأسفل للأعلى كي لا تنزاح الفهارس
+        for (a, b, new) in sorted([(a13, b13, new13), (a9, b9, new9)], key=lambda x: -x[0]):
+            if a >= 0 and new is not None:
+                lines[a:b] = [new]
         return "\n".join(lines)
     except Exception:
         return analysis
@@ -9018,9 +9176,11 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _legend_b51 = {}
         _chart_img_note_b53 = ""
         _leg_mkt_b92, _strip_only_b92 = None, False
+        _img_px_b93, _px_mismatch_b93 = 0.0, 0.0
         try:
             _legend_b51 = await engine.news_engine.read_chart_legend(bytes(image_bytes)) or {}
             _leg_mkt_b92 = _legend_b51.get("MARKET") if isinstance(_legend_b51, dict) else None
+            _img_px_b93 = float((_legend_b51 or {}).get("PRICE") or 0) if isinstance(_legend_b51, dict) else 0.0
             _img_pair_b53 = _legend_b51.get("SYMBOL") if _legend_b51 else None
             if isinstance(_legend_b51, dict) and _legend_b51.get("_strip_only"):
                 # JJ1 (ج): قراءة جزئية (الزوج والوسم فقط) — لا تُعامَل قراءةَ شريط كاملة في بقية المسار
@@ -9041,16 +9201,28 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # T30_fix: تمرير السعر الحالي لـ Qwen3 لمنع تحليل أصل خاطئ
         _current_px = 0.0
+        _mk_px_b93 = "futures" if (_leg_mkt_b92 == "PERP" or _chart_is_futures) else "spot"   # KK1 (أ)
+        _alias_note_b93 = ""
         try:
             if symbol and engine:
-                if _chart_quote != "USDT":
-                    _px_data = await engine.data_layer.get_price(symbol.upper(), _chart_quote)
-                else:
-                    _px_data = await engine.data_layer.get_price(symbol.upper())
+                _px_data = None
+                if _mk_px_b93 == "futures" and _chart_quote == "USDT" and hasattr(engine.data_layer, "perp_price_display_b93"):
+                    # KK1 (أ): العقد الدائم أولاً — باسم التطبيق ثم معرّف الـAPI (ANT ⇒ ANTHROPIC) مطابقاً لسعر الصورة
+                    _px_data, _api_sym_b93 = await engine.data_layer.perp_price_display_b93(symbol.upper(), _img_px_b93)
+                    if _px_data and _api_sym_b93.upper() != symbol.upper():
+                        _alias_note_b93 = f"ℹ️ {symbol.upper()} في تطبيق OKX = عقد {_api_sym_b93}-USDT-SWAP (التحليل الشامل: /signal {_api_sym_b93})"
+                        symbol = _api_sym_b93
+                if not _px_data:
+                    if _chart_quote != "USDT":
+                        _px_data = await engine.data_layer.get_price(symbol.upper(), _chart_quote, mkttype=_mk_px_b93)
+                    else:
+                        _px_data = await engine.data_layer.get_price(symbol.upper(), mkttype=_mk_px_b93)
                 if _px_data and _px_data.get("price", 0) > 0:
                     _current_px = float(_px_data["price"])
         except Exception:
             pass
+        if chart_price_mismatch_b93(_current_px, _img_px_b93):   # KK1 (ب): سعر أصل آخر بالرمز نفسه — لا يُمرَّر للنموذج
+            _px_mismatch_b93, _current_px = _current_px, 0.0
         # batch50: سعر السوق الحي فقط (لا سعر الصورة) — أساس سطر الدقة كي لا يقارن الصورة بنفسها
         _market_px_chart = float(_current_px or 0)
 
@@ -9071,10 +9243,25 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             current_price=_current_px,
             quote=_chart_quote,
             facts_text=_facts_b51)
+        analysis = chart_normalize_items_b93(analysis)   # KK2/KK3: الترقيم من العناوين والإطار من بنده
         _chart_tf_label, analysis = _chart_parse_timeframe_b50(analysis)
         if "غير محدد" in _chart_tf_label and _legend_b51.get("TIMEFRAME"):
             _chart_tf_label = _CHART_TF_MAP_B50.get(_chart_norm_tf_b52(str(_legend_b51["TIMEFRAME"])), _chart_tf_label)
         analysis = _chart_renumber_b56(analysis)
+        if not _current_px and not _img_px_b93 and analysis:
+            import re as _re93
+            _mpn93 = _re93.search(r"PRICE_NOW:\s*\$?([\d.,]+)", analysis)   # لم يُمرَّر سعر حي ⇒ النموذج قرأه من الصورة
+            if _mpn93:
+                try:
+                    _img_px_b93 = float(_mpn93.group(1).replace(",", ""))
+                except ValueError:
+                    pass
+        if _current_px > 0 and not _img_px_b93:
+            # KK1 (ب): بلا سعر مقروء من الصورة — مستويات التحليل نفسها تكشف أصلاً مختلفاً (×3 فأكثر)
+            _lv_b93 = chart_levels_median_b93(analysis)
+            if _lv_b93 and chart_price_mismatch_b93(_current_px, _lv_b93, tol=2.0):
+                _px_mismatch_b93, _current_px, _market_px_chart = _current_px, 0.0, 0.0
+                analysis = chart_drop_live_px_b93(analysis)
         analysis = _chart_fix_size_line_b50(analysis)
         _axis_bad_b53 = []
         if _legend_b51:
@@ -9091,7 +9278,7 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         analysis = _chart_fix_tf_wording_b51(analysis, _chart_tf_label)
         analysis = _chart_fix_item_labels_b56(analysis, _legend_b51)
         _rr_text_b53, _rr1_b53, _stop_pct_b53 = _chart_rr_block_b53(
-            analysis, _chart_quote, _market_px_chart or float((_legend_b51 or {}).get("PRICE", 0) or 0), _axis_bad_b53,
+            analysis, _chart_quote, _market_px_chart or float((_legend_b51 or {}).get("PRICE", 0) or 0) or _img_px_b93, _axis_bad_b53,
             leg=_legend_b51)
         analysis = _chart_fix_risk_size_b53(analysis, _rr1_b53, _stop_pct_b53)
         analysis = _chart_cleanup_b54(analysis, _legend_b51)
@@ -9251,14 +9438,25 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # chart_header_price_fix v3: جلب السعر من OKX أو _current_px (T30_fix)
         _chart_px_found = False
         _live_px_chart = 0.0
-        if _chart_price_sym:
+        if not _current_px and _img_px_b93 > 0:
+            _current_px = _img_px_b93   # b93: سعر الصورة المقروء (الشريط) احتياطاً للترويسة
+        if _chart_price_sym and not _px_mismatch_b93:   # KK1: لا سعر حي لأصل آخر بالرمز نفسه
             try:
                 eng3 = context.bot_data.get("raed_engine")
                 if eng3:
-                    if _chart_quote != "USDT" and _chart_price_sym == symbol:
-                        pd3 = await eng3.data_layer.get_price(_chart_price_sym, _chart_quote)
-                    else:
-                        pd3 = await eng3.data_layer.get_price(_chart_price_sym)
+                    _mk3 = "futures" if (_chart_is_futures or _leg_mkt_b92 == "PERP") else "spot"   # KK1 (أ)
+                    pd3 = None
+                    if _mk3 == "futures" and _chart_quote == "USDT" and hasattr(eng3.data_layer, "perp_price_display_b93"):
+                        pd3, _ = await eng3.data_layer.perp_price_display_b93(_chart_price_sym, _img_px_b93)
+                    if not pd3:
+                        if _chart_quote != "USDT" and _chart_price_sym == symbol:
+                            pd3 = await eng3.data_layer.get_price(_chart_price_sym, _chart_quote, mkttype=_mk3)
+                        else:
+                            pd3 = await eng3.data_layer.get_price(_chart_price_sym, mkttype=_mk3)
+                    _ref3 = _img_px_b93 or chart_levels_median_b93(analysis)
+                    if pd3 and pd3.get("price", 0) > 0 and chart_price_mismatch_b93(float(pd3["price"]), _ref3,
+                                                                                    tol=(0.30 if _img_px_b93 else 2.0)):
+                        _px_mismatch_b93, pd3 = float(pd3["price"]), None
                     if pd3 and pd3.get("price", 0) > 0:
                         p3 = pd3["price"]
                         _live_px_chart = float(p3)
@@ -9297,6 +9495,12 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             header_lines.append(_chart_acc_line)
         if _chart_img_note_b53:
             header_lines.append(_chart_img_note_b53)
+        if _alias_note_b93:
+            header_lines.append(_alias_note_b93)
+        if _px_mismatch_b93:   # KK1 (ب)
+            header_lines.append(f"⚠️ الرمز {symbol or _chart_price_sym} في مصدر الأسعار يطابق أصلاً آخر (سعره {_fmt_price(_px_mismatch_b93, _chart_quote)}) — "
+                                + (f"اعتُمد سعر الصورة {_fmt_price(_img_px_b93, _chart_quote)}" if _img_px_b93 else "اعتُمدت أسعار الصورة")
+                                + "، ولا مقارنة بالسعر الحي")
         # إصلاح #236: ربط /chart ↔ /signal للتكامل التحليلي
         _signal_hint = (f"\n{_chart_basis_note_b56(symbol)}\n💡 للتحليل الشامل متعدد المصادر: /signal {symbol}"
                         + (_chart_quote if _chart_quote != "USDT" else "")) if symbol else ""

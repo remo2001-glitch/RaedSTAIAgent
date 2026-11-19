@@ -577,6 +577,9 @@ async def _fetch_cq(endpoint: str, params: dict = None) -> Optional[dict]:
         logger.debug(f"CryptoQuant API: {e}")
         return None
 
+# KK1 (b93): أسماء العقود الدائمة كما يعرضها تطبيق OKX ⇒ معرّف الـAPI (التطبيق: «ANTUSDT»؛ الـAPI: ANTHROPIC-USDT-SWAP)
+PERP_DISPLAY_ALIASES_B93 = {"ANT": "ANTHROPIC"}
+
 # OKX_ALIASES_fix: قاموس الأسماء الخاصة في OKX (case-sensitive)
 # بعض الأصول تستخدم أسماء مختلفة في OKX API عن الرمز المتعارف عليه
 _OKX_SPOT_ALIASES: dict = {
@@ -989,6 +992,44 @@ class DataLayer:
         except Exception as e:
             logger.debug(f"_price_okx ({symbol}): {e}")
         return None
+
+    _swap_bases_b93 = (0.0, [])   # (وقت الجلب، قائمة أسس عقود SWAP-USDT على OKX)
+
+    async def perp_price_display_b93(self, symbol: str, ref_price: float = 0.0):
+        """KK1 (b93): سعر العقد الدائم لاسم كما يعرضه تطبيق OKX — قد يختلف عن معرّف الـAPI
+        (تطبيق OKX: «ANTUSDT» = ANTHROPIC-USDT-SWAP). يعيد (dict السعر، المعرّف الفعلي) أو (None، symbol).
+        الترتيب: الاسم نفسه ⇒ جدول الأسماء المعروفة ⇒ عقود يبدأ اسمها بالرمز ويطابق سعرها سعر الصورة (±30%)."""
+        sym = (symbol or "").upper()
+
+        def _ok(pp):
+            if not pp or float(pp.get("price", 0) or 0) <= 0:
+                return False
+            if ref_price and ref_price > 0:
+                r = float(pp["price"]) / float(ref_price)
+                return 1 / 1.3 <= r <= 1.3
+            return True
+        for cand in [sym] + ([PERP_DISPLAY_ALIASES_B93[sym]] if sym in PERP_DISPLAY_ALIASES_B93 else []):
+            pp = await self._price_okx_perp(cand)
+            if _ok(pp):
+                return pp, cand
+        if not ref_price:
+            return None, sym
+        try:
+            import time as _t
+            ts, bases = DataLayer._swap_bases_b93
+            if _t.time() - ts > 3600 or not bases:
+                data = await _fetch(self.session, "https://www.okx.com/api/v5/public/instruments?instType=SWAP",
+                                    headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"}, retries=2)
+                bases = [str(x.get("instId", "")).rsplit("-USDT-SWAP", 1)[0] for x in ((data or {}).get("data") or [])
+                         if str(x.get("instId", "")).endswith("-USDT-SWAP")]
+                DataLayer._swap_bases_b93 = (_t.time(), bases)
+            for cand in [b for b in bases if b.startswith(sym) and b != sym][:5]:
+                pp = await self._price_okx_perp(cand)
+                if _ok(pp):
+                    return pp, cand
+        except Exception as e:
+            logger.debug(f"perp_price_display_b93 {sym}: {e}")
+        return None, sym
 
     async def _price_okx_perp(self, symbol: str) -> Optional[Dict]:
         """تطوير #209: جلب سعر الأصول المُرمَّزة (MSTR,TSLA,NVDA...)

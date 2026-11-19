@@ -52,14 +52,14 @@ def crop_legend_images(image_bytes: bytes) -> List[bytes]:
 
 
 def crop_top_strip_b92(image_bytes: bytes) -> bytes:
-    """JJ1 (ج، b92): قصّ أعلى 14% من اللقطة (الزوج ووسم السوق) مصغَّراً إلى عرض ≤ 800 — طلب Groq صغير. b"" عند الفشل."""
+    """JJ1 (ج، b92): قصّ أعلى اللقطة (الزوج ووسم السوق، وb93: السعر الكبير ≈ 18%) مصغَّراً إلى عرض ≤ 800 — طلب Groq صغير."""
     try:
         from PIL import Image
         im = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         w, h = im.size
         if w < 200 or h < 300:
             return b""
-        part = im.crop((0, 0, w, int(h * 0.14)))
+        part = im.crop((0, 0, w, int(h * 0.24)))   # b93: 24% يشمل السعر الكبير في واجهتي OKX
         if part.width > 800:
             part = part.resize((800, int(part.height * 800 / part.width)), Image.LANCZOS)
         buf = io.BytesIO()

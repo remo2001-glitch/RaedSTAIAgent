@@ -1593,7 +1593,8 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
             prompt = ("انسخ حرفياً من أعلى شاشة التداول، بلا شرح:\n"
                       "SYMBOL: اسم الزوج كما يظهر (مثل ANTUSDT أو BTC/USDT)\n"
                       "MARKET: PERP إن ظهر «العقود الدائمة» أو Perpetual أو Swap أو «عقود آجلة»، "
-                      "وSPOT إن ظهر «التداول الفوري» أو Spot، وإلا --")
+                      "وSPOT إن ظهر «التداول الفوري» أو Spot، وإلا --\n"
+                      "PRICE: السعر الحالي الكبير كما يظهر بكل منازله (مثل 95.33)، وإلا --")
             payload = json.dumps({
                 "model": "qwen/qwen3.8-27b",
                 "messages": [{"role": "user", "content": [
@@ -1611,7 +1612,7 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
             import re as _r
             txt = _r.sub(r"<think>.*?</think>", "", txt, flags=_r.S | _r.I)
             leg = _cv.parse_legend(txt)
-            out = {k: leg[k] for k in ("SYMBOL", "MARKET") if k in leg}
+            out = {k: leg[k] for k in ("SYMBOL", "MARKET", "PRICE") if k in leg}   # b93: PRICE لكشف سعر أصل آخر (KK1)
             logger.info(f"chart strip (Groq): {out}")
             return out
         except Exception as e:
@@ -1852,7 +1853,7 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
             if not _cv.legend_is_usable(leg):
                 logger.info("chart legend: غير قابلة للاستخدام — يُكمَل بالقراءة الحرة")
                 self.legend_fail_reason_b92 = "رد Gemini غير صالح"
-                part = {k: leg[k] for k in ("SYMBOL", "MARKET") if k in leg}
+                part = {k: leg[k] for k in ("SYMBOL", "MARKET", "PRICE") if k in leg}
                 if part:
                     part["_strip_only"] = True
                     return part
