@@ -4,3 +4,6 @@ __pycache__/
 logs/
 *.log
 .DS_Store
+
+# runtime state written by core/state_manager.py (local runs/simulations) — never commit
+bot_state.json
