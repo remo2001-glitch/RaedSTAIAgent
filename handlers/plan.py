@@ -1449,8 +1449,8 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         confirmations_met=0, entry_price=price,
                         sl_price=price * 0.96 if signal.direction == "long" else price * 1.04,
                         tp1_price=price * 1.04 if signal.direction == "long" else price * 0.96,
-                        rsi_1d=_calc_rsi(candles_clean) if "_calc_rsi" in dir() else None,
-                        regime=regime_desc if "regime_desc" in dir() else "",
+                        rsi_1d=_calc_rsi(candles_clean),   # batch87: dir() داخل الدالة لا يرى الدوال العامة ⇒ كان None دائماً
+                        regime=str(getattr(_reg_asset_pm, "description_ar", "") or ""),   # batch87: كان دائماً "" (اسم غير معرّف)
                         user_id=update.effective_user.id if update.effective_user else None,
                     )
                 except Exception as _ste_pm:
@@ -2113,20 +2113,8 @@ async def cmd_plan_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
 
-@require_tier("planweek")
-# ══ Plan Start — سؤال أولاً (T3) ══════════════════════════════════════════════
-
-async def _run_planweek(update, context, msg=None):
-    """تشغيل الخطة الأسبوعية — يستقبل msg اختيارياً من callback."""
-    # نُعيد توجيه context.user_data لـ cmd_plan_week
-    context.user_data["_plan_msg_override"] = msg
-    await cmd_plan_week(update, context)
 
 
-async def _run_planmonth(update, context, msg=None):
-    """تشغيل الخطة الشهرية — يستقبل msg اختيارياً من callback."""
-    context.user_data["_plan_msg_override"] = msg
-    await cmd_plan_month(update, context)
 
 
 @require_tier("planweek")

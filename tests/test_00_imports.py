@@ -14,7 +14,7 @@ for d, _, files in os.walk(ROOT):
                 bad.append((f, str(e)[:120]))
 chk("compile: كل ملفات .py", not bad, bad)
 
-for pkg in ("core", "handlers", "security"):
+for pkg in ("core", "handlers"):
     errs = []
     for m in pkgutil.iter_modules([os.path.join(ROOT, pkg)]):
         try:

@@ -452,11 +452,6 @@ _UPDATE_FILE = os.path.join(os.path.dirname(__file__), "..", "coins_cache.json")
 _UPDATE_INTERVAL = 30 * 24 * 3600  # 30 يوم
 
 
-def get_allowed_symbols(tier: str) -> list:
-    """يُعيد قائمة العملات المسموحة لباقة معينة."""
-    _load_updated_list()
-    limit = TIER_LIMITS.get(tier, 50)
-    return RANKED_SYMBOLS[:min(limit, len(RANKED_SYMBOLS))]
 
 
 def is_symbol_allowed(symbol: str, tier: str,

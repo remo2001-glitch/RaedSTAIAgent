@@ -548,23 +548,6 @@ def _approx_cpi_time(grace_sec: float = 0) -> float:
             m, y = 1, y + 1
     return _to_ts(dt)
 
-def _next_occurrence_of_weekday(weekday: int, hour_utc: int = 12,
-                                  skip_weeks: int = 0,
-                                  from_end_of_month: bool = False) -> float:
-    """
-    weekday: 0=Mon … 6=Sun
-    يُعيد Unix timestamp لأقرب تكرار قادم.
-    """
-    import datetime
-    now  = datetime.datetime.utcnow()
-    days_ahead = weekday - now.weekday()
-    if days_ahead <= 0:
-        days_ahead += 7
-    days_ahead += skip_weeks * 7
-
-    target = now + datetime.timedelta(days=days_ahead)
-    target = target.replace(hour=hour_utc, minute=0, second=0, microsecond=0)
-    return target.timestamp()
 
 
 def _hours_ar_b66(h: float) -> str:

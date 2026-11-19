@@ -761,7 +761,7 @@ class RegimeDetector:
                if (result.action == "trade_normal" and m.get("adx", 0) >= 40) else
                # batch38: «تداول بحجم طبيعي» لا يُقال بزخم ضعيف (ADX<25 أو حجم<1x) — تقييم بيئة لا إشارة دخول (تناقض مع /signal «مراقبة»)
                # batch67 (#913/#943): ADX<20 = لا اتجاه ⇒ «انتظار» (نفس حكم /signal)؛ وإلا «لا مانع من التصنيف» لا «✅ تسمح بالتداول»
-               (f"• الإجراء: ⏳ انتظار — لا اتجاه واضح (ADX {float(m.get('adx', 0) or 0):.0f} < 20)؛ قرار الدخول من /signal"
+               (f"• الإجراء: ⏳ انتظار — لا اتجاه واضح (ADX {_adx_fmt_b57(m.get('adx', 0))} < 20)؛ قرار الدخول من /signal"
                 if 0 < float(m.get("adx", 0) or 0) < 20 else
                 f"• الإجراء: ⚪ التصنيف لا يمنع التداول — قرار الدخول (الثقة/التأكيدات/الجهة) من /signal فقط")
                if (result.action == "trade_normal" and (0 < m.get("adx", 0) < 25 or float(m.get("vol_ratio", 1) or 1) < 1.0)) else

@@ -119,15 +119,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• تنبيه ساعي عند إشارة BTC/ETH/SOL/BNB بثقة ≥ 80% وجهة واضحة"
     )
 
-    days_note = ""
-    if tier == "free" and days_left > 0:
-        days_note = f"\n⏰ تداول آلي مجاني: {days_left} يوم متبقٍ"
-
-    welcome = (
+    welcome = (   # batch87 (E4): لا سطر باقات/اشتراكات في الوضع الخاص
         f"🤖 *مرحباً بك في رائد*\n"
         f"━━━━━━━━━━━━━━━━━━\n"
-        f"باقتك: {tier_name} | حد العملات: {coins}"
-        f"{days_note}\n\n"
         f"رائد وكيل تداول ذكي بالذكاء الاصطناعي.\n"
         f"يُحلل الأسواق ويُقدم إشارات مؤسسية.\n"
         f"{scan_info}"
@@ -137,59 +131,90 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(cmds_text, parse_mode=ParseMode.MARKDOWN)
 
 
+# batch87 (E3/E4، قرار رحال 2026-11-19: إبقاء الأوامر وتوضيح القائمة): كل الأوامر العاملة مجمّعة حسب الوظيفة
+# بسطر وصف لكل منها، بلا أقسام الباقات/الاشتراكات (الوضع الخاص). كل أمر يظهر فقط لمن يملك صلاحيته.
+COMMAND_GROUPS_B87 = [
+    ("📊 *التحليل*", [
+        ("signal", "/signal رمز — الحكم الكامل (بطاقة قصيرة + 📖 التفاصيل، أو أضف full)"),
+        ("analyze", "/analyze رمز — قراءة تحليلية + السيناريوهان (بطاقة + التفاصيل)"),
+        ("quicksignal", "/quicksignal — تحليل أولي سريع"),
+        ("regime", "/regime رمز — حالة السوق والإجراء المناسب"),
+        ("liquidity", "/liquidity رمز — السيولة والدفتر والانزلاق"),
+        ("onchain", "/onchain — On-Chain والمشتقات ومزاج السوق"),
+        ("news", "/news — تحليل الأخبار"),
+        ("events", "/events — الأحداث الماكرو القادمة ونوافذها"),
+        ("outlook", "/outlook — رؤية المؤسسات (BlackRock/Vanguard/Morningstar)"),
+        ("marketrisk", "/marketrisk — تقييم مخاطر السوق"),
+        ("backtest", "/backtest رمز — اختبار تاريخي"),
+        ("chart", "/chart — تحليل شارت بصري (أرفق صورة)"),
+    ]),
+    ("📅 *الخطط*", [
+        ("planweek", "/planweek — الخطة الأسبوعية (بطاقة + التفاصيل)"),
+        ("planmonth", "/planmonth — الخطة الشهرية (بطاقة + التفاصيل)"),
+        ("portfolio", "/portfolio — توزيع المحفظة المقترح"),
+    ]),
+    ("🤖 *القياس الآلي والمحفظة الافتراضية*", [
+        ("autotrade", "/autotrade — تشغيل/إيقاف التداول الآلي الافتراضي"),
+        ("autostats", "/autostats — نتائج القياس ومراكزه المفتوحة وشروط العبور"),
+        ("vfutures", "/vfutures — مراكز Futures الافتراضية (ومنها مراكز القياس)"),
+        ("wallet", "/wallet — المحفظتان: الافتراضية والحقيقية"),
+        ("virtual", "/virtual buy|sell رمز مبلغ — صفقة Spot افتراضية يدوية"),
+        ("vtrades", "/vtrades — إدارة الصفقات الافتراضية المفتوحة"),
+    ]),
+    ("💱 *التداول الحقيقي — يدوي*", [
+        ("live", "/live — ربط منصة التداول الحقيقي"),
+        ("trade", "/trade رمز — تنفيذ حقيقي بحكم /signal"),
+        ("trades", "/trades — صفقاتك الحقيقية"),
+        ("trade_history", "/trade\\_history — سجل الصفقات الحقيقية"),
+        ("trade_portfolio", "/trade\\_portfolio — محفظتك الحقيقية"),
+        ("trade_plan", "/trade\\_plan — خطة التداول الحقيقي الأسبوعية"),
+        ("trade_plan_month", "/trade\\_plan\\_month — خطة التداول الحقيقي الشهرية"),
+        ("trade_close", "/trade\\_close — إغلاق صفقة حقيقية"),
+        ("trade_stop", "/trade\\_stop — إيقاف التداول الحقيقي"),
+        ("execute", "/execute — ⚠️ تنفيذ حقيقي فوري بمبلغ تحدده (بلا حكم /signal ولا وقف)"),
+        ("trade_auto", "/trade\\_auto — الوضع التلقائي للتداول الحقيقي (مؤجّل)"),
+        ("approve", "/approve و/reject — قبول/رفض طلب تنفيذ معلّق"),
+    ]),
+    ("⚙️ *الحساب*", [
+        ("stats", "/stats — إحصائيات حسابك"),
+        ("performance", "/performance — أداء الإشارات حسب النوع"),
+        ("risk", "/risk — مخاطر محفظتك (التراجع، الصفقات المفتوحة، الحدود)"),
+        ("setportfolio", "/setportfolio — ضبط حجم المحفظة"),
+        ("setlimits", "/setlimits — قيود الجلسة"),
+        ("profile", "/profile — ملفك الشخصي والاستبيان"),
+        ("disclaimer", "/disclaimer — إخلاء المسؤولية"),
+        ("about", "/about — عن رائد والدعم الفني"),
+    ]),
+]
+
+
 def _build_commands_text(user_id: int, tier: str, tier_name: str) -> str:
     from core.state_manager import state_manager as _sm
+    from core import access_guard as _ag69
 
     sections = []
-
-    basic = [
-        "/quicksignal — تحليل أولي سريع مع نقاط الدخول والخروج",
-        "/portfolio — استعراض المحفظة",
-        "/trades — الصفقات السابقة والقائمة",
-        ("/stats — إحصائيات حسابك (للمالك: يشمل حالة النظام)" if __import__("core.access_guard", fromlist=["is_owner"]).is_owner(user_id)
-         else "/stats — إحصائيات حسابك"),   # batch73 (E2): مرة واحدة بدل تكرارها في قسم المالك
-        "/live — التداول الحقيقي (ربط منصة)",
-        "/autotrade — تداول تلقائي (تشغيل/إيقاف)",
-        "/setportfolio — ضبط حجم المحفظة",
-        "/upgrade — جدول الباقات والأسعار",
-        "/about — عن رائد والدعم الفني",
-    ]
-    sections.append(("⚙️ *أوامر أساسية — للجميع*", basic))
-
-    if _sm.can_use_command(user_id, "signal"):
-        analysis = [
-            "/signal — إشارة تداول شاملة 5 مصادر",
-            "/news — تحليل الأخبار بالذكاء الاصطناعي",
-            "/regime — حالة السوق",
-            "/backtest — اختبار تاريخي 3 سنوات",
-            "/events — الأحداث الماكرو القادمة",
-        ]
-        sections.append(("📊 *التحليل — فضي+*", analysis))
-
-    if _sm.can_use_command(user_id, "analyze"):
-        deep = [
-            "/analyze — تحليل عميق بالذكاء الاصطناعي",
-            "/liquidity — تحليل السيولة المتقدم",
-            "/onchain — تحليل On-Chain",
-            "/planweek — خطة أسبوعية",
-            "/planmonth — خطة شهرية",
-        ]
-        sections.append(("🔬 *التحليل المتقدم — ذهبي+*", deep))
-
-    if _sm.can_use_command(user_id, "chart"):
-        premium = ["/chart — تحليل شارت بصري (أرفع صورة)"]
-        sections.append(("💎 *ماسي حصراً*", premium))
+    for title, items in COMMAND_GROUPS_B87:
+        shown = []
+        for cmd, line in items:
+            try:
+                ok = _sm.can_use_command(user_id, cmd)
+            except Exception:
+                ok = True
+            if ok:
+                if cmd == "stats" and _ag69.is_owner(user_id):
+                    line = "/stats — إحصائيات حسابك (للمالك: يشمل حالة النظام)"
+                shown.append(line)
+        if shown:
+            sections.append((title, shown))
 
     # batch69: أوامر المدراء والأوامر الفنية تظهر لأصحابها فقط
-    from core import access_guard as _ag69
     if _ag69.is_admin(user_id):
-        admin_cmds = [
+        sections.append(("👑 *المدير*", [
             "/access — الحسابات المسموح لها (الوضع الخاص)",
             "/premium list|info|set — إدارة الباقات",
             "/autotrade users — حسابات التداول الآلي",
             "/autostats رقم — قياس حساب",
-        ]
-        sections.append(("👑 *المدير*", admin_cmds))
+        ]))
     if _ag69.is_owner(user_id):
         sections.append(("🛠️ *المالك — أوامر فنية*", [
             "/killswitch — إيقاف طارئ", "/drift — حالة النموذج", "/review — المراجعة الأسبوعية",
@@ -197,23 +222,12 @@ def _build_commands_text(user_id: int, tier: str, tier_name: str) -> str:
             "/scanstatus — حالة المسح والمجدول",
         ]))
 
-    lines = [f"📋 *أوامرك — {tier_name}*", ""]
+    lines = ["📋 *أوامرك*", ""]
     for title, cmds in sections:
         lines.append(title)
         lines += cmds
         lines.append("")
-
-    if tier == "free":
-        lines += [
-            "━━━━━━━━━━━━━━━━━━",
-            "🔒 *أوامر إضافية بالترقية:*",
-            "🥈 فضي — signal/news/regime/backtest",
-            "🥇 ذهبي — تحليل عميق/تخطيط/سيولة",
-            "💎 ماسي — شارت بصري/300 عملة",
-            "",
-            "📊 /upgrade — لعرض الباقات والأسعار",
-        ]
-
+    lines.append("💡 أضف كلمة full إلى /signal و/analyze و/regime و/liquidity و/onchain و/planweek و/planmonth لعرض التقرير الكامل مباشرة.")
     return "\n".join(lines)
 
 

@@ -45,8 +45,6 @@ def _sm():
     return state_manager
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 # ── سجل القياس ──────────────────────────────────────────────────────────
@@ -66,9 +64,6 @@ def ledger_add(uid: int, rec: dict) -> None:
         logger.warning(f"autoledger add: {e}")
 
 
-def _regime_bucket(desc: str) -> str:
-    d = str(desc or "")
-    return "هابط" if "هابط" in d else "صاعد" if "صاعد" in d else "جانبي" if ("جانبي" in d or "تذبذب" in d) else "غير معروف"
 
 
 # ── البوابات (نفس /trade: قرار /signal + R/R عند سعر التنفيذ) ─────────────
@@ -132,17 +127,8 @@ AUTO_EXTRA = ["BZ", "XAG", "XAU", "SPCX", "MSTR", "CRCL", "SNDK", "TSLA", "INTC"
 AUTO_STOCKS = ["SPCX", "MSTR", "CRCL", "SNDK", "TSLA", "INTC", "GOOGL", "QQQ", "MU", "NVDA"]
 
 
-def _futures_only_b68(sym: str) -> bool:
-    """قرار رحال 2026-11-06: الذهب والفضة والنفط والأسهم الأمريكية المرمّزة — تنفيذ Futures فقط (شراء وبيع، 1x)."""
-    return _perp_only(sym) or str(sym).upper() in AUTO_STOCKS
 
 
-def _perp_only(sym: str) -> bool:
-    try:
-        from core.data_layer import _PERP_ONLY_COMMODITY
-        return str(sym).upper() in _PERP_ONLY_COMMODITY
-    except Exception:
-        return str(sym).upper() in ("XAG", "XAU", "BZ")
 
 
 # batch68b: قائمة احتياطية حين يتعذّر CoinGecko (كان طلب limit=40 مباشرة بعد طلب المسح يُرفض 429 فلا يُفحص شيء)

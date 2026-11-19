@@ -57,7 +57,7 @@ chk("Y6 الصورة: كل رقم مرة", c.count("RSI 32") == 1 and c.count("A
 chk("Y7 المشتقات في سطر", "🔗 Funding −0.0058% | OI +0.52% (ساعة) | CVD +8.7%" in c, c)
 chk("Y8 Fibonacci يبقى والشرح الثابت ينتقل للتفاصيل", "📐 *مستويات Fibonacci*" in c and "0.236 — $9.3803" in c
     and "أقرب دعم فيبو" in c and "قاع نطاق Fib (0.0)" not in c and "من آخر شمعة يومية مكتملة" not in c, c)
-chk("Y9 ما الذي يغيّر الحكم", "• شراء: انتهاء الهبوط القائم (ADX < 25 أو تقارب DI) + ثقة ≥ 55% + تأكيدات شراء 2/4 (حالياً 0/4) + R/R المرجّح ≥ 1:1" in c
+chk("Y9 ما الذي يغيّر الحكم", "• شراء: انتهاء الهبوط القائم (ADX < 25 أو تقارب DI) + ثقة ≥ 65% لتأكيد جهة الشراء (حالياً 29%) + تأكيدات شراء 2/4 (حالياً 0/4) + R/R المرجّح ≥ 1:1" in c
     and "• Short: تأكيد إضافي واحد — CVD بيع ≤ −20%، أو Funding > +0.01%" in c and "Volume Spike" not in c.split("ما الذي يغيّر")[1], c)
 chk("Y10 رابط التفاصيل والتنبيه آخر سطر", "/signal LINK full" in c and lines[-1] == A._DISC and lines[0].startswith("ℹ️ LINK هنا"), lines[-2:])
 chk("Y11 لا خطة خروج والأهداف غير مفعّلة", "خطة الشراء" not in c and "Time Exit" not in c and "المدة المتوقعة" not in c)
@@ -98,7 +98,7 @@ M = A._short_missing_b82
 chk("Y21 Funding لا يُطلب للسلع", not any("Funding" in x for x in M([], True)) and any("Funding" in x for x in M([])))
 c4 = A.signal_card_b82(dict(d, meta=dict(meta, short_b68=dict(sh, flags=[], n_flags=0, reason="تأكيدات Short 0/4 (الحد الأدنى 2)"))))
 chk("Y22 المثنى", "• Short: تأكيدان إضافيان — حجم ≥1.5x بشمعة هابطة" in c4, c4)
-chk("Y23 تنبيه السوق المغلق مختصر", 'if "يفتح" in x' in s)
+chk("Y23 تنبيه السوق المغلق مختصر (موعد الفتح وساعات التداول)", '"يفتح" in x or "ساعات التداول" in x' in s)
 
 # ── Y المرحلة 2: /analyze ───────────────────────────────────
 c5 = A.signal_card_b82(dict(d, title="🧠", price_suffix=" (+5.11% / 24س)", cmd="analyze", meta=dict(meta, short_b68=None),

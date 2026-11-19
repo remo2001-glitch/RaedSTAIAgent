@@ -106,7 +106,6 @@ _TOKENIZED_STOCK_MAP = {
     "XAUT":  {"okx_spot": "XAUt",   "okx_futures": "XAUT",  "yahoo": "XAUUSD=X",  "base": "XAUT",  "is_stock": False, "cg_id": "tether-gold"},
     "XPCY":  {"okx_spot": "xPCY",   "okx_futures": "PCY",   "yahoo": "PCY",        "base": "PCY",   "is_stock": True, "cg_id": None},
     "XEWY":  {"okx_spot": "XEWY",   "okx_futures": "EWY",   "yahoo": "EWY",        "base": "EWY",   "is_stock": True, "cg_id": None},
-    "XQQQ":  {"okx_spot": "XQQQ",   "okx_futures": "QQQ",   "yahoo": "QQQ",        "base": "QQQ",   "is_stock": True, "cg_id": None},
     "XSPY":  {"okx_spot": "XSPY",   "okx_futures": "SPY",   "yahoo": "SPY",        "base": "SPY",   "is_stock": True, "cg_id": None},
 }
 
@@ -616,11 +615,6 @@ def _clean_symbol(symbol: str) -> str:
     return sym
 
 # ─── تحويل interval لـ CoinGecko ─────────────────────────────
-def _cg_interval(interval: str) -> str:
-    """CoinGecko يدعم: daily فقط للفترات الطويلة."""
-    if interval in ("1d","1w","1M"):
-        return "daily"
-    return "daily"   # fallback آمن لأي interval
 
 # ─── headers ──────────────────────────────────────────────────
 _H_CG = {
@@ -721,16 +715,7 @@ import time as _cache_time
 _OHLCV_CACHE: dict = {}
 _CACHE_TTL = 60  # ثانية
 
-def _get_cached_ohlcv(key: str) -> list | None:
-    if key in _OHLCV_CACHE:
-        ts, data = _OHLCV_CACHE[key]
-        if _cache_time.time() - ts < _CACHE_TTL:
-            return data
-    return None
 
-def _set_cached_ohlcv(key: str, data: list) -> None:
-    if data:
-        _OHLCV_CACHE[key] = (_cache_time.time(), data)
 
 
 class DataLayer:

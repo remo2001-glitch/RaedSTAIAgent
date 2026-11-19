@@ -42,12 +42,6 @@ async def _reply(update: Update, text: str, **kwargs):
         async def edit_text(self, *a, **kw): pass
     return _FakeMsg()
 from core.database      import db
-# undefined_keyboard_helper_fix: _plan_keyboard/_main_keyboard تُستدعيان في
-# cmd_upgrade/unknown_command/handle_text لكن لم تُستورَدا في هذا الملف
-# إطلاقاً — NameError مضمون عند أي وصول لهذه المسارات تحديداً (أوامر غير
-# معروفة، أو نص عادي خارج أي محادثة نشطة، أو /upgrade). نفس فئة خلل
-# dir_norm (متغيّر/دالة تُستخدَم دون تعريف أو استيراد سابق).
-from core.commands      import _plan_keyboard, _main_keyboard
 
 
 from decimal import Decimal as _Decimal, ROUND_HALF_UP as _ROUND_HALF_UP
@@ -63,20 +57,8 @@ _CALLBACK_PATTERN = _re_sec.compile(
     r"_(buy|sell|long|short|confirm|cancel|close)_[\d.]+(?:_lev\d+)?$"
 )
 
-def _safe_symbol(s: str) -> str:
-    s = s.upper().strip()
-    if not _SAFE_SYMBOL_RE.match(s):
-        raise ValueError(f"رمز غير صالح: {s}")
-    return s
 
-def _safe_leverage(lev: int) -> int:
-    if lev not in _ALLOWED_LEVERAGE:
-        lev = min(_ALLOWED_LEVERAGE, key=lambda x: abs(x - lev))
-    return lev
 
-def _log_connect(ex_name: str, api_key: str, testnet: bool) -> str:
-    key_hash = _hashlib_sec.sha256(api_key.encode()).hexdigest()[:8] if api_key else "none"
-    return f"live connect: {ex_name.upper()} | key_hash={key_hash} | testnet={testnet}"
 
 
 # ═══════════════════════════════════════════════
@@ -153,22 +135,9 @@ def _calc_pnl(buy_price: float, sell_price: float, qty: float) -> float:
     except Exception:
         return (sell_price - buy_price) * qty  # fallback
 
-def _calc_pnl_pct(entry: float, current: float) -> float:
-    """حساب نسبة PnL % بدقة"""
-    if not entry or entry <= 0:
-        return 0.0
-    try:
-        e = _Decimal(str(entry))
-        c = _Decimal(str(current))
-        pct = ((c - e) / e * 100).quantize(_Decimal("0.01"), rounding=_ROUND_HALF_UP)
-        return float(pct)
-    except Exception:
-        return (current - entry) / entry * 100 if entry else 0.0
 
 
 
-def _sig() -> str:
-    return "\n\n─────────────────\n📊 رائد التداول الذكي"
 
 logger = logging.getLogger(__name__)
 
@@ -2301,6 +2270,16 @@ async def cmd_risk(update: Update, context: ContextTypes.DEFAULT_TYPE):
                  or float(engine.risk_engine.cfg.get("portfolio_size") or 10000)
         report = engine.risk_engine.status_report(pv, user_id=_uid) or {}
         report["open_positions"] = len(_open_positions_map(engine, _uid, _live))
+        _auto87 = 0
+        if not _live:   # batch87: مراكز Futures (ومنها مراكز القياس الآلي) كانت لا تُعدّ هنا ⇒ «صفقات مفتوحة: 0» خلاف /autostats
+            try:
+                from core.state_manager import state_manager as _s87
+                from core.virtual_wallet import VirtualWallet as _V87
+                _f87 = _V87(_s87.get_virtual_wallet(_uid) or {}).futures or {}
+                report["open_positions"] += len(_f87)
+                _auto87 = sum(1 for _p in _f87.values() if (_p or {}).get("logic_ver"))
+            except Exception as _e87:
+                logger.debug(f"cmd_risk futures count: {_e87}")
         ev_mult, _ = engine.event_risk.get_exposure_multiplier()
         cfg    = engine.risk_engine.cfg
         lines  = [
@@ -2309,7 +2288,7 @@ async def cmd_risk(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"💰 المحفظة: ${report.get('portfolio',0):,.0f}",
             f"📉 Drawdown: {report.get('drawdown_pct',0):.1f}%",
             f"💸 PnL اليوم: ${report.get('today_pnl',0):+,.2f}",
-            f"📊 صفقات مفتوحة: {report.get('open_positions',0)}",
+            f"📊 صفقات مفتوحة: {report.get('open_positions',0)}" + (f" (منها قياس آلي {_auto87})" if _auto87 else ""),
             f"📅 تعرض الأحداث: {ev_mult:.0%}",
             "",
             f"• عتبة الثقة: {float(cfg.get('min_confidence',0.65)):.0%}",
@@ -2522,8 +2501,7 @@ async def cmd_vtrades(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # dead_code_cleanup_fix: أُزيلت هنا النسخة القديمة (طبق الأصل) من cmd_virtual
-# — راجع التعليق المطابق في core/commands.py لنفس السبب الكامل (أسعار ثابتة
-# قديمة، بلا signal_id، وغير مُسجَّلة أصلاً).
+# (أسعار ثابتة قديمة، بلا signal_id، وغير مُسجَّلة أصلاً).
 #
 # virtual_command_fix: أمر /virtual كان غير مُسجَّل تحت أي اسم دالة في كل
 # المشروع، رغم اقتراحه للمستخدم في 5 رسائل ("/virtual buy BTC 100"). أُعيد
@@ -2617,87 +2595,14 @@ async def cmd_about(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ══ /upgrade ══════════════════════════════════════════════════════════════════
 
-async def cmd_upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await db.add_to_memory(update.effective_user.id, "/upgrade")
-    msg = (
-        f"{E['star']} باقات رائد التداول الذكي\n\n"
-        f"{'─' * 28}\n"
-        f"🆓 مجاني — $0/شهر\n"
-        f"محفظة افتراضية | 5 عملات | تنبيه واحد\n\n"
-        f"🥈 فضي — $9/شهر\n"
-        f"كل البورصات | 10 تنبيهات | تداول حقيقي\n\n"
-        f"🥇 ذهبي — $29/شهر ⭐ الأكثر طلباً\n"
-        f"تداول آلي TWAP | تحليل AI | أولوية الدعم\n\n"
-        f"💎 ماسي — $99/شهر\n"
-        f"كل الميزات | دعم 24/7 | استراتيجيات مخصصة\n\n"
-        f"{'─' * 28}\n"
-        f"للاشتراك تواصل مع: @admin"
-    )
-    await update.message.reply_text(msg + _sig(), reply_markup=_plan_keyboard())
 
 
 # ══ /security ══════════════════════════════════════════════════════════════════
 
-async def cmd_security(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = (
-        f"{E['shield']} مركز الأمان — رائد التداول الذكي\n\n"
-        f"{'─' * 28}\n"
-        f"{E['lock']} رائد لن يطلب أبداً:\n"
-        f"  ❌ كلمة مرور أو رمز 2FA\n"
-        f"  ❌ تحويل أموال إلى أي عنوان\n"
-        f"  ❌ النقر على روابط خارجية\n"
-        f"  ❌ مفاتيح محفظتك الخاصة\n"
-        f"  ❌ عبارة الاسترداد (Seed Phrase)\n\n"
-        f"{'─' * 28}\n"
-        f"{E['ok']} نصائح الأمان:\n"
-        f"  ✅ استخدم مفاتيح API بصلاحية Read+Trade فقط\n"
-        f"  ✅ لا تعطِ صلاحية السحب أبداً\n"
-        f"  ✅ فعّل 2FA على البورصة\n"
-        f"  ✅ راجع الصلاحيات أسبوعياً\n\n"
-        f"{'─' * 28}\n"
-        f"{E['warn']} إذا شككت في أي رسالة:\n"
-        f"تجاهلها فوراً وأبلغ: @admin"
-    )
-    await update.message.reply_text(msg)
 
 
 # ══ /admin ════════════════════════════════════════════════════════════════════
 
-async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # security_fix C4-C6: Admin authorization check
-    _caller_id = update.effective_user.id if update.effective_user else 0
-    from core.admin_ids import get_admin_ids
-    _cfg_extra = None
-    try:
-        _cfg = context.bot_data.get("raed_engine")
-        if _cfg:
-            _cfg_extra = _cfg.config.get("ADMIN_USER_ID") or _cfg.config.get("OWNER_CHAT_ID")
-    except Exception:
-        _cfg_extra = None
-    _admin_ids = get_admin_ids(_cfg_extra)
-    if _caller_id not in _admin_ids:
-        await update.message.reply_text("⛔ هذا الأمر للمشرفين فقط.")
-        return
-    stats = await db.get_stats()
-    user_counts = stats["users"]
-    msg = (
-        f"{E['settings']} لوحة المشرف — رائد\n\n"
-        f"{'─' * 28}\n"
-        f"👥 إجمالي المستخدمين: {user_counts['total']}\n"
-        f"  🆓 مجاني:  {user_counts.get('free', 0)}\n"
-        f"  🥈 فضي:   {user_counts.get('silver', 0)}\n"
-        f"  🥇 ذهبي:  {user_counts.get('gold', 0)}\n"
-        f"  💎 ماسي:  {user_counts.get('diamond', 0)}\n\n"
-        f"{'─' * 28}\n"
-        f"{E['shield']} الأمان:\n"
-        f"  أنماط محظورة: {stats['blocked_patterns']}\n"
-        f"  Redis: {'✅' if stats['redis_ping'] else '❌'}\n\n"
-        f"الأوامر:\n"
-        f"  /broadcast [رسالة] — إرسال للجميع\n"
-        f"  /setplan [user_id] [plan] — تغيير الباقة\n"
-        f"  /ban [user_id] — حظر مستخدم\n"
-    )
-    await update.message.reply_text(msg)
 
 
 # ══ /profile ═════════════════════════════════════════════════════════════════
@@ -2841,53 +2746,12 @@ async def _start_survey(update, context):
         parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(days_btns))
 
 
-async def cb_sv_day(update, context):
-    query = update.callback_query; await query.answer()
-    context.user_data.setdefault("survey_new",{})["dob_day"] = int(query.data.split("_")[-1])
-    months = [["يناير","فبراير","مارس"],["أبريل","مايو","يونيو"],
-              ["يوليو","أغسطس","سبتمبر"],["أكتوبر","نوفمبر","ديسمبر"]]
-    btns = [[InlineKeyboardButton(m, callback_data=f"sv_month_{r*3+c+1}")
-             for c,m in enumerate(row)] for r,row in enumerate(months)]
-    await query.edit_message_text(
-        f"اليوم: {context.user_data['survey_new']['dob_day']}\nاختر الشهر:",
-        reply_markup=InlineKeyboardMarkup(btns))
 
 
-async def cb_sv_month(update, context):
-    query = update.callback_query; await query.answer()
-    context.user_data.setdefault("survey_new",{})["dob_month"] = int(query.data.split("_")[-1])
-    years = list(range(2006,1949,-1))
-    btns  = [[InlineKeyboardButton(str(y),callback_data=f"sv_year_{y}")
-              for y in years[i:i+5]] for i in range(0,30,5)]
-    await query.edit_message_text("اختر السنة:", reply_markup=InlineKeyboardMarkup(btns))
 
 
-async def cb_sv_year(update, context):
-    query = update.callback_query; await query.answer()
-    context.user_data.setdefault("survey_new",{})["dob_year"] = int(query.data.split("_")[-1])
-    btns = [[InlineKeyboardButton(c,callback_data=f"sv_co_{i}")
-             for i,c in [(r+j,_SURVEY_COUNTRIES[r+j])
-             for j in range(min(3,len(_SURVEY_COUNTRIES)-r))
-             if r+j < len(_SURVEY_COUNTRIES)]]
-            for r in range(0,len(_SURVEY_COUNTRIES),3)]
-    await query.edit_message_text("🌍 اختر بلدك:", reply_markup=InlineKeyboardMarkup(btns))
 
 
-async def cb_sv_country(update, context):
-    query = update.callback_query; await query.answer()
-    ci = int(query.data.split("_")[-1])
-    country = _SURVEY_COUNTRIES[ci] if ci < len(_SURVEY_COUNTRIES) else "أخرى"
-    context.user_data.setdefault("survey_new",{})["country"] = country
-    context.user_data["survey_step"] = 1
-    sv = context.user_data["survey_new"]
-    btns = InlineKeyboardMarkup([[
-        InlineKeyboardButton("💰 حفظ رأس المال", callback_data="survey_goal_preserve"),
-        InlineKeyboardButton("📈 نمو معتدل",      callback_data="survey_goal_moderate"),
-        InlineKeyboardButton("🚀 نمو مرتفع",      callback_data="survey_goal_aggressive"),
-    ]])
-    await query.edit_message_text(
-        f"✅ البلد: {country}\n\nسؤال 1/20: ما هدفك الأساسي من التداول؟",
-        parse_mode="Markdown", reply_markup=btns)
 
 
 async def cb_survey_goal(update, context):
@@ -2977,14 +2841,6 @@ async def _show_psy_question(query, context, q_idx: int):
                                         reply_markup=InlineKeyboardMarkup(btns))
 
 
-async def cb_sv_psy(update, context):
-    query = update.callback_query; await query.answer()
-    parts = query.data.split("_")   # sv_psy_QIDX_LETTER
-    q_idx, answer = int(parts[2]), parts[3]
-    answers = context.user_data.setdefault("psy_answers", [])
-    while len(answers) <= q_idx: answers.append(None)
-    answers[q_idx] = answer
-    await _show_psy_question(query, context, q_idx + 1)
 
 
 async def _finish_survey(query, context):
@@ -3879,30 +3735,6 @@ def register(app):
     app.add_handler(CallbackQueryHandler(cb_vreset_execute,pattern=r"^vreset_execute$"))
     app.add_handler(CallbackQueryHandler(cb_vreset_cancel, pattern=r"^vreset_cancel$"))
 
-@require_tier("setcustom")
-async def cmd_setcustom(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """يضبط باقة خاصة لمستخدم — للمدير فقط. /setcustom user_id coins label"""
-    engine = _eng(context)
-    if not engine: return
-    user_id = update.effective_user.id
-    args = context.args or []
-    if len(args) < 2:
-        await update.message.reply_text(
-            "⚙️ *الاستخدام:*\n`/setcustom [user_id] [coins] [label]`\n\n"
-            "مثال: `/setcustom 123456 50 مشرف`",
-            parse_mode="Markdown"); return
-    try:
-        target = int(args[0])
-        coins  = min(int(args[1]), 9999)
-        label  = " ".join(args[2:]) if len(args) > 2 else "⚙️ خاصة"
-        config = {"coins": coins, "label": label}
-        ok = _sm.set_custom_tier(target, config, requester_id=user_id)
-        await update.message.reply_text(
-            f"{'✅' if ok else '❌'} باقة خاصة لـ `{target}`\n"
-            f"عملات: {coins} | الاسم: {label}",
-            parse_mode="Markdown")
-    except Exception as e:
-        await update.message.reply_text(f"❌ خطأ — حاول مرة أخرى بعد قليل")
 
 
 async def cb_autotrade_decision(update, context):

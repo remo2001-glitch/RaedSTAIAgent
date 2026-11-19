@@ -1051,26 +1051,6 @@ def _calc_suggested_leverage(
     return 3  # محايد مع ثقة عالية
 
 
-def check_macro_trend(candles: list) -> str:
-    """
-    يتحقق من الاتجاه الكبير (200 شمعة) للتمييز بين:
-    - ارتداد ضمن هبوط (bear rally)
-    - اتجاه صاعد حقيقي
-    """
-    if len(candles) < 50:
-        return "unknown"
-    closes = [c["close"] for c in candles]
-    ema50  = _ema(closes, 50)
-    ema200 = _ema(closes, 200) if len(closes) >= 200 else ema50   # batch13: بديل موحّد مع باقي الملفات
-    price  = closes[-1]
-
-    # في هبوط كبير: حتى لو السعر ارتفع مؤخراً — الاتجاه الكبير هابط
-    if price < ema200 and ema50 < ema200:
-        return "macro_bear"          # ارتداد ضمن هبوط
-    elif price > ema200 and ema50 > ema200:
-        return "macro_bull"          # اتجاه صاعد حقيقي
-    else:
-        return "macro_transition"    # انتقال / غير محدد
 
 
 # Singletons

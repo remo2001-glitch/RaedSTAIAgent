@@ -287,13 +287,6 @@ async def _fetch_pair_full_b53(resolution: PairResolution, data_layer):
     return price, support, resistance, lean, near_sup
 
 
-async def _fetch_pair_price_and_levels(resolution: PairResolution, data_layer):
-    """يجلب سعر الزوج المباشر + دعم/مقاومة (من شموع الزوج). يُعيد
-    (price, support_or_None, resistance_or_None) أو None عند الفشل."""
-    full = await _fetch_pair_full_b53(resolution, data_layer)
-    if full is None:
-        return None
-    return full[0], full[1], full[2]  # batch54: الدالة الكاملة تُرجع الآن 5 عناصر (الأخير أقرب دعم مباشر)
 
 
 async def build_pair_addon_lines(resolution: PairResolution, data_layer) -> Optional[List[str]]:
