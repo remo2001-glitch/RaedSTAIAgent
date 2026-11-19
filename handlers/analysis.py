@@ -161,14 +161,23 @@ async def alias_args_b95(update, context) -> str:
         if dl is None or not hasattr(dl, "resolve_display_alias_b95"):
             return ""
         for i, a in enumerate(list(args)):
+            _xa = str(a or "").upper().strip()
+            if _xa.startswith("X") and len(_xa) >= 3 and hasattr(dl, "discover_x_stock_b96"):
+                await dl.discover_x_stock_b96(_xa)   # OO3 (b96): سهم فوري جديد بقاعدة X ⇒ يُربط بعقده قبل التنفيذ
             k = alias_token_b95(a)
             if not k:
                 continue
             api = await dl.resolve_display_alias_b95(k)
             if api and api != k:
                 args[i] = api
-                note = (f"ℹ️ {k} في تطبيق OKX = عقد {api}-USDT-SWAP (Futures/Perp) — التحليل التالي لهذا العقد"
-                        f"؛ لا زوج فوري باسم {k} على OKX")
+                try:   # OO2 (b96): الزوج الفوري يُذكر إن وُجد (XANT) بدل افتراض غيابه
+                    from core.data_layer import resolve_stock_symbol as _rss96
+                    _sp96 = _rss96(api, "spot").get("okx_symbol") or ""
+                except Exception:
+                    _sp96 = ""
+                note = (f"ℹ️ {k} في تطبيق OKX = عقد {api}-USDT-SWAP (Futures)"
+                        + (f"، والسهم الفوري {_sp96}-USDT (Spot)" if _sp96 and _sp96.upper() != api.upper() else "")
+                        + f" — التحليل التالي لـ {api}")
                 try:
                     msg = getattr(update, "effective_message", None)
                     if msg is not None:
@@ -2353,6 +2362,12 @@ def _get_market_hours_warning(symbol: str, user_tz_offset: int = 3) -> str:
     """
     from datetime import datetime, timezone, timedelta
     _sym = symbol.upper()
+    try:   # b96: شركة خاصة مرمّزة (Anthropic: XANT/ANTHROPIC) غير مدرجة في NYSE/NASDAQ ⇒ لا ساعات سوق أمريكي
+        from core.data_layer import _TOKENIZED_STOCK_MAP as _TSM96
+        if _TSM96.get(_sym, {}).get("private"):
+            return ""
+    except Exception:
+        pass
     _now_utc = datetime.now(timezone.utc)
     _weekday = _now_utc.weekday()  # 0=Mon, 6=Sun
     _hour_utc = _now_utc.hour
@@ -5985,8 +6000,13 @@ async def cmd_regime(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text += ("\n\n📡 *المصدر:* OKX (الشموع والسعر)" + (" + Fear & Greed + هيمنة BTC" if _crypto87 else "")   # batch67 (#919) + batch87
                  + " | 🤖 رائد التداول الذكي")
         _note_ee3 = regime_mkt_note_ee3(_mk_src_ee3, _mk87, symbol).strip()   # EE3: سبب اختيار السوق وطريقة التبديل
-        if _perp_only95 and _note_ee3:   # b95: لا سوق فوري للأصل ⇒ لا يُعرض تبديل إلى spot
-            _note_ee3 = "ℹ️ لا سوق فوري لهذا الأصل على OKX — العقد الدائم فقط"
+        if _perp_only95 and _note_ee3:   # b95: لا سوق فوري للأصل ⇒ لا يُعرض تبديل إلى spot — OO2 (b96): بعد التحقق الفعلي
+            try:
+                _spot96 = bool((await engine.data_layer.check_spot_available(symbol)).get("available"))
+            except Exception:
+                _spot96 = True
+            if not _spot96:
+                _note_ee3 = "ℹ️ لا سوق فوري لهذا الأصل على OKX — العقد الدائم فقط"
         if _note_ee3:
             text += "\n" + _note_ee3
         if not _full84r:   # batch84 (Y المرحلة 3): التصنيف + سطر المؤشرات + الإجراء والتوصية والتحذيرات، والتفاصيل بالزر
@@ -6105,6 +6125,13 @@ def _mkt_tag_b41(mkttype, candles=None, symbol: str = "") -> str:
             return " · 📉 Futures (مرجعي: لا عقد دائم للأصل — البيانات من الفوري)"   # batch67 (#960)
         return " · 📉 Futures"
     if mkttype == "spot":
+        try:
+            _young = candles[-1].get("spot_young") if (candles and isinstance(candles[-1], dict)) else None
+        except Exception:
+            _young = None
+        if src.endswith("_perp") and _young is not None:   # OO1 (b96): سهم فوري حديث الإدراج — السعر فوري والتاريخ من العقد
+            _pi = str(candles[-1].get("perp_inst") or "العقد الدائم")
+            return f" · 💱 Spot (حديث الإدراج: {int(_young)} شمعة يومية — الشموع من {_pi})"
         if src.endswith("_perp"):
             return " · 📈 Futures/Perp (لا سوق فوري للأصل على OKX — البيانات من العقد الدائم)"
         if src == "coingecko":
