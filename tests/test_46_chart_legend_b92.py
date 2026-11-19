@@ -62,7 +62,7 @@ asyncio.run(ne._gemini_vision_b52([b"img"], "s", "u", max_tokens=200, timeout=12
 chk("JJ1a لا يُرسل thinkingConfig مجدداً للنموذج نفسه", CALLS and CALLS[0] == ("gemini-3.8-flash", False, CALLS[0][2]), CALLS)
 chk("JJ1e سبب الفشل مقروء", NewsEngine._gemini_last_reason_b92 in ("", "انتهت مهلة Gemini", "ضغط عالٍ لدى Gemini"))
 s = src("core/news.py")
-chk("JJ1b قراءة الشريط: 12ث / 40ث / بلا إعادة 503", "timeout=12,\n                thinking_level=\"minimal\", budget=40.0, retry_5xx=False" in s)
+chk("JJ1b+LL1 قراءة الشريط: 30ث / 45ث / بلا إعادة 503", "timeout=30,\n                thinking_level=\"minimal\", budget=45.0, retry_5xx=False" in s)
 
 # ── JJ1 (ج): احتياط Groq للشريط ────────────────────────────────────
 chk("JJ1c المكتشف القديم المهمل حُذف والاحتياط موجود", "async def detect_market_type_from_image" not in s and "async def read_strip_groq_b92" in s
@@ -77,7 +77,7 @@ except ImportError:
     chk("JJ1c (Pillow غير متاح — تخطٍّ)", True)
 a = src("handlers/analysis.py")
 chk("JJ1c القراءة الجزئية لا تُعامَل شريطاً كاملاً", '_strip_only_b92, _legend_b51 = True, {}' in a and "_leg_mkt_b91 = _leg_mkt_b92" in a
-    and "قراءة جزئية للشريط العلوي (الرمز ونوع السوق فقط)" in a)
+    and "قراءة جزئية للشريط العلوي (الرمز ونوع السوق والسعر)" in a)
 chk("JJ1d تعليمات البند 0 تذكر «العقود الدائمة»", "«العقود الدائمة» أو Perpetual أو Swap أو «عقود آجلة» = Futures/Perp" in s)
 
 # ── JJ2/JJ3 ────────────────────────────────────────────────────

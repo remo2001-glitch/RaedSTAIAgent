@@ -9490,7 +9490,9 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
         if not _live_px_chart and _market_px_chart > 0:
             _live_px_chart = float(_market_px_chart)  # batch50: لا نقارن سعر الصورة بنفسه
-        _chart_acc_line = _chart_accuracy_line_px(float((_legend_b51 or {}).get("PRICE", 0) or 0), _live_px_chart, _chart_quote)
+        # LL2 (b94): سعر القراءة الجزئية (Groq) يدخل سطر الدقة حين لا يتوفر الشريط الكامل
+        _chart_acc_line = _chart_accuracy_line_px(float((_legend_b51 or {}).get("PRICE", 0) or 0) or float(_img_px_b93 or 0),
+                                                  _live_px_chart if not _px_mismatch_b93 else 0.0, _chart_quote)
         if _chart_acc_line:
             header_lines.append(_chart_acc_line)
         if _chart_img_note_b53:
@@ -9547,7 +9549,7 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         _why_b92 = str(getattr(engine.news_engine, "legend_fail_reason_b92", "") or "")
         if not _legend_b51 and _strip_only_b92:
-            _chart_rr_notes.append("ℹ️ قراءة جزئية للشريط العلوي (الرمز ونوع السوق فقط)" + (f" — {_why_b92}" if _why_b92 else "")
+            _chart_rr_notes.append("ℹ️ قراءة جزئية للشريط العلوي (الرمز ونوع السوق والسعر)" + (f" — {_why_b92}" if _why_b92 else "")
                                    + "؛ أرقام المؤشرات من قراءة النموذج وحدها")
         elif not _legend_b51:
             _chart_rr_notes.append("ℹ️ تعذّرت القراءة الآلية للشريط العلوي (الرمز والمؤشرات)" + (f" — {_why_b92}" if _why_b92 else "")

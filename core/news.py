@@ -1623,7 +1623,8 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
     _gemini_models_cache_b52 = None  # آخر نموذج Gemini نجح (يُجرَّب أولاً)
     _gemini_cooldown_b54 = {}        # batch54: نموذج → وقت انتهاء تبريد 429 (يتخطّاه بدل طلب مرفوض)
     _gemini_last_b54 = {}            # batch54: آخر finishReason/thoughtsTokenCount (للتشخيص)
-    _gemini_no_thinking_b92 = set()  # JJ1 (أ): نماذج رفضت thinkingConfig (HTTP 400) — لا يُرسل لها مجدداً
+    _gemini_no_thinking_b92 = set()  # JJ1 (أ): نماذج رفضت كل مستويات التفكير المرسلة (HTTP 400) — بلا thinkingConfig
+    _gemini_think_level_b94 = {}     # LL1 (ب): نموذج ⇒ أدنى مستوى تفكير قبله (minimal/low) — لا يُعاد تجريب المرفوض
     _gemini_last_reason_b92 = ""     # JJ1 (هـ): سبب آخر فشل بصيغة مقروءة
 
     @staticmethod
@@ -1701,12 +1702,22 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
                 continue
             tried.add(model)
             # batch54: نماذج 3.x تفكّر افتراضياً وتوكنات التفكير تُحسب من سقف الإخراج فيُبتر الرد؛ نحدّد مستوى التفكير
-            _thk_ok = model not in NewsEngine._gemini_no_thinking_b92   # JJ1 (أ)
-            for use_thinking in ((True, False) if (_thk_ok and ("2.5" in model or thinking_level)) else (False,)):
+            # LL1 (ب، b94): رفض «minimal» ⇒ «low» قبل حذف الإعداد — بلا thinkingConfig يفكّر النموذج بمستواه الافتراضي
+            # (عالٍ) فيبطؤ ويتجاوز المهلة. المستوى المقبول يُتذكَّر لكل نموذج.
+            if model in NewsEngine._gemini_no_thinking_b92:
+                _variants = [None]
+            elif "2.5" in model:
+                _variants = ["budget", None]
+            elif thinking_level:
+                _start = NewsEngine._gemini_think_level_b94.get(model, thinking_level)
+                _variants = [_start] + (["low"] if _start == "minimal" else []) + [None]
+            else:
+                _variants = [None]
+            for use_thinking in _variants:
                 gen_cfg = {"temperature": 0.1, "maxOutputTokens": int(max_tokens) * (2 if "2.5" not in model else 1)}
                 if use_thinking:
-                    gen_cfg["thinkingConfig"] = ({"thinkingBudget": int(thinking)} if "2.5" in model
-                                                 else {"thinkingLevel": thinking_level})
+                    gen_cfg["thinkingConfig"] = ({"thinkingBudget": int(thinking)} if use_thinking == "budget"
+                                                 else {"thinkingLevel": use_thinking})
                 body = {"contents": [{"role": "user", "parts": parts}], "generationConfig": gen_cfg}
                 if system_text:
                     body["systemInstruction"] = {"parts": [{"text": system_text}]}
@@ -1740,6 +1751,8 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
                         break
                     logger.info(f"Gemini Vision ({model}): {len(txt)} حرف ✅")
                     NewsEngine._gemini_models_cache_b52 = [model] + [m for m in models if m != model]
+                    if use_thinking and use_thinking != "budget":
+                        NewsEngine._gemini_think_level_b94[model] = use_thinking
                     return txt, "ok"
                 except urllib.error.HTTPError as e:
                     err = ""
@@ -1774,8 +1787,11 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
                         return None, "auth"
                     if e.code == 400 and use_thinking:
                         if "thinking" in err.lower():
-                            NewsEngine._gemini_no_thinking_b92.add(model)   # JJ1 (أ)
-                        continue  # أعد المحاولة بلا thinkingConfig
+                            if use_thinking == "minimal":
+                                NewsEngine._gemini_think_level_b94[model] = "low"   # LL1 (ب): التالي «low»
+                            else:
+                                NewsEngine._gemini_no_thinking_b92.add(model)        # JJ1 (أ): حتى «low» مرفوض
+                        continue  # المستوى التالي (low ثم بلا thinkingConfig)
                     status = "error"
                     break
                 except Exception as ge:
@@ -1827,10 +1843,10 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
             if not crops:
                 return {}
             _sys_lg = "أنت أداة نسخ دقيقة للأرقام. أجب بالأسطر المطلوبة فقط بلا تفكير ولا شرح."
-            # JJ1 (ب): مهلة الطلب 12ث، سقف كلي 40ث، وبلا إعادة عند 503 — الانتقال فوراً للنموذج التالي
+            # JJ1 (ب) + LL1 (أ): مهلة الطلب 30ث، سقف كلي 45ث، وبلا إعادة عند 503 — الانتقال فوراً للنموذج التالي
             txt, st = await self._gemini_vision_b52(
-                crops, _sys_lg, _cv.legend_prompt(), max_tokens=2500, thinking=0, timeout=12,
-                thinking_level="minimal", budget=40.0, retry_5xx=False)
+                crops, _sys_lg, _cv.legend_prompt(), max_tokens=2500, thinking=0, timeout=30,
+                thinking_level="minimal", budget=45.0, retry_5xx=False)   # LL1 (أ، b94): Gemini يرد في ≈ 30–35ث تحت الضغط
             if not txt:
                 self.legend_fail_reason_b92 = NewsEngine._gemini_last_reason_b92 or {"rate": "حد طلبات Gemini", "auth": "مفتاح Gemini مرفوض"}.get(st, "Gemini غير متاح")
                 logger.info(f"chart legend: Gemini {st} ({self.legend_fail_reason_b92}) — قراءة الشريط عبر Groq ثم القراءة الحرة")
@@ -1841,8 +1857,8 @@ Charles Schwab ← تشارلز شواب). لا تترك أي كلمات إنج�
             if _cv.legend_is_truncated(txt):
                 logger.warning(f"chart legend: رد مبتور ({len(txt)} حرف، ناقص {len(_cv.legend_missing_keys(txt))} مفتاحاً) — {self._gemini_last_b54}")
                 txt2, st2 = await self._gemini_vision_b52(
-                    crops, _sys_lg, _cv.legend_prompt(), max_tokens=4000, thinking=0, timeout=12,
-                    thinking_level="minimal", budget=25.0, retry_5xx=False)
+                    crops, _sys_lg, _cv.legend_prompt(), max_tokens=4000, thinking=0, timeout=30,
+                    thinking_level="minimal", budget=35.0, retry_5xx=False)
                 if txt2:
                     txt2 = _re_lg.sub(r"<think>.*?</think>", "", txt2, flags=_re_lg.S | _re_lg.I).strip()
                     if len(_cv.legend_missing_keys(txt2)) < len(_cv.legend_missing_keys(txt)):
