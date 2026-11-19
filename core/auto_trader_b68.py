@@ -826,7 +826,9 @@ async def open_rows_b81(engine, uid: int) -> list:
                 hrs = (time.time() - _op.timestamp()) / 3600.0
             except Exception:
                 hrs = 0
+            _mh = float(p.get("max_hold_hours") or 0) or float(getattr(VirtualWallet, "LEGACY_MAX_HOLD_HOURS", AUTO_HOLD_HOURS))
             rows.append({"sym": bs, "side": p.get("side"), "hours": hrs, "net": net,
+                         "hold_left_h": (_mh - hrs if hrs > 0 else None),   # FF1: نفس قاعدة futures_exit_reason
                          "net_pct": (net / mg * 100 if mg else 0), "tp1_done": bool(p.get("tp1_done")),
                          "to_tp1_pct": (abs(tp1 - px) / px * 100 if tp1 > 0 and px > 0 else None),
                          "to_sl_pct": (abs(px - sl) / px * 100 if sl > 0 and px > 0 else None)})
@@ -851,6 +853,24 @@ def _pct_b82(x: float) -> str:
     return f"{'+' if x > 0 else '−'}{v}%"
 
 
+def hold_left_text_ff1(left_h) -> str:
+    """FF1 (رحال 2026-11-19): موعد الخروج الزمني (AUTO_HOLD_HOURS) لكل مركز قياس — عرض فقط؛ الفحص كل 5 دقائق."""
+    if left_h is None:
+        return ""
+    try:
+        h = float(left_h)
+    except Exception:
+        return ""
+    if h <= 0:
+        return " | ⏰ الخروج الزمني مستحق (عند الفحص التالي خلال 5 دقائق)"
+    if h < 1:
+        return " | ⏰ خروج زمني خلال أقل من ساعة"
+    if h < 48:
+        n = int(h)   # للأسفل: لا نعد بأكثر مما بقي
+        return " | ⏰ خروج زمني بعد " + ("ساعة" if n == 1 else "ساعتين" if n == 2 else f"{n} ساعات" if n <= 10 else f"{n} ساعة")
+    return f" | ⏰ خروج زمني بعد {h / 24:.1f} يوم"
+
+
 def open_lines_b81(open_rows: list) -> list:
     """batch81 (S2، مبدأ رحال: بيانات كل صفقة واضحة): سطر لكل مركز قياس مفتوح.
     open_rows: [{sym, side, hours, net, net_pct, to_tp1_pct, to_sl_pct, tp1_done}]"""
@@ -868,6 +888,7 @@ def open_lines_b81(open_rows: list) -> list:
                 line += f" | إلى TP1 {float(r['to_tp1_pct']):.1f}%"
             if r.get("to_sl_pct") is not None:
                 line += f" | إلى الوقف {float(r['to_sl_pct']):.1f}%"
+            line += hold_left_text_ff1(r.get("hold_left_h"))
             out.append(line)
         except Exception:
             continue
