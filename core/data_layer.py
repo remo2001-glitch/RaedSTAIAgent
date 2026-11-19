@@ -995,6 +995,35 @@ class DataLayer:
 
     _swap_bases_b93 = (0.0, [])   # (وقت الجلب، قائمة أسس عقود SWAP-USDT على OKX)
 
+    async def resolve_display_alias_b95(self, symbol: str) -> str:
+        """NN1 (b95): اسم التطبيق ⇒ معرّف الـAPI على مستوى النظام (ANT ⇒ ANTHROPIC).
+        يُعتمد فقط إن لم يكن للاسم نفسه زوج فوري ولا عقد دائم على OKX وكان عقد البديل قائماً — وإلا يبقى الرمز كما هو
+        (كان «/signal ANT» يسقط إلى CoinGecko ⇒ عملة Aragon المنتهية). مخزَّن ساعة."""
+        sym = (symbol or "").upper().strip()
+        alias = PERP_DISPLAY_ALIASES_B93.get(sym)
+        if not alias:
+            return sym
+        key = f"dispalias_b95:{sym}"
+        cached = _cached(key, "pairchk")
+        if cached is not None:
+            return cached
+        out, sure = sym, False
+        try:
+            own = await self._price_okx(sym)
+            if not (own and float(own.get("price", 0) or 0) > 0):
+                own = await self._price_okx_perp(sym)
+            if own and float(own.get("price", 0) or 0) > 0:
+                sure = True   # للاسم نفسه إدراج على OKX ⇒ يبقى
+            else:
+                alt = await self._price_okx_perp(alias)
+                if alt and float(alt.get("price", 0) or 0) > 0:
+                    out, sure = alias, True
+        except Exception as e:
+            logger.debug(f"resolve_display_alias_b95 {sym}: {e}")
+        if sure:   # تعذّر التحقق (شبكة) ⇒ لا تخزين، يُعاد الفحص في الطلب التالي
+            _store(key, out, "pairchk")
+        return out
+
     async def perp_price_display_b93(self, symbol: str, ref_price: float = 0.0):
         """KK1 (b93): سعر العقد الدائم لاسم كما يعرضه تطبيق OKX — قد يختلف عن معرّف الـAPI
         (تطبيق OKX: «ANTUSDT» = ANTHROPIC-USDT-SWAP). يعيد (dict السعر، المعرّف الفعلي) أو (None، symbol).

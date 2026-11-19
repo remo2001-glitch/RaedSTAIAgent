@@ -46,7 +46,7 @@ chk("K6 ADX التقرير من regime.metrics (لا «ADX = 49» بجانب «A
 
 # ── /regime ─────────────────────────────────────────────────────
 chk("R1 /regime على سوق /signal (Futures) مع وسم الأساس و«spot» اختياري",
-    'regime_market_ee3(getattr(context, "user_data", None), symbol, _explicit_ee3,' in s and "_mkt_tag_b41(_mk87, candles)" in s)   # EE3: الافتراضي Futures ثم آخر اختيار
+    'regime_market_ee3(getattr(context, "user_data", None), symbol, _explicit_ee3,' in s and "_mkt_tag_b41(_mk87, candles, symbol)" in s)   # EE3: الافتراضي Futures ثم آخر اختيار
 chk("R2 الإجراء والتوصية يحيلان قرار الدخول إلى /signal", "— قرار الدخول من /signal" in s and "قرار الدخول نفسه من /signal" in s)
 chk("R3 RSI الحي موسوم", "(RSI الحي={mm.group(1)}<30 — RSI 1D المكتمل {_rsi87:.0f})" in s)
 chk("R4 F&G وهيمنة BTC للعملات الرقمية فقط", "if _crypto87:" in s and '(" + Fear & Greed + هيمنة BTC" if _crypto87 else "")' in s)

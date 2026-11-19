@@ -2835,8 +2835,10 @@ async def cmd_plan_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     try:   # batch45 (ملاحظة 32/53): أصل بلا عقد دائم في وضع Futures — بياناته من الفوري
                         if _use_futures_pw:
                             from handlers.analysis import _mkt_tag_b41 as _mt_b45
-                            if "لا عقد دائم" in _mt_b45("futures", candles):
-                                _pw_extra.append("  ⚠️ مرجعي فقط: لا عقد دائم للأصل على OKX — البيانات من الفوري، والتنفيذ في Futures غير ممكن حقيقياً (التدريب الافتراضي مسموح)")   # batch67 (قرار رحال #960/#978)
+                            _tg95 = _mt_b45("futures", candles, str(sym))
+                            if "لا عقد دائم" in _tg95:
+                                _src95 = _tg95.split("البيانات من ", 1)[1].rstrip(")") if "البيانات من " in _tg95 else "الفوري"   # b95 (NN3): المصدر الفعلي
+                                _pw_extra.append(f"  ⚠️ مرجعي فقط: لا عقد دائم للأصل على OKX — البيانات من {_src95}، والتنفيذ في Futures غير ممكن حقيقياً (التدريب الافتراضي مسموح)")   # batch67 (قرار رحال #960/#978)
                     except Exception:
                         pass
                     try:   # batch61 (#744)
