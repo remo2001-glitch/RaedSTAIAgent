@@ -378,3 +378,16 @@ def macd_histogram(closes: list, fast: int = 12, slow: int = 26, signal: int = 9
         return macd_line[-1] - sig[-1]
     except Exception:
         return None
+
+
+def pct_signed_b91(v) -> str:
+    """b91 (DD2): نسبة بإشارة بلا «-0.0%» — منزلتان قرب الصفر (‎+0.03%‎ / ‎-0.04%‎)، وصفر صريح «0.00%». أرقام ASCII."""
+    try:
+        v = float(v or 0)
+    except Exception:
+        return "0.0%"
+    if round(v, 1) != 0:
+        return f"{v:+.1f}%"
+    if round(v, 2) == 0:
+        return "0.00%"
+    return f"{v:+.2f}%"

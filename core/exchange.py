@@ -49,6 +49,7 @@ class Balance:
     free:      float
     locked:    float
     total:     float
+    error:     str = ""    # EE (b91): سبب تعذّر الجلب — فارغ = رصيد مقروء فعلاً (ولو صفراً)
 
 
 @dataclass
@@ -438,15 +439,18 @@ class BinanceExchange(BaseExchange):
                             free  = float(b.get("availableBalance", 0) or 0)
                             total = float(b.get("balance", 0) or 0)
                             return Balance(asset, free, max(0, total-free), total)
+                else:
+                    return Balance(asset, 0, 0, 0, error=f"استجابة غير متوقعة: {str(data)[:80]}")
             except Exception as e:
                 logger.warning(f"Binance futures balance: {e}")
+                return Balance(asset, 0, 0, 0, error=str(e)[:120])
             return Balance(asset, 0, 0, 0)
 
         url  = f"{self._base}/api/v3/account"
         data = await self._async_request(url, "GET", {}, signed=True)
         if "error" in data:
             logger.warning(f"Binance balance error: {data.get('error','')[:200]}")
-            return Balance(asset, 0, 0, 0)
+            return Balance(asset, 0, 0, 0, error=str(data.get('error', ''))[:120])
         for b in data.get("balances", []):
             if b["asset"] == asset.upper():
                 free   = float(b["free"])
@@ -731,6 +735,7 @@ class BybitExchange(BaseExchange):
             types_to_try = ["UNIFIED", "FUND", "SPOT", "CONTRACT"]
 
         last_err = ""
+        _ok_b91 = False
         for atype in types_to_try:
             try:
                 params = {"accountType": atype}
@@ -738,6 +743,7 @@ class BybitExchange(BaseExchange):
                 if data.get("retCode", -1) != 0:
                     last_err = data.get("retMsg", "")
                     continue
+                _ok_b91 = True
                 for acc in data.get("result", {}).get("list", []):
                     for coin in acc.get("coin", []):
                         if coin["coin"] == asset.upper():
@@ -752,7 +758,7 @@ class BybitExchange(BaseExchange):
                 continue
         if last_err:
             logger.warning(f"Bybit balance: لم يُعثر على رصيد ({last_err})")
-        return Balance(asset, 0, 0, 0)
+        return Balance(asset, 0, 0, 0, error=("" if _ok_b91 else (last_err or "لا استجابة صالحة")[:120]))
 
     async def verify_credentials(self) -> tuple:
         """يتحقق من صحة Bybit credentials."""
@@ -1000,6 +1006,7 @@ class OKXExchange(BaseExchange):
         يتحقق من Trading Account أولاً ثم Funding Account.
         """
         asset_up = asset.upper()
+        _ok_b91, _err_b91 = False, ""
 
         # 1. Trading Account (Unified)
         try:
@@ -1007,6 +1014,7 @@ class OKXExchange(BaseExchange):
                 f"{self._base}/api/v5/account/balance", "GET",
                 {"ccy": asset_up}, signed=True)
             if data.get("code") == "0":
+                _ok_b91 = True
                 for d in data.get("data", []):
                     for det in d.get("details", []):
                         if det.get("ccy") == asset_up:
@@ -1017,9 +1025,11 @@ class OKXExchange(BaseExchange):
                                 return Balance(asset, avail,
                                                max(0, total - avail), total)
             else:
+                _err_b91 = f"code={data.get('code')} {data.get('msg', '')}"
                 logger.warning(f"OKX Trading balance: code={data.get('code')} "
                                f"msg={data.get('msg','')}")
         except Exception as e:
+            _err_b91 = str(e)
             logger.warning(f"OKX Trading balance error: {e}")
 
         # 2. Funding Account (كثير من المستخدمين رصيدهم هنا)
@@ -1028,6 +1038,7 @@ class OKXExchange(BaseExchange):
                 f"{self._base}/api/v5/asset/balances", "GET",
                 {"ccy": asset_up}, signed=True)
             if data2.get("code") == "0":
+                _ok_b91 = True
                 for item in data2.get("data", []):
                     if item.get("ccy") == asset_up:
                         avail = float(item.get("availBal", 0) or 0)
@@ -1037,13 +1048,15 @@ class OKXExchange(BaseExchange):
                             return Balance(asset, avail,
                                            max(0, bal - avail), bal)
             else:
+                _err_b91 = _err_b91 or f"code={data2.get('code')} {data2.get('msg', '')}"
                 logger.warning(f"OKX Funding balance: code={data2.get('code')} "
                                f"msg={data2.get('msg','')}")
         except Exception as e:
+            _err_b91 = _err_b91 or str(e)
             logger.warning(f"OKX Funding balance error: {e}")
 
         logger.warning(f"OKX: {asset} رصيد صفر في Trading + Funding")
-        return Balance(asset, 0, 0, 0)
+        return Balance(asset, 0, 0, 0, error=("" if _ok_b91 else (_err_b91 or "لا استجابة صالحة")[:120]))
 
     async def verify_credentials(self) -> tuple:
         """يتحقق من صحة OKX credentials."""
@@ -1329,6 +1342,7 @@ class BitgetExchange(BaseExchange):
             else spot_endpoints
         )
 
+        _ok_b91, _err_b91 = False, ""
         for endpoint in endpoints:
             try:
                 data = await self._async_request(endpoint, "GET", {}, signed=True)
@@ -1346,7 +1360,9 @@ class BitgetExchange(BaseExchange):
                             f"Bitget مصادقة فاشلة (code={code}): {msg_txt}\n"
                             f"تحقق من: API Key + Secret + Passphrase"
                         )
+                    _err_b91 = f"code={code} {msg_txt}"
                     continue
+                _ok_b91 = True
 
                 items = data.get("data", [])
 
@@ -1376,11 +1392,12 @@ class BitgetExchange(BaseExchange):
                                 return Balance(asset, free, 0, free)
 
             except Exception as e:
+                _err_b91 = str(e)
                 logger.warning(f"Bitget balance {endpoint}: {e}")
 
         logger.warning(f"Bitget: {asset} رصيد صفر في جميع endpoints "
                        f"(spot+futures) — تحقق من صلاحيات API Key")
-        return Balance(asset, 0, 0, 0)
+        return Balance(asset, 0, 0, 0, error=("" if _ok_b91 else (_err_b91 or "لا استجابة صالحة")[:120]))
 
     async def verify_credentials(self) -> tuple:
         """
@@ -1575,11 +1592,11 @@ class MEXCExchange(BaseExchange):
         # لا تحتوي مفتاح "error" — كانت تُعامَل كـ "لا أرصدة" فتُعيد $0 صامتة
         if "error" in data:
             logger.warning(f"MEXC balance HTTP error: {str(data.get('error'))[:200]}")
-            return Balance(asset, 0, 0, 0)
+            return Balance(asset, 0, 0, 0, error=str(data.get('error'))[:120])
         if "code" in data and "balances" not in data:
             logger.warning(f"MEXC balance API error: code={data.get('code')} "
                            f"msg={data.get('msg','')}")
-            return Balance(asset, 0, 0, 0)
+            return Balance(asset, 0, 0, 0, error=f"code={data.get('code')}")
         for b in data.get("balances", []):
             if b["asset"] == asset.upper():
                 free   = float(b["free"])
@@ -1617,6 +1634,7 @@ class MEXCExchange(BaseExchange):
                         return Balance(asset, free, max(0,total-free), total)
         except Exception as e:
             logger.warning(f"MEXC futures balance: {e}")
+            return Balance(asset, 0, 0, 0, error=str(e)[:120])
         return Balance(asset, 0, 0, 0)
 
     async def verify_credentials(self) -> tuple:

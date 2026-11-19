@@ -16,6 +16,7 @@
 
 import asyncio
 from core.indicators import ema_last as _ema_last
+import json
 import logging
 import re
 from core.middleware import require_tier
@@ -25,6 +26,7 @@ from core.symbol_classify import is_tokenized_x_ticker
 from core.indicators import fmt_vol_ratio, candles_diag
 from telegram.ext import ContextTypes, CommandHandler, MessageHandler, filters
 from core.state_manager import state_manager as _sm
+from core.indicators import pct_signed_b91 as _pct_b91   # b91 (DD2)
 from core.middleware    import require_tier
 from core.user_manager import user_manager as _um
 from core.pair_resolver import resolve_symbol, build_pair_addon_lines, build_usdt_addendum
@@ -391,7 +393,8 @@ def _chart_item_lines_b51(analysis: str, nums=("6", "7", "8")) -> dict:
     import re as _r
     items, cur = {}, None
     for ln in (analysis or "").split("\n"):
-        mm = _r.match(r"\s*(\d{1,2})\s*[-–.)]\s*(.*)", ln)
+        # b91 (II1): «92.91» أو «0.99» في سطر مستقل سعرٌ لا بداية بند — النقطة فاصل بند فقط إن لم يلِها رقم
+        mm = _r.match(r"\s*(\d{1,2})\s*(?:[-–)]|\.(?!\d))\s*(.*)", ln)
         if mm:
             cur = mm.group(1)
             items[cur] = mm.group(2)
@@ -400,6 +403,81 @@ def _chart_item_lines_b51(analysis: str, nums=("6", "7", "8")) -> dict:
     return {k: v for k, v in items.items() if k in nums}
 
 
+
+
+_LEVEL_NAMES_B91 = {
+    "BOLL_MID": "خط الوسط للبولنجر", "BOLL_UB": "الحد العلوي للبولنجر", "BOLL_LB": "الحد السفلي للبولنجر",
+    "VWAP": "VWAP", "SUPERTREND_RED": "Supertrend (أحمر)", "SUPERTREND_GREEN": "Supertrend (أخضر)", "SAR": "SAR",
+}
+
+
+def _label_key_b91(label: str):
+    """اسم المستوى الذي يقصده النموذج في القوس — أو None إن لم يكن مستوى معروفاً."""
+    t = (label or "").upper()
+    a = label or ""
+    if "BOLL" in t or "بولنجر" in a or "بولينجر" in a or "بولنغر" in a:
+        if "علوي" in a or "العلوي" in a or "UB" in t or "UPPER" in t:
+            return "BOLL_UB"
+        if "سفلي" in a or "السفلي" in a or "LB" in t or "LOWER" in t:
+            return "BOLL_LB"
+        if "وسط" in a or "أوسط" in a or "متوسط" in a or "MID" in t:
+            return "BOLL_MID"
+    if "VWAP" in t:
+        return "VWAP"
+    if "SUPERTREND" in t or "سوبر" in a:
+        return "SUPERTREND_GREEN" if ("أخضر" in a or "GREEN" in t) else "SUPERTREND_RED" if ("أحمر" in a or "RED" in t) else None
+    return None
+
+
+def chart_level_labels_b91(analysis: str, leg) -> tuple:
+    """II4 (b91): رقم يطابق مستوى منسوخاً من الشريط لكن اسمه في القوس مستوى آخر ⇒ يُصحَّح الاسم.
+    مثال: «109.18 (الحد العلوي للبولنجر)» و109.18 هو BOLL_MID ⇒ «(خط الوسط للبولنجر)». يعيد (النص، عدد التصحيحات)."""
+    import re as _r
+    if not analysis or not isinstance(leg, dict):
+        return analysis, 0
+    vals = {k: float(leg[k]) for k in _LEVEL_NAMES_B91 if isinstance(leg.get(k), (int, float)) and leg.get(k)}
+    if not vals:
+        return analysis, 0
+    n = [0]
+
+    def _fix(m):
+        try:
+            x = float(m.group(1).replace(",", ""))
+        except ValueError:
+            return m.group(0)
+        want = _label_key_b91(m.group(2))
+        if not want:
+            return m.group(0)
+        hit = [k for k, v in vals.items() if abs(x - v) <= max(1e-9, abs(v) * 1e-6)]
+        if not hit or want in hit:
+            return m.group(0)
+        n[0] += 1
+        return f"{m.group(1)} ({_LEVEL_NAMES_B91[hit[0]]})"
+    out = _r.sub(r"(\d[\d,]*\.?\d*)\s*\(([^()\n]{2,40})\)", _fix, analysis)
+    return out, n[0]
+
+
+def chart_missed_levels_b91(analysis: str, leg) -> str:
+    """II5 (b91): مستويات منسوخة من الشريط (VWAP/البولنجر/Supertrend/SAR) لم يذكرها التحليل — سطر واحد للعلم."""
+    if not analysis or not isinstance(leg, dict):
+        return ""
+    raw = leg.get("raw") or {}
+    miss = []
+    for k, nm in _LEVEL_NAMES_B91.items():
+        v = leg.get(k)
+        if not isinstance(v, (int, float)) or not v:
+            continue
+        txt = str(raw.get(k) or "").strip() or f"{v:g}"
+        if txt not in analysis and f"{v:g}" not in analysis:
+            miss.append(f"{nm} {txt}")
+    return ("📌 مستويات ظاهرة على الشارت لم يذكرها التحليل: " + " · ".join(miss)) if miss else ""
+
+
+def chart_market_line_b91(analysis: str, is_futures: bool) -> str:
+    """II2 (b91): البند «0- نوع السوق» يطابق النوع المعتمد (الوسم/الكابشن) لا قول النموذج وحده."""
+    import re as _r
+    lbl = "Futures/Perp" if is_futures else "Spot"
+    return _r.sub(r"(?m)^(\s*0\s*[-–.)]\s*نوع السوق\s*:\s*).*$", lambda m: m.group(1) + lbl, analysis or "", count=1)
 
 
 def _chart_tf_word_b51(tf_label: str) -> str:
@@ -951,7 +1029,7 @@ def _qs_basis_b62(regime_obj, ema_below_count) -> str:
             if adx:
                 bits.append(f"ADX {_adx_fmt58(adx)}" + (f" (+DI {float(dp):.0f} / -DI {float(dm):.0f})" if dp is not None and dm is not None else ""))
             if pve is not None:
-                bits.append(f"السعر vs EMA50 {float(pve):+.1f}%")
+                bits.append(f"السعر vs EMA50 {_pct_b91(pve)}")
             return (" — أساس الحكم: " + "، ".join(bits) + "؛ المتوسطات القصيرة تعكس حركة قصيرة الأجل") if bits else ""
     except Exception:
         pass
@@ -1233,7 +1311,7 @@ def _consistency_pass_b62(text: str) -> str:
         _fd = _r.search(r"Funding Rate:? ([-+]\d+\.\d+)%", t)
         if _fd and float(_fd.group(1)) > 0:
             t = t.replace("يتعارض مع ميل السعر الصاعد", "يتوافق مع ميل السعر الصاعد (تمويل موجب طفيف)")
-        _eg = _r.search(r"السعر vs EMA50:? ([-+]?\d+\.\d)%", t)
+        _eg = _r.search(r"السعر vs EMA50:? ([-+]?\d+\.\d+)%", t)
         if _eg and abs(float(_eg.group(1))) < 0.1:
             t = _r.sub(r"(?:و)?السعر (?:فوق|تحت) EMA50(?! \()", lambda m: ("و" if m.group(0).startswith("و") else "") + "السعر عند EMA50 تقريباً", t)
             t = _r.sub(r"(📉 EMA50 \(يومي=[^)]*\)): (?:✅ فوق|❌ تحت)", r"\1: ≈ عند (فرق < 0.1%)", t)
@@ -1285,7 +1363,10 @@ def _llm_para_guard_b56(text: str) -> str:
     t = _r.sub(r"[،,]?\s*وليس بسبب ضعف الحجم", "", t)
     t = _r.sub(r"[،,]?\s*مع التمييز بوضوح بين [^.؛\n]*", "", t)
     t = _r.sub(r"سيناريو\s+[أب]\)\s*", "سيناريو ", t)
-    t = _r.sub(r"\s{2,}", " ", t)
+    # b91 (DD1): كان «\s{2,}» يدمج السطر الفارغ قبل العنوان فيلتصق «📊 تحليل المؤشرات المتقاطعة» بسطر F&G
+    t = _r.sub(r"[ \t]{2,}", " ", t)
+    t = _r.sub(r"[ \t]*\n[ \t]*", "\n", t)
+    t = _r.sub(r"\n{3,}", "\n\n", t)
     return t
 
 
@@ -1368,7 +1449,7 @@ def _analyze_summary_lines(sig, meta, regime_obj) -> list:
                    if _mm.get("di_plus") is not None and _mm.get("di_minus") is not None else "")
             _bits.append(f"ADX {_adx_fmt58(float(_mm['adx']))}{_di}")
             if _mm.get("price_vs_ema50") is not None:
-                _bits.append(f"السعر vs EMA50 {float(_mm['price_vs_ema50']):+.1f}%")
+                _bits.append(f"السعر vs EMA50 {_pct_b91(_mm['price_vs_ema50'])}")
             if _mm.get("btc_dominance"):
                 _bits.append(f"هيمنة BTC {float(_mm['btc_dominance']):.0f}%")
             out.append("📈 المؤشرات: " + " | ".join(_bits))
@@ -5449,7 +5530,8 @@ async def cmd_regime(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args   = _args84r or ["BTC"]
     symbol = args[0].upper()
     # EE3: الوسيط الصريح أولاً، ثم آخر سوق اختاره المستخدم في /signal أو /analyze (للأصل نفسه ثم عموماً)، ثم Futures
-    _mk87, _mk_src_ee3 = regime_market_ee3(getattr(context, "user_data", None), symbol, _explicit_ee3)
+    _mk87, _mk_src_ee3 = regime_market_ee3(getattr(context, "user_data", None), symbol, _explicit_ee3,
+                                         uid=getattr(getattr(update, "effective_user", None), "id", 0))
     msg = await update.message.reply_text(
         f"📊 جاري تحليل حالة السوق لـ {symbol}...")
 
@@ -5650,8 +5732,13 @@ async def cmd_regime(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ════════════════════════════════════════════════════════════════
 # /signal
 # ════════════════════════════════════════════════════════════════
-def remember_mkt_ee3(context, symbol, mkt) -> None:
-    """EE3 (رحال 2026-11-19): يحفظ آخر سوق اختاره المستخدم في /signal أو /analyze — عرض فقط، لا أثر على القرار."""
+def _mkt_pref_kv_b91(uid) -> str:
+    return f"regime_mkt_ee3:{int(uid)}"
+
+
+def remember_mkt_ee3(context, symbol, mkt, uid=0) -> None:
+    """EE3 (رحال 2026-11-19): يحفظ آخر سوق اختاره المستخدم في /signal أو /analyze — عرض فقط، لا أثر على القرار.
+    b91: يُحفظ أيضاً في Redis (kv) فيبقى بعد إعادة تشغيل البوت."""
     try:
         ud = getattr(context, "user_data", None)
         if not isinstance(ud, dict) or ud.get("_headless_b68"):
@@ -5662,15 +5749,26 @@ def remember_mkt_ee3(context, symbol, mkt) -> None:
         per[str(symbol or "").upper()] = m
         if len(per) > 50:
             per.pop(next(iter(per)))
+        if uid:
+            _sm.kv_set(_mkt_pref_kv_b91(uid), json.dumps({"last": m, "sym": per}, ensure_ascii=False))
     except Exception:
         pass
 
 
-def regime_market_ee3(user_data, symbol, explicit=None):
+def regime_market_ee3(user_data, symbol, explicit=None, uid=0):
     """EE3: سوق /regime ومصدره — (السوق، "arg" | "sym" | "last" | "default")."""
     if explicit in ("spot", "futures"):
         return explicit, "arg"
     ud = user_data if isinstance(user_data, dict) else {}
+    if uid and "_last_mkt_ee3" not in ud:   # b91: بعد إعادة التشغيل — من Redis
+        try:
+            _kv = json.loads(_sm.kv_get(_mkt_pref_kv_b91(uid), "") or "{}")
+            if _kv.get("last") in ("spot", "futures"):
+                ud = {"_last_mkt_ee3": _kv["last"], "_last_mkt_sym_ee3": dict(_kv.get("sym") or {})}
+                if isinstance(user_data, dict):
+                    user_data.update(ud)
+        except Exception:
+            pass
     m = (ud.get("_last_mkt_sym_ee3") or {}).get(str(symbol or "").upper())
     if m in ("spot", "futures"):
         return m, "sym"
@@ -5760,7 +5858,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     _use_futures = (_mkttype == "futures")
     _mkt_arg_sig = "futures" if _use_futures else "spot"  # إصلاح #258
-    remember_mkt_ee3(context, (context.args or ["BTC"])[0], _mkt_arg_sig)   # EE3: /regime يتبع آخر سوق اختاره المستخدم
+    remember_mkt_ee3(context, (context.args or ["BTC"])[0], _mkt_arg_sig, uid=user_id)   # EE3: /regime يتبع آخر سوق اختاره المستخدم
 
     # TK2/TK1b: التحقق من توفر الأصل في Spot
     if not _use_futures:
@@ -6289,7 +6387,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _pve50_raw_sig = (price - _e50_sig_raw) / max(_e50_sig_raw, 0.0001) * 100
             _regime_fmt = _re_ema.sub(
                 r"السعر vs EMA50: [+\-]?\d+\.?\d*%",
-                f"السعر vs EMA50: {_pve50_raw_sig:+.1f}%",
+                f"السعر vs EMA50: {_pct_b91(_pve50_raw_sig)}",
                 _regime_fmt
             )
         # multi_tf_fix: إضافة تصنيف متعدد الأطر
@@ -7864,7 +7962,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         _full82a = _full82a or bool(context.user_data.pop("_an_full82", False))
     _use_futures_an = (_mkttype_an == "futures")
-    remember_mkt_ee3(context, (context.args or ["BTC"])[0], "futures" if _use_futures_an else "spot")   # EE3
+    remember_mkt_ee3(context, (context.args or ["BTC"])[0], "futures" if _use_futures_an else "spot", uid=user_id)   # EE3
     _mkt_arg_an = "futures" if _use_futures_an else "spot"  # إصلاح #258
 
     # TK4/TK1b: التحقق من Spot (X-prefix يتجاوز مباشرة)
@@ -8878,6 +8976,7 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "MARK PRICE", "FUNDING RATE", "OVERNIGHT", "-PERP", "USDT-M",
             "COIN-M", "DELIVERY", "QUARTERLY", "FUTURES/PERP",
             "عقود دائمة", "عقود آجلة", "عقد مستمر", "فيوتشر",
+            "العقود الدائمة", "العقود الآجلة", "عقد دائم",   # b91 (II2): «العقود الدائمة» لا تطابق «عقود دائمة»
         )
         # F9b: مصطلحات Spot صريحة — إذا ظهرت تلغي أي 10x/5x/3x
         # ملاحظة: OKX يعرض "10x" بجانب "التداول الفوري" كتنويه فقط وليس Futures
@@ -8978,6 +9077,12 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             leg=_legend_b51)
         analysis = _chart_fix_risk_size_b53(analysis, _rr1_b53, _stop_pct_b53)
         analysis = _chart_cleanup_b54(analysis, _legend_b51)
+        try:
+            analysis, _n_lbl_b91 = chart_level_labels_b91(analysis, _legend_b51)   # b91 (II4)
+            if _n_lbl_b91:
+                logger.info(f"chart: صُحِّح اسم {_n_lbl_b91} مستوى/مستويات وفق الشريط")
+        except Exception as _e91:
+            logger.warning(f"chart labels b91: {_e91}")
 
         # chart_px_extract v4: PRICE_NOW marker — الحل الجذري النهائي
         # Qwen3 يكتب "PRICE_NOW:773.28" في أول سطر → نستخرجه بـ str.find
@@ -9080,7 +9185,16 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                      for kw in ("FUTURES/PERP", "FUTURES", "PERP",
                                                  "SWAP", "PERPETUAL", "MARK PRICE",
                                                  "FUNDING RATE", "OVERNIGHT",
-                                                 "فيوتشر", "عقد دائم", "عقد مستمر"))
+                                                 "فيوتشر", "عقد دائم", "عقد مستمر",
+                                                 "العقود الدائمة", "عقود دائمة"))
+        # b91 (II2): وسم السوق المنسوخ من الشريط العلوي يتقدّم على قول النموذج (ما لم يصرّح الكابشن بـ Spot)
+        _leg_mkt_b91 = (_legend_b51 or {}).get("MARKET") if isinstance(_legend_b51, dict) else None
+        if _leg_mkt_b91 == "PERP" and not _is_spot_explicit:
+            _chart_is_futures = True
+        elif _leg_mkt_b91 == "SPOT" and not any(kw in _caption_upper for kw in _futures_keywords):
+            _chart_is_futures = False
+        if analysis:
+            analysis = chart_market_line_b91(analysis, _chart_is_futures)
 
         # tokenized_label_fix (#306/#322) — تصحيح جذري (#330): تبيَّن أن
         # الافتراضي الصحيح لكل الأصول المُرمَّزة هو Spot ما لم يطلب
@@ -9202,6 +9316,17 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _analysis_clean
         )
 
+        # b91 (II5/II3): مستويات ظاهرة لم تُذكر + التصريح بغياب القراءة الآلية للشريط أو الرمز
+        try:
+            _miss_b91 = chart_missed_levels_b91(_analysis_clean, _legend_b51)
+            if _miss_b91:
+                _chart_rr_notes.append(_miss_b91)
+        except Exception:
+            pass
+        if not _legend_b51:
+            _chart_rr_notes.append("ℹ️ تعذّرت القراءة الآلية للشريط العلوي (الرمز والمؤشرات) — الأرقام من قراءة النموذج وحدها")
+        elif not symbol:
+            _chart_rr_notes.append("ℹ️ لم يُقرأ رمز الأصل من الصورة — اكتب الرمز في تعليق الصورة (مثل ANT) لمقارنة السعر الحي")
         if _chart_rr_notes:
             _analysis_clean += "\n\n" + "\n".join(_chart_rr_notes)
         if _chart_quote == "USDT":

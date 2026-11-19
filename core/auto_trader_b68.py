@@ -369,7 +369,8 @@ async def run_auto_cycle_b68(engine, send_fn=None, bot_data=None) -> dict:
             ok2, why2, rr2 = short_gate_b68(sh, px)
             if not ok2:
                 summary["waits"] += 1
-                _near_add_b73(summary, sym, "Short", 1.0 - _cf73, why2)   # batch73 (H2)
+                _near_add_b73(summary, sym, "Short", 1.0 - _cf73, why2,
+                              fails=(sh.get("fails_b86") if not sh.get("eligible") else None))   # batch73 (H2) + b91 (HH1)
                 continue
             mg = size_usd_b68(vw.total_value, float(sh.get("size_factor") or 0), ev_mult)
             mg = min(mg, vw.balance * 0.95)
@@ -478,29 +479,57 @@ def _wait_reason_b77(rec: dict, conf: float) -> str:
     return f"حكم /signal «انتظار» (الثقة {conf:.0%})"
 
 
-def _near_add_b73(summary: dict, sym: str, side: str, score: float, why: str) -> None:
-    """batch73 (H2): يسجّل أقرب الأصول للدخول (أعلى ثقة شراء أو أعلى ميل هبوط) وسبب الرفض — للعرض فقط."""
+def _near_add_b73(summary: dict, sym: str, side: str, score: float, why: str, fails=None) -> None:
+    """batch73 (H2): يسجّل أقرب الأصول للدخول (أعلى ثقة شراء أو أعلى ميل هبوط) وسبب الرفض — للعرض فقط.
+    b91 (HH1): fails = كل الشروط الناقصة (Short: fails_b86) — لا الأول وحده."""
     try:
         lst = summary.setdefault("near", [])
         if any(x["sym"] == sym for x in lst):
             return
-        lst.append({"sym": sym, "side": side, "score": float(score), "why": str(why or "")[:120]})   # batch79 (Q2): كان 70 فيقطع «قريبة مقارنة بالوقف»
+        fl = [str(f)[:120] for f in (fails or []) if f] or ([str(why or "")[:120]] if why else [])
+        lst.append({"sym": sym, "side": side, "score": float(score), "why": str(why or "")[:120], "fails": fl})   # batch79 (Q2): كان 70 فيقطع «قريبة مقارنة بالوقف»
     except Exception:
         pass
 
 
+_BLOCKERS_B91 = ("السيناريو ملغى", "ذروة بيع، لا Short")
+
+
+def _near_fails_b91(x: dict) -> list:
+    return list(x.get("fails") or ([x["why"]] if x.get("why") else []))
+
+
+def _near_desc_b91(x: dict) -> str:
+    """b91 (HH1ج): الموانع «مانع:»، والباقي «ينقصه: …» أو «ينقصه N شروط: أول اثنين و…»."""
+    fl = _near_fails_b91(x)
+    blk = [f for f in fl if any(b in f for b in _BLOCKERS_B91)]
+    rest = [f for f in fl if f not in blk]
+    parts = []
+    if blk:
+        parts.append("مانع: " + "، ".join(blk))
+    if rest:
+        if len(rest) == 1:
+            parts.append(("وينقصه: " if blk else "ينقصه: ") + rest[0])
+        else:
+            parts.append(("وينقصه" if blk else "ينقصه") + f" {len(rest)} شروط: " + "، ".join(rest[:2]) + (" و…" if len(rest) > 2 else ""))
+    return " — ".join(parts) if parts else "—"
+
+
 def near_text_b73(sm: dict, k: int = 3) -> str:
     try:
-        # batch74 (L1): الأقرب فعلاً = الأقل نقصاً — عدد التأكيدات المتحققة أولاً ثم الميل/الثقة
+        # batch74 (L1): الأقرب فعلاً = الأقل نقصاً — b91 (HH1ب): الموانع آخراً، ثم الأقل شروطاً ناقصة، ثم التأكيدات، ثم الميل
         import re as _re74
         def _cn74(x):
-            m = _re74.search(r"تأكيدات[^\d]*(\d+)/(\d+)", x.get("why") or "")
+            m = _re74.search(r"تأكيدات[^\d]*(\d+)/(\d+)", " ".join(_near_fails_b91(x)))
             return int(m.group(1)) if m else 0
-        lst = sorted((sm or {}).get("near") or [], key=lambda x: (-_cn74(x), -x["score"]))[:k]
+        def _blk(x):
+            return any(any(b in f for b in _BLOCKERS_B91) for f in _near_fails_b91(x))
+        lst = sorted((sm or {}).get("near") or [],
+                     key=lambda x: (_blk(x), len(_near_fails_b91(x)) or 1, -_cn74(x), -x["score"]))[:k]
         if not lst:
             return ""
         return "\n🔎 الأقرب للدخول: " + "؛ ".join(
-            f"{x['sym']} {x['side']} ({'ثقة' if x['side'] == 'شراء' else 'ميل هبوط'} {x['score']:.0%}) — ينقصه: {x['why']}"
+            f"{x['sym']} {x['side']} ({'ثقة' if x['side'] == 'شراء' else 'ميل هبوط'} {x['score']:.0%}) — {_near_desc_b91(x)}"
             for x in lst)
     except Exception:
         return ""

@@ -218,7 +218,7 @@ async def risk_equity_state_ee1(engine, user_id: int, live: bool):
         if live:
             info = engine.get_user_exchange(user_id)
             bal = await info["exchange"].get_balance("USDT")
-            if bal is None:
+            if bal is None or getattr(bal, "error", ""):   # b91: المنصة تُعلِم بالخطأ صراحة
                 return None, "fail"
             eq = float(getattr(bal, "total", 0) or 0) + sum(_open_positions_map(engine, user_id, True).values())
         else:
@@ -237,8 +237,8 @@ def risk_portfolio_line_ee1(state: str, portfolio: float, ref: float, live: bool
         return f"💰 المحفظة: ${float(portfolio or 0):,.0f}"
     tail = f" — الحدود محسوبة على القيمة المرجعية ${ref:,.0f}"
     if state == "zero":
-        # المنصات تُرجع رصيد USDT صفراً أيضاً عند خطأ الاتصال — لا يمكن التمييز هنا، فيُصرَّح بالاحتمالين
-        return ("💰 المحفظة: رصيد المنصة $0 أو تعذّر جلبه" if live else "💰 المحفظة: $0") + tail
+        # b91: الخطأ صار يُعلَم صراحة (Balance.error) ⇒ «zero» هنا رصيد مقروء فعلاً
+        return ("💰 المحفظة: رصيد المنصة $0" if live else "💰 المحفظة: $0") + tail
     return "💰 المحفظة: غير متاحة الآن (" + ("تعذّر جلب رصيد المنصة" if live else "تعذّر قراءة المحفظة") + ")" + tail
 
 

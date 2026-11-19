@@ -15,7 +15,7 @@ from typing import Dict, List, Optional, Tuple
 # مفاتيح مرحلة النسخ الحرفي
 LEGEND_KEYS = (
     # batch54: SYMBOL يُقرأ ثانياً — أي بتر لاحق للرد (كما حدث: 7 مفاتيح فقط) لا يُفقد الرمز
-    "TIMEFRAME", "SYMBOL", "PRICE", "CHANGE_24H", "VWAP", "BOLL_MID", "BOLL_UB", "BOLL_LB",
+    "TIMEFRAME", "SYMBOL", "MARKET", "PRICE", "CHANGE_24H", "VWAP", "BOLL_MID", "BOLL_UB", "BOLL_LB",
     "RESISTANCE", "SUPPORT", "SUPERTREND_GREEN", "SUPERTREND_RED", "SAR",
     "RSI_A", "RSI_B", "RSI_C", "MACD_DIFF", "MACD_DEA", "MACD_HIST",
     "KDJ_K", "KDJ_D", "KDJ_J", "VOL", "VOL_MA5",
@@ -61,7 +61,9 @@ def legend_prompt() -> str:
         "SUPERTREND_GREEN قيمة SUPERTREND بالأخضر وSUPERTREND_RED بالأحمر. "
         "RSI_A وRSI_B وRSI_C هي قيم RSI الثلاث بالترتيب الظاهر (مثل RSI6 وRSI12 وRSI24) بالشكل RSI6=37.39. "
         "MACD_HIST هي قيمة STICK. VOL هي قيمة VOL الأولى وVOL_MA5 هي MA5 في سطر الحجم. "
-        "SYMBOL هو اسم الزوج في أعلى الشاشة بالشكل OKB/BTC. "
+        "SYMBOL هو اسم الزوج في أعلى الشاشة كما يظهر (مثل OKB/BTC أو ANTUSDT). "
+        "MARKET نوع السوق من الوسم بجانب الزوج: اكتب PERP إن ظهر «العقود الدائمة» أو Perpetual أو Swap أو «عقود آجلة»، "
+        "وSPOT إن ظهر «التداول الفوري» أو Spot، وإلا -- . "
         "CHART_HIGH وCHART_LOW هما أعلى وأدنى سعر مكتوبين كتسمية على الشارت نفسه (مثل 0.0016590 و0.0013195). "
         "PERF_7D وPERF_30D نسبتا الأداء في الشريط السفلي (7 أيام و30 يوماً) مع الإشارة: ‎+1.37%‎ للأخضر و‎-7.28%‎ للأحمر (علامة - بعد الرقم تعني سالب). "
         "AXIS_TICKS هي أرقام محور السعر الرأسي على يمين الشارت مفصولة بفواصل. "
@@ -98,8 +100,19 @@ def parse_legend(text: str) -> Dict[str, object]:
             continue
         if k == "SYMBOL":
             m = re.search(r"([A-Za-z0-9]{2,12})\s*[/\-]\s*([A-Za-z0-9]{2,8})", v)
-            if m:
+            if m and m.group(2).upper() not in ("SWAP", "PERP"):
                 res["SYMBOL"] = (m.group(1).upper(), m.group(2).upper())
+            else:   # b91 (II3): OKX يكتب الزوج ملتصقاً «ANTUSDT» (أو ANTUSDT-SWAP)
+                m2 = re.search(r"\b([A-Za-z0-9]{2,12}?)(USDT|USDC|USD|BTC|ETH)(?:[\s\-_]*(?:SWAP|PERP))?\b", v.upper())
+                if m2:
+                    res["SYMBOL"] = (m2.group(1), m2.group(2))
+            continue
+        if k == "MARKET":   # b91 (II2)
+            u = v.upper()
+            if "PERP" in u or "SWAP" in u or "دائم" in v or "آجل" in v:
+                res["MARKET"] = "PERP"
+            elif "SPOT" in u or "فوري" in v:
+                res["MARKET"] = "SPOT"
             continue
         if k == "AXIS_TICKS":
             ticks = []

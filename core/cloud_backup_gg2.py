@@ -260,3 +260,84 @@ def status_text_gg2(res: dict = None, now: float = None) -> str:
         L.append(f"• سجل الإشارات: {st.get('sig_count', 0)} إشارة (آخر رفع {st.get('sig_day', '—')})")
     L.append("ℹ️ تلقائي: سجل القياس عند أي تغيّر (فحص كل 30 دقيقة) + لقطة يومية؛ الإشارات يومياً. لا بيانات مستخدمين ولا مفاتيح.")
     return "\n".join(L)
+
+
+# ── الاسترجاع (GG3، b91) — سجل القياس فقط، ولا يُستبدل سجل موجود أبداً ─────────────
+async def fetch_latest_gg2(session=None, cfg: dict = None) -> dict:
+    """يقرأ measurement/latest.json من مستودع النسخ. يرفع استثناءً بسبب واضح عند الفشل."""
+    cfg = cfg or config_gg2()
+    if not configured_gg2(cfg):
+        raise RuntimeError("النسخ السحابي غير مُعدّ")
+    own = session is None
+    if own:
+        import aiohttp
+        session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60))
+    try:
+        url = f"{API}/repos/{cfg['repo']}/contents/{PATH_LATEST}"
+        q = {"ref": cfg["branch"]} if cfg.get("branch") else None
+        hdr = {"Authorization": f"Bearer {cfg['token']}", "Accept": "application/vnd.github.raw+json",
+               "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "raed-backup"}
+        async with session.get(url, headers=hdr, params=q) as resp:
+            body = await resp.read()
+            if resp.status != 200:
+                raise RuntimeError(f"GitHub {resp.status}")
+        data = json.loads(body.decode("utf-8"))
+        if data.get("kind") != "measurement":
+            raise RuntimeError("الملف ليس نسخة قياس")
+        return data
+    finally:
+        if own:
+            await session.close()
+
+
+def restore_plan_gg2(backup: dict) -> list:
+    """لكل مستخدم في النسخة: ماذا سيحدث — restore (السجل الحالي فارغ أو بداية مطابقة للنسخة) أو skip (أطول/مختلف)."""
+    from core.auto_trader_b68 import ledger_get
+    plan = []
+    for uid_s, u in ((backup or {}).get("users") or {}).items():
+        bak = list(u.get("ledger") or [])
+        cur = ledger_get(int(uid_s))
+        if len(cur) >= len(bak):
+            act = ("same" if len(cur) == len(bak) else "newer") if cur[:len(bak)] == bak else "skip"
+        elif cur == bak[:len(cur)]:
+            act = "restore"
+        else:
+            act = "skip"
+        plan.append({"uid": int(uid_s), "cur": len(cur), "bak": len(bak), "action": act,
+                     "positions": len(u.get("open_positions") or {})})
+    return plan
+
+
+def apply_restore_gg2(backup: dict, plan: list) -> int:
+    """يكمل السجلات الناقصة فقط (action=restore). مراكز المحفظة لا تُعدَّل آلياً. يعيد عدد السجلات المضافة."""
+    from core.auto_trader_b68 import ledger_get
+    added = 0
+    users = (backup or {}).get("users") or {}
+    for p in plan:
+        if p.get("action") != "restore":
+            continue
+        bak = list((users.get(str(p["uid"])) or {}).get("ledger") or [])
+        cur = ledger_get(p["uid"])
+        if cur != bak[:len(cur)]:
+            continue   # تغيّر أثناء العرض — لا نخاطر
+        _sm().kv_set(f"autoledger_b68:{int(p['uid'])}", json.dumps(bak[-5000:], ensure_ascii=False))
+        added += len(bak) - len(cur)
+    return added
+
+
+def restore_text_gg2(backup: dict, plan: list, applied: int = None) -> str:
+    L = ["♻️ استرجاع سجل القياس من النسخة السحابية", "━━━━━━━━━━━━━━━━━━",
+         f"• تاريخ النسخة: {str((backup or {}).get('generated_at') or '—')}"]
+    _act = {"restore": "يُستكمل من النسخة", "same": "مطابق — لا حاجة", "newer": "الحالي أحدث من النسخة — لا حاجة",
+            "skip": "الحالي يختلف عن النسخة — لا يُمس (يُراجع يدوياً)"}
+    for p in plan:
+        L.append(f"• الحساب {p['uid']}: الحالي {p['cur']} سجل · النسخة {p['bak']} سجل ⇒ {_act[p['action']]}")
+    if applied is None:
+        if any(p["action"] == "restore" for p in plan):
+            L.append("للتنفيذ: /backup restore confirm")
+        else:
+            L.append("✅ لا شيء يحتاج استرجاعاً")
+    else:
+        L.append(f"✅ أُضيف {applied} سجل")
+    L.append("ℹ️ لا يُستبدل سجل موجود أبداً، ومراكز المحفظة الافتراضية لا تُعدَّل آلياً.")
+    return "\n".join(L)

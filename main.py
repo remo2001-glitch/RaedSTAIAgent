@@ -220,7 +220,7 @@ def _build_commands_text(user_id: int, tier: str, tier_name: str) -> str:
             "/killswitch — إيقاف طارئ", "/drift — حالة النموذج", "/review — المراجعة الأسبوعية",
             "/survey\\_report — تقرير الاستبيان", "/whaletest — اختبار Whale التاريخي",
             "/scanstatus — حالة المسح والمجدول",
-            "/backup — النسخ الاحتياطي السحابي لبيانات القياس",
+            "/backup — النسخ الاحتياطي السحابي لبيانات القياس (/backup restore للاسترجاع)",
         ]))
 
     lines = ["📋 *أوامرك*", ""]
@@ -727,6 +727,17 @@ async def cmd_backup_gg2(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _io_gg2(update.effective_user.id):
         return
     from core.cloud_backup_gg2 import run_backup_gg2, status_text_gg2, configured_gg2
+    _a = [str(x).lower() for x in (context.args or [])]
+    if _a and _a[0] == "restore":   # b91 (GG3): /backup restore ⇒ عرض الخطة؛ /backup restore confirm ⇒ تنفيذ
+        from core.cloud_backup_gg2 import fetch_latest_gg2, restore_plan_gg2, apply_restore_gg2, restore_text_gg2
+        try:
+            bak = await fetch_latest_gg2()
+            plan = restore_plan_gg2(bak)
+            applied = apply_restore_gg2(bak, plan) if (len(_a) > 1 and _a[1] == "confirm") else None
+            await update.message.reply_text(restore_text_gg2(bak, plan, applied))
+        except Exception as e:
+            await update.message.reply_text(f"❌ تعذّر الاسترجاع: {str(e)[:150]}")
+        return
     res = await run_backup_gg2(context.bot_data.get("raed_engine"), force=True) if configured_gg2() else None
     await update.message.reply_text(status_text_gg2(res))   # نص عادي: المسارات فيها «_» و«/»
 

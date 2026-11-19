@@ -3,6 +3,7 @@
 يشخّص الحالة الحالية للسوق ويوجّه Strategy Router.
 """
 
+from core.indicators import pct_signed_b91 as _pct_b91   # b91 (DD2)
 import logging
 import math
 import time
@@ -735,7 +736,7 @@ class RegimeDetector:
             )
             + self._di_conflict_note(result, m)
             + f"• RSI: {m.get('rsi',0):.0f} | حجم: {_fmt_vol_ratio(vol_ratio)}\n"
-            f"• السعر vs EMA50: {m.get('price_vs_ema50',0):+.1f}%\n"
+            f"• السعر vs EMA50: {_pct_b91(m.get('price_vs_ema50',0))}\n"
             f"• Fear & Greed: {m.get('fear_greed',50)} ({__import__('core.thresholds', fromlist=['fear_greed_zone']).fear_greed_zone(m.get('fear_greed',50))[0]}) | هيمنة BTC: {m.get('btc_dominance',50):.0f}%\n\n"
             f"🎯 *الاستراتيجية الموصى بها*\n"
             f"• {strategies_txt}\n"

@@ -22,6 +22,15 @@ SHORT_SL_CAP = 0.10       # سقف مسافة الوقف 10%
 SHORT_MIN_FLAGS = 2
 
 
+
+def _px_b91(x: float) -> str:
+    """b91 (HH1د): السعر بصيغة البطاقات — $68.72 لا 68.7224 (عرض فقط)."""
+    try:
+        x = float(x)
+    except Exception:
+        return str(x)
+    return f"${x:,.2f}" if x >= 1 else f"${x:.6g}"
+
 def _f(v, d=0.0) -> float:
     try:
         return float(v if v is not None else d)
@@ -104,7 +113,7 @@ def evaluate_short_b68(*, price: float, conf: float, rsi: float, atr_pct: float,
             f"ميل الهبوط {bear:.0%} < 65% — الجهة الهابطة غير مؤكدة",
             "تصنيف السوق ليس هابطاً",
             f"RSI {_f(rsi):.0f} < 30 — ذروة بيع، لا Short",
-            (f"السعر فوق المقاومة المثبتة ({nr:,.6g}) — السيناريو ملغى" if nr > 0 else "لا مقاومة معروفة للدخول"),
+            (f"السعر فوق المقاومة المثبتة ({_px_b91(nr)}) — السيناريو ملغى" if nr > 0 else "لا مقاومة معروفة للدخول"),   # b91 (HH1د)
             f"تأكيدات Short {out['n_flags']}/4 (الحد الأدنى 2)",
             ("R/R المرجّح" + (f" 1:{out['rr']:.2f} < 1:1" if out["entry"] else " غير محسوب — لا نقطة دخول")),
         ]
