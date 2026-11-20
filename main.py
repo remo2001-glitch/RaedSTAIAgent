@@ -419,6 +419,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 # post_init
 # ════════════════════════════════════════════════════════════════
 async def post_init(app: Application):
+    _tt1_start_heartbeat(app)   # TT1 (ب): نبضة الحلقة + حيوية الاستقبال — قبل أي عمل طويل
     engine = RaedEngine(BOT_CONFIG)
 
     # التحقق من OWNER_CHAT_ID صحيح
@@ -583,6 +584,7 @@ async def post_init(app: Application):
 
 
 async def post_shutdown(app: Application):
+    _TT1["stopping"] = True     # TT1 (ب): إيقاف مقصود ⇒ الحارس لا يتدخل
     # إيقاف Scheduler أولاً
     scheduler = app.bot_data.get("scheduler")
     if scheduler:
@@ -644,8 +646,11 @@ def build_app() -> Application:
     # batch69 (قرار رحال 2026-11-08): بوت محروس — لا إرسال لحساب غير مسموح ولا لمجموعة/قناة، ولا نص خطأ برمجي في أي رسالة
     from telegram.request import HTTPXRequest
     from core.access_guard import make_guarded_bot_class
-    _bot = make_guarded_bot_class()(token=token, request=HTTPXRequest(connection_pool_size=256),
-                                    get_updates_request=HTTPXRequest())
+    # TT1 (أ) (رحال 2026-11-20): كانت المهل الافتراضية 5ث ⇒ تأخر رد تيليجرام عند البدء = انهيار (20:07 و20:13)
+    _bot = _tt1_bot_class(make_guarded_bot_class())(
+        token=token,
+        request=HTTPXRequest(connection_pool_size=256, **TT1_TIMEOUTS),
+        get_updates_request=HTTPXRequest(**TT1_TIMEOUTS))
     app = (
         Application.builder()
         .bot(_bot)
@@ -909,13 +914,116 @@ async def hourly_alert_job(context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"hourly_alert_job: {e}")
 
 
+# ════════════════════════════════════════════════════════════════
+# TT1 (رحال 2026-11-20 20:24): صمود الاتصال بتيليجرام + حارس التجمّد
+# الحادثة: 18:49 صمت ساعة (CPU≈0) ثم انهيار البدء مرتين بـ ReadTimeout في get_me — حُلّت بتغيير منطقة Railway.
+# ════════════════════════════════════════════════════════════════
+TT1_TIMEOUTS = {"connect_timeout": 20.0, "read_timeout": 30.0, "write_timeout": 30.0, "pool_timeout": 10.0}
+TT1_RETRY_FIRST, TT1_RETRY_MAX = 15, 60     # ثوانٍ بين محاولات البدء (تتضاعف حتى دقيقة)
+TT1_STALL_SEC = 180                          # 3 دقائق بلا نبضة/استقبال ⇒ تجمّد
+TT1_HB_EVERY = 10
+_TT1 = {"loop": 0.0, "poll": 0.0, "stopping": False, "thread": False}
+
+
+def _tt1_bot_class(base):
+    """يسجّل وقت آخر استقبال ناجح للتحديثات (get_updates) — يكشف توقف الاستقبال والحلقة حيّة."""
+    class _TT1Bot(base):
+        async def get_updates(self, *a, **k):
+            r = await super().get_updates(*a, **k)
+            _TT1["poll"] = time.time()
+            return r
+    _TT1Bot.__name__ = base.__name__
+    return _TT1Bot
+
+
+def _tt1_freeze_exit(why: str, dump_tasks: bool = False):
+    """يكتب مكان التعليق في السجل ثم يخرج برمز فشل ⇒ Railway يعيد التشغيل تلقائياً."""
+    import faulthandler
+    import sys
+    try:
+        logger.critical(f"🧊 TT1 حارس التجمّد: {why} — أكتب مكان التعليق ثم أعيد التشغيل")
+        if dump_tasks:
+            for t in asyncio.all_tasks():
+                try:
+                    t.print_stack(limit=6, file=sys.stderr)
+                except Exception:
+                    pass
+        faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
+        sys.stderr.flush()
+    finally:
+        os._exit(3)
+
+
+def _tt1_watch_thread():
+    """خيط مستقل: إن توقفت نبضة الحلقة الرئيسية 3 دقائق (حلقة مجمّدة) ⇒ خروج لإعادة التشغيل."""
+    while True:
+        time.sleep(15)
+        lp = _TT1["loop"]
+        if lp and not _TT1["stopping"] and time.time() - lp > TT1_STALL_SEC:
+            _tt1_freeze_exit(f"الحلقة الرئيسية بلا نبضة منذ {int(time.time() - lp)}ث")
+
+
+async def _tt1_heartbeat():
+    while not _TT1["stopping"]:
+        now = time.time()
+        _TT1["loop"] = now
+        pl = _TT1["poll"]
+        # يُفعَّل فحص الاستقبال بعد أول استقبال ناجح فقط (البدء قد يطول)
+        if pl and now - pl > TT1_STALL_SEC:
+            _tt1_freeze_exit(f"لا استقبال لتحديثات تيليجرام منذ {int(now - pl)}ث والحلقة حيّة", dump_tasks=True)
+            return
+        await asyncio.sleep(TT1_HB_EVERY)
+
+
+def _tt1_start_heartbeat(app):
+    import threading
+    _TT1.update(loop=time.time(), poll=0.0, stopping=False)
+    try:
+        asyncio.get_running_loop().create_task(_tt1_heartbeat())
+    except Exception as e:
+        logger.warning(f"TT1 heartbeat: {e}")
+        return
+    if not _TT1["thread"]:
+        _TT1["thread"] = True
+        threading.Thread(target=_tt1_watch_thread, name="tt1-watchdog", daemon=True).start()
+    logger.info(f"🫀 TT1: حارس التجمّد يعمل (حد {TT1_STALL_SEC}ث)")
+
+
+def _tt1_is_network_error(e: BaseException) -> bool:
+    from telegram.error import NetworkError
+    try:
+        import httpx
+        _hx = (httpx.TransportError,)
+    except Exception:
+        _hx = ()
+    return isinstance(e, (NetworkError,) + _hx)
+
+
 def main():
     logger.info("🚀 Starting Raed — Institutional Balanced Crypto AI Agent v2")
-    app = build_app()
-    app.run_polling(
-        allowed_updates=Update.ALL_TYPES,
-        drop_pending_updates=True
-    )
+    wait, attempt = TT1_RETRY_FIRST, 0
+    max_attempts = int(os.getenv("TT1_MAX_ATTEMPTS", "0") or 0)   # 0 = بلا حد (للاختبار فقط)
+    while True:
+        attempt += 1
+        # حلقة أحداث جديدة لكل محاولة — run_polling يغلق الحلقة عند الخروج
+        asyncio.set_event_loop(asyncio.new_event_loop())
+        _TT1["loop"] = 0.0
+        app = build_app()
+        try:
+            app.run_polling(
+                allowed_updates=Update.ALL_TYPES,
+                drop_pending_updates=True
+            )
+            return          # إيقاف طبيعي (SIGTERM من Railway)
+        except Exception as e:
+            if not _tt1_is_network_error(e) or _TT1["loop"]:
+                raise       # خطأ غير شبكي، أو بعد بدء post_init (المهام بدأت) ⇒ ينهار كما كان       # خطأ غير شبكي (رمز خاطئ، خطأ برمجي) ⇒ ينهار كما كان ليظهر
+            if max_attempts and attempt >= max_attempts:
+                raise
+            logger.warning(f"🌐 TT1: تعذّر الاتصال بتيليجرام عند البدء ({type(e).__name__}: {str(e)[:120]}) "
+                           f"— المحاولة {attempt}، إعادة بعد {wait}ث")
+            time.sleep(wait)
+            wait = min(wait * 2, TT1_RETRY_MAX)
 
 
 if __name__ == "__main__":
