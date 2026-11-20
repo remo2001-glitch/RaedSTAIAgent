@@ -9778,9 +9778,34 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # /quicksignal — متاح للجميع
 # ════════════════════════════════════════════════════════════════
 
+def _qs_entry_label_b101(entry: float, price: float, tp1: float, wait_ref: bool, is_short: bool, quote="USDT") -> str:
+    """WW1 (b101): وسم نوع الأمر من جهة الخطة نفسها (الأهداف فوق الدخول = شراء، تحته = Short) — كان من موقع السعر فقط
+    فظهر «🔴 Limit Sell» لخطة شراء حين هبط السعر تحت الدعم/الدخول."""
+    try:
+        entry, price, tp1 = float(entry), float(price), float(tp1)
+    except Exception:
+        return ""
+    if entry <= 0 or price <= 0:
+        return ""
+    long_plan = tp1 > entry
+    if long_plan:
+        if entry > price * 1.001:
+            return (f" — ⚪ مستوى مراقبة: شراء فقط بعد استعادة {_fmt_price(entry, quote)} بإغلاق يومي (السعر الحي دونه)")
+        if entry < price * 0.999:
+            return (" — ⚪ مستوى مراقبة (Limit Buy فقط عند تفعيل الإشارة)" if wait_ref
+                    else " — 🟢 Limit Buy (انتظر تراجعاً للدخول)")
+        return ""
+    if entry > price * 1.001:
+        return (" — 🔴 Short عند المقاومة بعد شمعة رفض (انتظر ارتداداً — لا مطاردة)" if is_short
+                else " — 🔴 Limit Sell (انتظر ارتداداً للدخول)")
+    if entry < price * 0.999:
+        return " — ⚪ مستوى مراقبة: Short فقط بعد كسر المستوى بإغلاق يومي (السعر الحي فوقه)"
+    return ""
+
+
 def compute_shared_levels(engine, symbol: str, price: float, candles: list, rsi: float,
                           regime_obj, fear_val: int, tier: str = "silver",
-                          is_stock: bool = False):
+                          is_stock: bool = False, futures: bool = False):
     """
     shared_levels (المرحلة 2 — بندا 2 و4): مصدر واحد لمستويات الدخول/الوقف/الأهداف/الدعم/المقاومة.
     يستدعي _build_professional_block نفسها التي يستخدمها /signal و/analyze (لا نسخة موازية)،
@@ -9796,8 +9821,10 @@ def compute_shared_levels(engine, symbol: str, price: float, candles: list, rsi:
         if not fib:
             return None
         atr = _calc_atr(candles)
+        # WW1 (b101): Futures ⇒ نفس تقييم Short في /signal (core/short_eval_b68) — مستويات Short موحّدة
         _txt, _w, meta = _build_professional_block(
             symbol, price, sig, regime_obj, candles, rsi, atr, fib,
+            tech_extra=({"bb_mkt": "Futures"} if futures else None),
             tier=tier, is_stock=is_stock)
         if not meta or not meta.get("entry_agg") or not meta.get("pro_sl") or not meta.get("tp1_v"):
             return None
@@ -9810,6 +9837,7 @@ def compute_shared_levels(engine, symbol: str, price: float, candles: list, rsi:
             "rr": meta.get("rr_real"), "sl_pct": float(meta.get("sl_pct") or 0),
             "atr_pct": float(atr), "confidence_pct": meta.get("confidence_pct"),
             "direction": meta.get("direction"),
+            "short": (meta.get("short_b68") if isinstance(meta.get("short_b68"), dict) else None),
         }
     except Exception as _e:
         logger.warning(f"compute_shared_levels {symbol}: {_e}")
@@ -10218,11 +10246,35 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # الدعم/المقاومة وR/R بين الأمرين. فروع البيع تبقى بمنطقها لكن بأهداف مرتبطة بـATR.
         _shared_lv = None
         _is_sell_dir = str(direction).lstrip().startswith(("🔴", "🟠"))
-        if not _is_sell_dir and not _data_corrupted_q:
-            _shared_lv = compute_shared_levels(
+        _is_buy_dir101 = str(direction).lstrip().startswith(("🟢", "🟡"))
+        _sh_all101 = None
+        if (not _is_sell_dir or _use_futures_qs) and not _data_corrupted_q:
+            _sh_all101 = compute_shared_levels(
                 engine, symbol, price, candles, rsi, regime_obj, fear_val,
-                tier=tier_q, is_stock=is_tokenized_x_ticker(display_symbol))
-        if _shared_lv:
+                tier=tier_q, is_stock=is_tokenized_x_ticker(display_symbol), futures=_use_futures_qs)
+        if not _is_sell_dir:
+            _shared_lv = _sh_all101
+        # WW1 (ب) (رحال 2026-11-20 23:15): في السوق الهابط (Futures، والتوصية ليست شراء) تُعرض خطة Short
+        # نفسها التي في /signal (الدخول عند المقاومة المثبتة، الوقف، TP1/TP2 ومصدرهما) بدل مستويات الشراء
+        # المرجعية — كانت البطاقة تعرض أهداف شراء بوسم «Limit Sell» و/signal يعرض Short للأصل نفسه.
+        _qs_short101 = None
+        try:
+            _shx = (_sh_all101 or {}).get("short") if _use_futures_qs and not _is_buy_dir101 else None
+            if (isinstance(_shx, dict) and float(_shx.get("entry") or 0) > 0 and float(_shx.get("tp1") or 0) > 0
+                    and (is_bearish or _is_sell_dir)):
+                _qs_short101 = _shx
+        except Exception:
+            _qs_short101 = None
+        if _qs_short101:
+            _shared_lv = _sh_all101
+        if _qs_short101:
+            entry, sl = float(_qs_short101["entry"]), float(_qs_short101["sl"])
+            tp1, tp2 = float(_qs_short101["tp1"]), float(_qs_short101.get("tp2") or 0) or float(_qs_short101["tp1"])
+            if _shared_lv["support"] > 0:
+                support = _shared_lv["support"]
+            if _shared_lv["resistance"] > 0:
+                resistance = _shared_lv["resistance"]
+        elif _shared_lv:
             entry, sl, tp1, tp2 = _shared_lv["entry"], _shared_lv["sl"], _shared_lv["tp1"], (_shared_lv["tp2"] or _shared_lv["tp1"] * 1.03)
             if _shared_lv["support"] > 0:
                 support = _shared_lv["support"]
@@ -10360,13 +10412,8 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # نقطة الدخول فيها فعلياً أعلى/أقل من السعر الحالي (Limit فعلي).
             # الإصلاح: الاعتماد فقط على موقع entry من price، بغض النظر عن لون
             # الاتجاه — هذا هو المعيار الصحيح لتحديد Limit Buy مقابل Limit Sell.
-            f"• نقطة الدخول: {_fmt_price(entry, quote)}  ← نسب الأهداف والوقف محسوبة من نقطة الدخول (وليس من السعر الحالي)"
-            + (" — 🔴 Limit Sell (انتظر ارتداداً للدخول)"
-               if entry > price * 1.001
-               else (" — ⚪ مستوى مراقبة (Limit Buy فقط عند تفعيل الإشارة)" if _qs_wait_ref
-                     else " — 🟢 Limit Buy (انتظر تراجعاً للدخول)")
-               if entry < price * 0.999
-               else ""),
+            f"• نقطة الدخول{' (Short)' if _qs_short101 else ''}: {_fmt_price(entry, quote)}  ← نسب الأهداف والوقف محسوبة من نقطة الدخول (وليس من السعر الحالي)"
+            + _qs_entry_label_b101(entry, price, tp1, _qs_wait_ref, bool(_qs_short101), quote or "USDT"),
             f"• هدف 1{' (مرجعي)' if (_qs_wait_ref or _qs_rr_low) else ''}:       {_fmt_price(tp1, quote)} ({(tp1/max(entry,1e-9)-1)*100:+.1f}%)",
             f"• هدف 2{' (مرجعي)' if (_qs_wait_ref or _qs_rr_low) else ''}:       {_fmt_price(tp2, quote)} ({(tp2/max(entry,1e-9)-1)*100:+.1f}%)",
             f"• وقف الخسارة{' (مرجعي)' if (_qs_wait_ref or _qs_rr_low) else ''}: {_fmt_price(sl, quote)} ({(sl/max(entry,1e-9)-1)*100:+.1f}% من الدخول)",
@@ -10421,10 +10468,15 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # quicksignal_quality_fix: تحذيرات جودة الصفقة
         _qs_warns = []
-        if _shared_lv:
+        if _qs_short101:
+            _qs_warns.append("ℹ️ خطة Short نفسها التي في /signal (الدخول عند المقاومة المثبتة بعد شمعة رفض، الوقف ≥ 1.5×ATR، الأهداف"
+                             + (f": TP1 {str(_qs_short101.get('tp1_src'))}" if _qs_short101.get("tp1_src") and _qs_short101.get("tp1_src") != "Fib" else " من Fib")
+                             + ") — من آخر شمعة يومية مكتملة؛ حكم التفعيل والتأكيدات في /signal")
+        elif _shared_lv:
             _qs_warns.append("ℹ️ المستويات محسوبة بنفس معادلة /signal (دخول/وقف/أهداف/دعم/مقاومة موحَّدة) — "
                              "من آخر شمعة يومية مكتملة، فلا تتغير مع حركة اليوم الجارية")
-            try:   # batch64 (الخيار 3)
+        if _shared_lv:
+            try:   # batch64 (الخيار 3) — b101: لخطة Short أيضاً
                 _al64q = _anchor_cross_b64({"nearest_support": support, "nearest_resistance": resistance},
                                            price, float(_atr_q or 0))["alert"]
                 if _al64q:
@@ -10502,6 +10554,14 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"🟢 صاعد (60%): إغلاق يومي واحد على الأقل فوق {_fmt_price(support, quote)} دون كسر قاعه → هدف {_fmt_price(tp1, quote)}",
                 f"⚪ محايد (30%): تذبذب {_fmt_price(support, quote)}-{_fmt_price(resistance, quote)}",
                 f"🔴 هابط (10%): كسر {_fmt_price(sl, quote)} → مراجعة المركز",
+            ]
+        elif _qs_short101:
+            # WW1 (b101): سيناريوهات خطة Short — نفس شروط /signal (لا Short فوق المقاومة، والدخول بعد شمعة رفض)
+            _qs_scenarios = [
+                f"🔴 هابط: ارتداد إلى المقاومة {_fmt_price(entry, quote)} ثم شمعة رفض → Short بالخطة أعلاه إن اكتملت شروط /signal"
+                + " (ميل هبوط ≥ 65%، RSI ≥ 30، تأكيدان، R/R ≥ 1:1)",
+                f"⚪ محايد: تذبذب بين الدعم {_fmt_price(support, quote)} والمقاومة {_fmt_price(resistance, quote)} بدون رفض واضح → لا دخول",
+                f"🟢 صاعد: إغلاق يومي فوق {_fmt_price(entry, quote)} → خطة Short ملغاة وإعادة تقييم",
             ]
         elif direction.startswith(("⚪", "⏳")):
             _qs_scenarios = [

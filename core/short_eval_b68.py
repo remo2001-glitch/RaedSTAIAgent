@@ -31,6 +31,13 @@ def _px_b91(x: float) -> str:
         return str(x)
     return f"${x:,.2f}" if x >= 1 else f"${x:.6g}"
 
+def _rr_s_b101(x: float) -> str:
+    """b101: R/R Short بنفس قاعدة الدفعة 79 (دون 1 يُقرَّب للأسفل) — كان .2f فيظهر 0.82 هنا و0.81 في /quicksignal لنفس القيمة."""
+    import math
+    x = float(x or 0)
+    return f"{math.floor(x * 100) / 100:.2f}" if 0 < x < 1 else f"{x:.2f}"
+
+
 def _f(v, d=0.0) -> float:
     try:
         return float(v if v is not None else d)
@@ -111,7 +118,7 @@ def evaluate_short_b68(*, price: float, conf: float, rsi: float, atr_pct: float,
     rr_ok = out["rr"] >= 1.0
     fl_ok = out["n_flags"] >= SHORT_MIN_FLAGS
     checks.append((f"تأكيدات Short {out['n_flags']}/4 (الحد الأدنى 2)", fl_ok))
-    checks.append(("R/R المرجّح ≥ 1:1" + (f" (الحالي 1:{out['rr']:.2f})" if out["entry"] else ""), rr_ok and out["entry"] > 0))
+    checks.append(("R/R المرجّح ≥ 1:1" + (f" (الحالي 1:{_rr_s_b101(out['rr'])})" if out["entry"] else ""), rr_ok and out["entry"] > 0))
     ok = all(c for _, c in checks)
     out["eligible"] = ok
     if ok:
@@ -125,7 +132,7 @@ def evaluate_short_b68(*, price: float, conf: float, rsi: float, atr_pct: float,
             f"RSI {_f(rsi):.0f} < 30 — ذروة بيع، لا Short",
             (f"السعر فوق المقاومة المثبتة ({_px_b91(nr)}) — السيناريو ملغى" if nr > 0 else "لا مقاومة معروفة للدخول"),   # b91 (HH1د)
             f"تأكيدات Short {out['n_flags']}/4 (الحد الأدنى 2)",
-            ("R/R المرجّح" + (f" 1:{out['rr']:.2f} < 1:1" if out["entry"] else " غير محسوب — لا نقطة دخول")),
+            ("R/R المرجّح" + (f" 1:{_rr_s_b101(out['rr'])} < 1:1" if out["entry"] else " غير محسوب — لا نقطة دخول")),
         ]
         out["reason"] = next((_fail76[i] if i < len(_fail76) else lbl for i, (lbl, c) in enumerate(checks) if not c), "")
         # batch86 (BB2، عرض فقط): كل الشروط الفاشلة بصيغة الحالة — البطاقة كانت تعرض الأول فقط
@@ -145,7 +152,7 @@ def format_short_block_b68(ev: Dict[str, Any], fmt_price=None) -> str:
         L.append(f"• وقف الخسارة: {fp(ev['sl'])} (+{ev['sl_pct']:.1f}% فوق الدخول)")
         L.append(f"• TP1: {fp(ev['tp1'])} (−{ev['tp1_pct']:.1f}%{tp_src_note_b99(ev.get('tp1_src'))}) ×60% | "
                  f"TP2: {fp(ev['tp2'])} (−{ev['tp2_pct']:.1f}%{tp_src_note_b99(ev.get('tp2_src'))}) ×40%")
-        L.append(f"• R/R المرجّح: 1:{ev['rr']:.2f}")
+        L.append(f"• R/R المرجّح: 1:{_rr_s_b101(ev['rr'])}")
     if ev.get("eligible"):
         L.append(f"✅ *Short مؤهل* — حجم {'كامل' if ev.get('size_factor', 0) >= 1 else 'نصف'} (افتراضي 1x فقط؛ الرافعة الحقيقية غير مفعّلة)")
     else:

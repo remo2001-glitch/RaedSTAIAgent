@@ -925,6 +925,17 @@ TT1_HB_EVERY = 10
 _TT1 = {"loop": 0.0, "poll": 0.0, "stopping": False, "thread": False}
 
 
+VV1_RETRY_DELAY = 2
+
+
+def _vv1_retryable(e: BaseException) -> bool:
+    """مهلة أو انقطاع اتصال فقط — لا BadRequest (صنف فرعي من NetworkError في PTB) ولا Forbidden/RetryAfter."""
+    from telegram.error import TimedOut, NetworkError, BadRequest
+    if isinstance(e, BadRequest):
+        return False
+    return isinstance(e, TimedOut) or type(e) is NetworkError
+
+
 def _tt1_bot_class(base):
     """يسجّل وقت آخر استقبال ناجح للتحديثات (get_updates) — يكشف توقف الاستقبال والحلقة حيّة."""
     class _TT1Bot(base):
@@ -932,6 +943,20 @@ def _tt1_bot_class(base):
             r = await super().get_updates(*a, **k)
             _TT1["poll"] = time.time()
             return r
+
+        async def send_message(self, *a, **k):
+            # VV1 (رحال 2026-11-20 23:15): انتهاء مهلة الإرسال (23:11 /quicksignal ETH) ⇒ محاولة ثانية واحدة بعد ثانيتين
+            # بدل ضياع الرسالة بصمت. أخطاء الطلب نفسه (BadRequest/Forbidden/RetryAfter) لا تُعاد.
+            try:
+                return await super().send_message(*a, **k)
+            except Exception as e:
+                if not _vv1_retryable(e):
+                    raise
+                logger.warning(f"📨 VV1: تعذّر إرسال رسالة ({type(e).__name__}) — محاولة ثانية بعد {VV1_RETRY_DELAY}ث")
+                await asyncio.sleep(VV1_RETRY_DELAY)
+                r = await super().send_message(*a, **k)
+                logger.info("📨 VV1: نجحت المحاولة الثانية")
+                return r
     _TT1Bot.__name__ = base.__name__
     return _TT1Bot
 
