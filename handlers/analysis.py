@@ -2141,7 +2141,9 @@ def signal_card_b82(d: dict) -> str:
         L.append("• Short: غير متاح — لا عقد دائم للأصل على OKX (البيانات مرجعية)")   # b95: ميل الهبوط بلا سطر Short كان يبدو نقصاً
     _lean =(f" — ميل الهبوط {100 - conf:.0f}%" if (direction != "long" and conf < 50) else "")
     if direction != "long" and thr <= conf < DIR_THR_B87:   # batch87: 56% «فوق حد الدخول» والحكم انتظار — يُذكر سببه
-        _lean += f" — فوق حد الدخول لكن جهة الشراء غير مؤكدة (حد تحديد الجهة {DIR_THR_B87}%)"
+        # XX1 (b102): «عند» حين تساوي الثقة المعروضة الحد (55% من 55% كانت «فوق»)
+        _at102 = f"{conf:.0f}" == f"{thr:.0f}"
+        _lean += f" — {'عند' if _at102 else 'فوق'} حد الدخول لكن جهة الشراء غير مؤكدة (حد تحديد الجهة {DIR_THR_B87}%)"
     L.append(f"• الثقة {conf:.0f}% (حد الدخول {thr:.0f}%){_lean}")
     L += [x for x in (d.get("warn_lines") or []) if x]
 
@@ -2762,13 +2764,22 @@ def _calc_fibonacci(candles: list, lookback: int = 60, price_cap_mult: float = 3
         return {}
 
 
+def _gap_live_b102(level: float, price: float) -> float:
+    """SS1 (b102، رحال 2026-11-20): بُعد المستوى عن السعر بنسبة من السعر الحي — مقام واحد في كل الرسائل
+    (سطر Fib «بُعد X%» كان ÷ السعر الحي و«السعر الحي دونه بـY%» ÷ المستوى: NVDA 12.4% مقابل 11.0% للمستوى نفسه)."""
+    try:
+        return abs(float(level) - float(price)) / max(float(price), 1e-9) * 100
+    except Exception:
+        return 0.0
+
+
 def _ct_note65(price: float, target: float, ema20: float = 0.0) -> str:
     """batch65 (#845): أساس مستوى الاختراق ووضع السعر الحي منه."""
     try:
         if ema20 and abs(target - ema20) / max(ema20, 1e-9) < 1e-6:
             return " (EMA20 — لا مقاومة Fib أقرب)"
         if price >= target > 0:
-            return f" يومي (السعر الحي فوقه بـ{(price / target - 1) * 100:.1f}% — الحسم بإغلاق الشمعة)"
+            return f" يومي (السعر الحي فوقه بـ{_gap_live_b102(target, price):.1f}% — الحسم بإغلاق الشمعة)"
     except Exception:
         pass
     return ""
@@ -2801,13 +2812,13 @@ def _anchor_cross_b64(fib: dict, price: float, atr_pct: float = 0.0) -> dict:
         nr = float(fib.get("nearest_resistance") or 0)
         half = 0.5 * float(atr_pct or 0)
         if ns > 0 and price < ns:
-            d = (1 - price / ns) * 100
+            d = _gap_live_b102(ns, price)   # SS1 (b102): المقام = السعر الحي (كان ÷ المستوى)
             out["tag_s"] = f" — السعر الحي دونه بـ{d:.1f}% (المستوى مثبت من آخر إغلاق؛ يُحسم عند إغلاق اليوم)"
             if half > 0 and d > half:
                 out["alert"] = (f"⚡ السعر الحي ({_fmt_price(price)}) كسر الدعم المثبت {_fmt_price(ns)} بـ{d:.1f}% (> ½ATR) — "
                                 f"الحكم يُعاد تقييمه عند إغلاق الشمعة اليومية (3 ص بتوقيت السعودية — 00:00 UTC)؛ لا دخول قبل ذلك")
         if nr > 0 and price > nr:
-            d = (price / nr - 1) * 100
+            d = _gap_live_b102(nr, price)   # SS1 (b102)
             out["tag_r"] = f" — السعر الحي فوقها بـ{d:.1f}% (المستوى مثبت من آخر إغلاق؛ يُحسم عند إغلاق اليوم)"
             if half > 0 and d > half:
                 out["alert"] = (f"⚡ السعر الحي ({_fmt_price(price)}) اخترق المقاومة المثبتة {_fmt_price(nr)} بـ{d:.1f}% (> ½ATR) — "
@@ -4334,7 +4345,7 @@ def _build_professional_block(
     _src65 = ("آخر إغلاق مكتمل" if (_px_anchor and abs(entry_agg - _px_anchor) / max(_px_anchor, 1e-9) < 0.001)
               else "السعر الحي" if abs(entry_agg - price) / max(price, 1e-9) < 0.001 else "")
     _agg_label = (("عند الدعم المثبت — دخول بعد استرداده (السعر الحي دونه بـ"
-                   f"{(1 - price / ns) * 100:.1f}%)") if (_agg_gap_b56 <= 0.001 and _below_ns65) else
+                   f"{_gap_live_b102(ns, price):.1f}%)") if (_agg_gap_b56 <= 0.001 and _below_ns65) else
                   "عند الدعم" if _agg_gap_b56 <= 0.001 else
                   (f"{_src65 or 'قرب الدعم'} — {'دون' if entry_agg < ns else 'فوق'} الدعم {_fmt_price(ns)} بـ{_agg_gap_b56 * 100:.1f}%")
                   if _agg_gap_b56 < 0.01 else "سحب فني (Pullback)")
@@ -4613,7 +4624,7 @@ def _build_professional_block(
             "*📋 السيناريوهات:*",
             (f"🟢 صاعد: إغلاق 4H فوق {_bull_tgt}"
              # batch65 (#863): السعر الحي فوق المستوى أصلاً — الحسم بالإغلاق لا بالسعر اللحظي
-             + (f" (السعر الحي فوقه بـ{(price / _fib_res_nxt - 1) * 100:.1f}% — بانتظار إغلاق 4H/اليوم)"
+             + (f" (السعر الحي فوقه بـ{_gap_live_b102(_fib_res_nxt, price):.1f}% — بانتظار إغلاق 4H/اليوم)"
                 if (_fib_res_nxt and price > _fib_res_nxt) else "")
              + " + حجم 1.5x+"
              + (" + CVD شراء ≥ +20%" if bool(((tech.get("onchain_data", {}) or {}) if isinstance(tech, dict) else {}).get("cvd_signal")) else "")
@@ -4627,7 +4638,7 @@ def _build_professional_block(
              # batch66 (#880): كسر قاع النطاق كله
              + (" (قاع نطاق Fib)" if (fib and abs(_ns_scen - float((fib.get("levels") or {}).get("0.0") or 0)) / max(_ns_scen, 1e-9) < 1e-6) else "")
              + " بإغلاق 4H"
-             + (f" (السعر الحي دونه بـ{(1 - price / _ns_scen) * 100:.1f}% — بانتظار الإغلاق)" if (_ns_scen and price < _ns_scen) else "")
+             + (f" (السعر الحي دونه بـ{_gap_live_b102(_ns_scen, price):.1f}% — بانتظار الإغلاق)" if (_ns_scen and price < _ns_scen) else "")
              + " + حجم بيع مرتفع"
              f" → يفتح الطريق نحو {_fmt_price(_bear_tgt)} (≈ -{_bear_pct:.1f}% من مستوى الكسر"
              + ("، وهو مستوى الوقف نفسه" if _bear_at_sl else
@@ -9803,6 +9814,32 @@ def _qs_entry_label_b101(entry: float, price: float, tp1: float, wait_ref: bool,
     return ""
 
 
+def _rr_pair_b102(after: float, now: float) -> str:
+    """YY1 (b102): «X بدل Y» بمنزلة واحدة، ومنزلتان حين تتساويان بمنزلة واحدة (كان «0.7 بدل 0.7»)."""
+    try:
+        a, n = float(after), float(now)
+    except Exception:
+        return ""
+    nd = 2 if f"{a:.1f}" == f"{n:.1f}" else 1
+    return f"{a:.{nd}f} بدل {n:.{nd}f}"
+
+
+def _short_sl_desc_b102(sh: dict, atr_pct: float) -> str:
+    """YY1 (b102): وصف وقف Short كما حُسب فعلاً في core/short_eval_b68 — 1.5×ATR، أو فوق مستوى Fib التالي، أو بسقف 10%."""
+    try:
+        sl_pct = float(sh.get("sl_pct") or 0)
+        want = 1.5 * float(atr_pct or 0)
+        from core.short_eval_b68 import SHORT_SL_CAP
+        cap = SHORT_SL_CAP * 100
+        if want > 0 and sl_pct < want - 0.05 and abs(sl_pct - cap) < 0.05:
+            return f"الوقف بسقف {cap:.0f}% (أقل من 1.5×ATR = {want:.1f}%)"
+        if want > 0 and sl_pct > want + 0.05:
+            return f"الوقف {sl_pct:.1f}% فوق مستوى Fib التالي (≥ 1.5×ATR)"
+        return "الوقف 1.5×ATR"
+    except Exception:
+        return "الوقف 1.5×ATR بسقف 10%"
+
+
 def compute_shared_levels(engine, symbol: str, price: float, candles: list, rsi: float,
                           regime_obj, fear_val: int, tier: str = "silver",
                           is_stock: bool = False, futures: bool = False):
@@ -9997,7 +10034,9 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 price_d, candles, fear, btc_dom = await asyncio.wait_for(
                     asyncio.gather(
                         engine.data_layer.get_price_perp(symbol),
-                        engine.data_layer.get_ohlcv_perp(symbol, 90),
+                        # ZZ1 (b102): 365 كما في /signal و/analyze لعقد السهم (كان 90 ⇒ 90 شمعة مقابل 262 في /signal
+                        # فاختلف ATR (Wilder) قليلاً: TP1 NVDA $148.13 هنا و$148.14 في /signal)
+                        engine.data_layer.get_ohlcv_perp(symbol, 365),
                         engine.data_layer.get_fear_greed(),
                         engine.data_layer.get_btc_dominance(),
                         return_exceptions=True
@@ -10302,7 +10341,11 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _is_tok_stop = is_tokenized_x_ticker(display_symbol)
             # batch56 (5ب): السقف لا يقصّ الوقف دون 1.5×ATR
             _cap_pct = max(7.0 if _is_tok_stop else 10.0, 1.5 * _atr_stop)
-            if _shared_lv:
+            if _qs_short101:
+                # YY1 (b102): وقف Short من /signal = 1.5×ATR بسقف 10% (SHORT_SL_CAP) — السقف مقصود ولا يُحذَّر منه
+                # (كان «⚠️ SL أقرب من الموصى — خطر إيقاف مبكر» ينقض سطر «الوقف ≥ 1.5×ATR»، و/signal لا يحذّر)
+                pass
+            elif _shared_lv:
                 # وقف مشترك مع /signal: لا توسيع محلي، وتحذير SL الضيق بنفس قاعدة /signal (1.5×ATR)
                 _cur_sl_pct = abs(entry - sl) / max(entry, 1e-9) * 100
                 if _atr_stop > 0 and _sl_below_min_q(_cur_sl_pct, _atr_stop):
@@ -10312,11 +10355,13 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     try:  # batch31: الوقف الموصى فعلاً (1.5×ATR من الدخول)
                         _k_q = 1 - 1.5 * _atr_stop / 100 if sl < entry else 1 + 1.5 * _atr_stop / 100
                         _rec_q = f" — الموصى ≈ {_fmt_price(entry * _k_q)}"
-                        _tp_pct_q = abs(tp1 - entry) / max(entry, 1e-9) * 100
+                        # YY1 (b102): R/R المرجّح (60% TP1 + 40% TP2) كبقية البطاقة — كان الهدف 1 وحده بمنزلة واحدة («0.7 بدل 0.7»)
+                        _tp_pct_q = (0.6 * abs(tp1 - entry) + 0.4 * abs((tp2 or tp1) - entry)) / max(entry, 1e-9) * 100
                         if _tp_pct_q > 0 and _atr_stop > 0 and _cur_sl_pct > 0:
                             _rr_aft_q, _rr_now_q = _tp_pct_q / (1.5 * _atr_stop), _tp_pct_q / _cur_sl_pct
                             if _rr_aft_q < _rr_now_q - 0.05:  # batch32: أثر توسيع الوقف على R/R
-                                _rec_q += f" (بهذا الوقف يصبح R/R ≈ {_rr_aft_q:.1f} بدل {_rr_now_q:.1f}" + ("؛ أي دون 2.0 المفضَّل)" if _rr_aft_q < 2.0 else ")")
+                                _rec_q += (f" (بهذا الوقف يصبح R/R المرجّح ≈ {_rr_pair_b102(_rr_aft_q, _rr_now_q)}"
+                                           + (")" if _rr_aft_q < 1.0 else "؛ أي دون 2.0 المفضَّل)" if _rr_aft_q < 2.0 else ")"))
                     except Exception:
                         _rec_q = ""
                     _sl_tight_msg = (f"⚠️ SL أقرب من الموصى ({_cur_sl_pct:.{_nd_q}f}% مقابل الحد الأدنى 1.5×ATR = {1.5*_atr_stop:.{_nd_q}f}%) — "
@@ -10469,7 +10514,8 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # quicksignal_quality_fix: تحذيرات جودة الصفقة
         _qs_warns = []
         if _qs_short101:
-            _qs_warns.append("ℹ️ خطة Short نفسها التي في /signal (الدخول عند المقاومة المثبتة بعد شمعة رفض، الوقف ≥ 1.5×ATR، الأهداف"
+            _qs_warns.append("ℹ️ خطة Short نفسها التي في /signal (الدخول عند المقاومة المثبتة بعد شمعة رفض، "
+                             + _short_sl_desc_b102(_qs_short101, _atr_q) + "، الأهداف"
                              + (f": TP1 {str(_qs_short101.get('tp1_src'))}" if _qs_short101.get("tp1_src") and _qs_short101.get("tp1_src") != "Fib" else " من Fib")
                              + ") — من آخر شمعة يومية مكتملة؛ حكم التفعيل والتأكيدات في /signal")
         elif _shared_lv:
@@ -10567,14 +10613,14 @@ async def cmd_quicksignal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _qs_scenarios = [
                 # quicksignal_fix: الاختراق يشترط إغلاق + ثبات + إعادة اختبار
                 f"🟢 صاعد: إغلاق يومي فوق {_fmt_price(resistance, quote)}"
-                + (f" (السعر الحي فوقه بـ{(price / resistance - 1) * 100:.1f}% — بانتظار الإغلاق)" if (resistance and price > resistance) else "")   # batch65
+                + (f" (السعر الحي فوقه بـ{_gap_live_b102(resistance, price):.1f}% — بانتظار الإغلاق)" if (resistance and price > resistance) else "")   # batch65
                 + " ثم إعادة اختبار المستوى دون إغلاق تحته → "
                 + ("إعادة تقييم (الدخول مشروط بـ R/R ≥ 1:1 بعد الاختراق)" if locals().get("_qs_rr_low")
                    else "دخول إن بقي R/R ≥ 1:1 وتأكدت الإشارة في /signal"),   # batch61 (#759) + batch67 (#997)
                 f"⚪ محايد: تذبذب بين الدعم والمقاومة بدون اتجاه واضح",
                 # batch65 (#854): «إغلاق يومي» صراحة + حالة السعر الحي
                 f"🔴 هابط: إغلاق يومي تحت {_fmt_price(support, quote)}"
-                + (f" (السعر الحي دونه بـ{(1 - price / support) * 100:.1f}% — بانتظار الإغلاق)" if (support and price < support) else "")
+                + (f" (السعر الحي دونه بـ{_gap_live_b102(support, price):.1f}% — بانتظار الإغلاق)" if (support and price < support) else "")
                 + " + حجم بيع مرتفع → لا دخول",
             ]
         if _qs_scenarios:
