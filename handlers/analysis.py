@@ -2155,9 +2155,11 @@ def signal_card_b82(d: dict) -> str:
               if t2 > t1 else f"TP1 {fp(t1)} (+{float(m.get('tp_pct') or 0):.1f}%)",
               f"بعد TP1 يُنقل الوقف إلى {fp(t1)} | R/R المرجّح 1:{_fmt_rr(rrv)}"]
     if sh and float(sh.get("entry") or 0) > 0:
+        from core.short_eval_b68 import tp_src_note_b99 as _tps99
         L += ["", "🔻 *خطة Short" + ("" if short_ok else " (عند التفعيل)") + ":*",
               f"دخول {fp(float(sh['entry']))} بعد شمعة رفض | وقف {fp(float(sh['sl']))} (+{float(sh.get('sl_pct') or 0):.1f}%)",
-              f"TP1 {fp(float(sh['tp1']))} (−{float(sh.get('tp1_pct') or 0):.1f}%، 60%) ← TP2 {fp(float(sh['tp2']))} (−{float(sh.get('tp2_pct') or 0):.1f}%، 40%)"]
+              f"TP1 {fp(float(sh['tp1']))} (−{float(sh.get('tp1_pct') or 0):.1f}%، 60%{_tps99(sh.get('tp1_src'))}) ← "
+              f"TP2 {fp(float(sh['tp2']))} (−{float(sh.get('tp2_pct') or 0):.1f}%، 40%{_tps99(sh.get('tp2_src'))})"]   # RR1 (b99)
 
     # 📊 الصورة
     adx = float(d.get("adx") or 0)
@@ -4667,7 +4669,8 @@ def _build_professional_block(
                         else "لا يوافق اتجاه الإشارة") + ")")
     if not _conf_flags and not _flags_ignored:
         parts.append("  • لا تأكيدات — انتظر 2/4 مؤشرات ("
-                     + ("حجم + RSI + CVD + BB" if (_gold_fund_ex or _is_x_asset or tech.get("is_perp_asset", False) or _is_commodity(symbol)) else "حجم + RSI + CVD + BB، أو Funding سالب") + ")")
+                     + ("حجم + RSI + CVD + BB" if _gold_fund_ex else   # RR2 (أ) b99: Funding يُستثنى للسلع وحدها — كما في المنطق المجمّد
+                        "حجم + RSI + CVD + BB، أو Funding سالب") + ")")
     elif not _conf_flags:
         pass
     else:
@@ -4702,8 +4705,7 @@ def _build_professional_block(
                              + ")")
             if not _cvd_oc_m.get("cvd_signal"):
                 _miss.append("CVD غير متاح الآن (لا يمكن التحقق منه)")
-            if (_fund_pct >= -0.01 and not _gold_fund_ex
-                    and not (_is_x_asset or tech.get("is_perp_asset", False) or _is_commodity(symbol))   # batch59 (#696)
+            if (_fund_pct >= -0.01 and not _gold_fund_ex   # RR2 (أ) b99: كالمنطق — الأسهم يُحتسب Funding لها (كان #696 عرضاً يخالفه)
                     and (_fund.get("source") not in (None, "unknown", "") or _fund_pct != 0)):
                 _miss.append(f"Funding سالب (حالياً {_fund_pct:+.4f}%)")
             # batch63 (#814): في الهبوط القائم أول الناقص انتهاء الهبوط نفسه (كما في «متى تدخل» البند 1)
@@ -4792,7 +4794,7 @@ def _build_professional_block(
         (f"ℹ️ Funding Rate {_fund_pct:+.4f}%"
          + (" (القيمة المعلنة من OKX صفر حالياً)" if (_fund_pct == 0 and _fund.get("source") == "okx") else "")   # batch62 (#776)
          + " — للعلم فقط لهذا الأصل (لا يدخل في الثقة ولا التأكيدات)"
-         if ((_gold_fund_ex or _is_x_asset or _is_perp_asset or _is_commodity(symbol))   # batch59 (#696): نفس قاعدة قائمة التأكيدات
+         if (_gold_fund_ex   # RR2 (أ) b99: للعلم للسلع وحدها = `funding_excluded` المستعمل في الثقة وتأكيدات Short
              and (_fund.get("source") not in (None, "unknown", "") or _fund_pct != 0))
          else f"{'☑' if _fund_pct < -0.01 else '□'} Funding ≤ −0.01% (حالياً {_fund_pct:+.4f}%) — سالب = ضغط Shorts داعم للشراء"
          if (_fund.get("source") not in (None, "unknown", "") or _fund_pct != 0)
@@ -4863,7 +4865,7 @@ def _build_professional_block(
         "cvd_pct_b82": locals().get("_cvd_pct_f"),
         "fund_known_b82": bool(_fund.get("source") not in (None, "unknown", "") or float(_fund_pct or 0) != 0) if isinstance(_fund, dict) else False,
         "fund_short_ex_b82": bool(locals().get("_gold_fund_ex")),
-        "fund_excluded_b82": bool(locals().get("_gold_fund_ex") or _is_x_asset or locals().get("_is_perp_asset") or _is_commodity(symbol)),
+        "fund_excluded_b82": bool(locals().get("_gold_fund_ex")),   # RR2 (أ) b99: «(للعلم)» يطابق المنطق (السلع فقط)
         "conf_flags_b82": [str(x) for x in (_conf_flags or [])],
         "short_checks_b82": (list(_short_ev68.get("checks") or []) if isinstance(_short_ev68, dict) else []),
         "has_targets_b82": bool(locals().get("_has_real_targets")),

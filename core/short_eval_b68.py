@@ -38,6 +38,11 @@ def _f(v, d=0.0) -> float:
         return d
 
 
+def tp_src_note_b99(src) -> str:
+    """RR1 (b99): «، الدخول − 1×ATR» حين لا يقع الهدف على مستوى Fib معروض؛ لا شيء لمستوى Fib."""
+    return f"، {src}" if src and src != "Fib" else ""
+
+
 def short_flags_b68(*, rsi: float, vol_ratio: float, vol_dir: str, cvd_ok: bool, cvd_pct: float,
                     fund_pct: float, fund_excluded: bool, oi_chg: float, bb_pos: Optional[float]) -> List[str]:
     flags: List[str] = []
@@ -90,9 +95,14 @@ def evaluate_short_b68(*, price: float, conf: float, rsi: float, atr_pct: float,
             sl = max(sl, _above[0] * 1.002)        # الوقف فوق مستوى Fib التالي إن كان قريباً
         sl = min(sl, entry * (1 + SHORT_SL_CAP))
         _below = [x for x in lv if x < price * 0.997]
-        tp1 = _below[-1] if _below and (entry - _below[-1]) / entry >= 0.5 * a else entry * (1 - a)
+        _t1_fib = bool(_below and (entry - _below[-1]) / entry >= 0.5 * a)
+        tp1 = _below[-1] if _t1_fib else entry * (1 - a)
         _below2 = [x for x in lv if x < tp1 * 0.997]
-        tp2 = _below2[-1] if (_below2 and _below2[-1] >= tp1 * (1 - 2.5 * a)) else tp1 * (1 - a)
+        _t2_fib = bool(_below2 and _below2[-1] >= tp1 * (1 - 2.5 * a))
+        tp2 = _below2[-1] if _t2_fib else tp1 * (1 - a)
+        # RR1 (b99): مصدر كل هدف للعرض فقط — لا يدخل في أي حساب
+        out["tp1_src"] = "Fib" if _t1_fib else "الدخول − 1×ATR"
+        out["tp2_src"] = "Fib" if _t2_fib else "TP1 − 1×ATR"
         sl_pct = (sl / entry - 1) * 100
         tp1_pct = (1 - tp1 / entry) * 100
         tp2_pct = (1 - tp2 / entry) * 100
@@ -133,7 +143,8 @@ def format_short_block_b68(ev: Dict[str, Any], fmt_price=None) -> str:
     if ev.get("entry"):
         L.append(f"• Entry (Short): {fp(ev['entry'])} — عند المقاومة بعد شمعة رفض؛ لا مطاردة")
         L.append(f"• وقف الخسارة: {fp(ev['sl'])} (+{ev['sl_pct']:.1f}% فوق الدخول)")
-        L.append(f"• TP1: {fp(ev['tp1'])} (−{ev['tp1_pct']:.1f}%) ×60% | TP2: {fp(ev['tp2'])} (−{ev['tp2_pct']:.1f}%) ×40%")
+        L.append(f"• TP1: {fp(ev['tp1'])} (−{ev['tp1_pct']:.1f}%{tp_src_note_b99(ev.get('tp1_src'))}) ×60% | "
+                 f"TP2: {fp(ev['tp2'])} (−{ev['tp2_pct']:.1f}%{tp_src_note_b99(ev.get('tp2_src'))}) ×40%")
         L.append(f"• R/R المرجّح: 1:{ev['rr']:.2f}")
     if ev.get("eligible"):
         L.append(f"✅ *Short مؤهل* — حجم {'كامل' if ev.get('size_factor', 0) >= 1 else 'نصف'} (افتراضي 1x فقط؛ الرافعة الحقيقية غير مفعّلة)")
