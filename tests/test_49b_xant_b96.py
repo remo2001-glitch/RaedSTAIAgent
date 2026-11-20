@@ -17,7 +17,7 @@ chk("OO1d شموع Futures اليومية للعقد كما كانت (perp_daily
 chk("OO1e سهم فوري حديث ⇒ شموع العقد موسومة", '_r["spot_young"] = len(x_spot_candles)' in s)
 young = [{"close": 96.0, "source": "okx_perp", "spot_young": 1, "perp_inst": "ANTHROPIC-USDT-SWAP"}]
 chk("OO1f الوسم: Spot حديث الإدراج والشموع من العقد", A._mkt_tag_b41("spot", young, "XANT")
-    == " · 💱 Spot (حديث الإدراج: 1 شمعة يومية — الشموع من ANTHROPIC-USDT-SWAP)", A._mkt_tag_b41("spot", young, "XANT"))
+    == " · 💱 Spot (حديث الإدراج: شمعة يومية واحدة — الشموع من ANTHROPIC-USDT-SWAP)", A._mkt_tag_b41("spot", young, "XANT"))
 chk("OO1g بلا سهم فوري يبقى وسم الدفعة 95", A._mkt_tag_b41("spot", [{"source": "okx_perp"}]).startswith(" · 📈 Futures/Perp (لا سوق فوري"))
 
 # ── OO2: النصوص تُحسب ─────────────────────────────────────────────

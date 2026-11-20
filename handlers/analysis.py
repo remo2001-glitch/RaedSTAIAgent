@@ -14,6 +14,7 @@
 - تحقق من price قبل حساب مستويات الدخول/الخروج
 """
 
+from core.ar_count import ar_n   # QQ2 (b98): صيغة العدّ العربية
 import asyncio
 from core.indicators import ema_last as _ema_last
 import json
@@ -6131,7 +6132,10 @@ def _mkt_tag_b41(mkttype, candles=None, symbol: str = "") -> str:
             _young = None
         if src.endswith("_perp") and _young is not None:   # OO1 (b96): سهم فوري حديث الإدراج — السعر فوري والتاريخ من العقد
             _pi = str(candles[-1].get("perp_inst") or "العقد الدائم")
-            return f" · 💱 Spot (حديث الإدراج: {int(_young)} شمعة يومية — الشموع من {_pi})"
+            _yn = int(_young)
+            _yd98 = ("شمعة يومية واحدة" if _yn == 1 else "شمعتان يوميتان" if _yn == 2 else
+                     f"{_yn} شموع يومية" if (_yn == 0 or 3 <= _yn <= 10) else f"{_yn} شمعة يومية")
+            return f" · 💱 Spot (حديث الإدراج: {_yd98} — الشموع من {_pi})"
         if src.endswith("_perp"):
             return " · 📈 Futures/Perp (لا سوق فوري للأصل على OKX — البيانات من العقد الدائم)"
         if src == "coingecko":
@@ -7541,7 +7545,7 @@ async def cmd_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             _vp_pos = (f"السعر داخل نطاق 70% من حجم آخر 24 ساعة — منطقة قبول سعري (موقع السعر لا ضغط الدفتر)؛ "   # batch73 (#3)
                                        f"{'فوق' if _price_liq > _poc else 'تحت'} POC ${_poc:,.{_vpd}f}")
                         _vp_blk = (
-                            f"📦 *توزيع الحجم — آخر {len(_liq_candles)} شمعة ساعية (1س)*"
+                            f"📦 *توزيع الحجم — آخر {ar_n(len(_liq_candles), 'شمعة')} ساعية (1س)*"
                             f"\n• أعلى تركّز للحجم (POC): ${_poc:,.{_vpd}f}"
                             f"\n• نطاق 70% من الحجم: ${_val:,.{_vpd}f} – ${_vah:,.{_vpd}f}"
                             f"\n• السعر الحالي {'داخل' if _inside else 'خارج'} هذا النطاق"

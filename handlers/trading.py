@@ -5,6 +5,7 @@
 - مدفوع: جميع المنصات + Futures/Margin + 150 عملة
 """
 
+from core.ar_count import ar_n   # QQ2 (b98): صيغة العدّ العربية
 import asyncio
 import logging
 from core.middleware import require_tier
@@ -441,7 +442,7 @@ async def cmd_live(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "━━━━━━━━━━━━━━━━━━",
                     f"الباقة: {profile.tier_name}",
                     f"حجم المحفظة: ${port_v:,.0f}",
-                    f"حد العملات: {profile.coin_limit} عملة",
+                    f"حد العملات: {ar_n(profile.coin_limit, 'عملة')}",
                     f"🤖 التداول الآلي: {'✅ مُفعَّل — /autotrade off للإيقاف' if autotrade_on else '❌ مُوقَف — /autotrade on للتفعيل'}",
                 ]
                 if days_left > 0:
@@ -628,7 +629,7 @@ async def cmd_live(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 engine.disconnect_user_exchange(user_id)
                 await msg.edit_text(
                     "✅ تم الفصل — محفظة افتراضية 🎮\n"
-                    + (f"\n⚠️ لديك {_n_open} مركز مفتوح على المنصة: توقفت مراقبة رائد لها. "
+                    + (f"\n⚠️ لديك {ar_n(_n_open, 'مركز')} مفتوح على المنصة: توقفت مراقبة رائد لها. "
                        f"أوامر SL/TP الموضوعة على المنصة تبقى فعّالة، وما عداها أدِره يدوياً "
                        f"أو أعد الربط.\n" if _n_open else "")
                     + "للإعادة: /live connect [exchange] [key] [secret]")

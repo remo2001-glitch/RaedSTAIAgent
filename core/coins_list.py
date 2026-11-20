@@ -4,6 +4,7 @@
 آخر تحديث: 2026-05-29
 """
 
+from core.ar_count import ar_n   # QQ2 (b98): صيغة العدّ العربية
 import json
 import logging
 import os
@@ -518,15 +519,15 @@ def get_tier_message(symbol: str, tier: str) -> str:
     if tier == "diamond":
         return (
             f"⛔ *{sym_upper}* خارج نطاق عملاتك حالياً\n\n"
-            f"• باقتك: {current_name} (حتى {user_limit} عملة)\n"
+            f"• باقتك: {current_name} (حتى {ar_n(user_limit, 'عملة')})\n"
             f"• ترتيب {sym_upper}: #{sym_rank} في السوق\n"
-            f"• 💡 جرّب عملة ضمن أعلى {user_limit} عملة بحسب الـ Market Cap"
+            f"• 💡 جرّب عملة ضمن أعلى {ar_n(user_limit, 'عملة')} بحسب الـ Market Cap"
         )
 
     return (
         f"⛔ *{sym_upper}* غير متاحة في باقتك الحالية\n\n"
-        f"• باقتك الحالية: {current_name} (حتى {user_limit} عملة)\n"
-        f"• ترتيب {sym_upper}: #{sym_rank} — متاحة من {required_name} (حتى {required_limit} عملة)\n\n"
+        f"• باقتك الحالية: {current_name} (حتى {ar_n(user_limit, 'عملة')})\n"
+        f"• ترتيب {sym_upper}: #{sym_rank} — متاحة من {required_name} (حتى {ar_n(required_limit, 'عملة')})\n\n"
         f"⬆️ للترقية إلى {required_name}: /upgrade\n"
         f"📋 عملاتك المتاحة: /premium"
     )

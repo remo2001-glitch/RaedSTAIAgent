@@ -18,6 +18,7 @@ core/cloud_backup_gg2.py — نسخ احتياطي سحابي لبيانات ا�
 يُستبعد دائماً: بيانات المستخدمين (الباقات، الإعدادات) ومفاتيح المنصات — حتى المشفّرة.
 تخزين فقط: لا يقرأ منه البوت ولا يؤثر على أي قرار أو خروج.
 """
+from core.ar_count import ar_n   # QQ2 (b98): صيغة العدّ العربية
 import base64
 import gzip
 import hashlib
@@ -256,8 +257,8 @@ def status_text_gg2(res: dict = None, now: float = None) -> str:
     if st.get("last_error") and float(st.get("last_error_ts", 0)) > float(st.get("last_ok", 0)):
         L.append(f"• آخر خطأ ({_ago(st.get('last_error_ts', 0), now)}): {st['last_error']}")
     if st.get("last_ok"):
-        L.append(f"• سجل القياس: {st.get('ledger_records', 0)} سجل · مراكز مفتوحة: {st.get('open_positions', 0)}")
-        L.append(f"• سجل الإشارات: {st.get('sig_count', 0)} إشارة (آخر رفع {st.get('sig_day', '—')})")
+        L.append(f"• سجل القياس: {ar_n(st.get('ledger_records', 0), 'سجل')} · مراكز مفتوحة: {st.get('open_positions', 0)}")
+        L.append(f"• سجل الإشارات: {ar_n(st.get('sig_count', 0), 'إشارة')} (آخر رفع {st.get('sig_day', '—')})")
     L.append("ℹ️ تلقائي: سجل القياس عند أي تغيّر (فحص كل 30 دقيقة) + لقطة يومية؛ الإشارات يومياً. لا بيانات مستخدمين ولا مفاتيح.")
     return "\n".join(L)
 
@@ -331,13 +332,13 @@ def restore_text_gg2(backup: dict, plan: list, applied: int = None) -> str:
     _act = {"restore": "يُستكمل من النسخة", "same": "مطابق — لا حاجة", "newer": "الحالي أحدث من النسخة — لا حاجة",
             "skip": "الحالي يختلف عن النسخة — لا يُمس (يُراجع يدوياً)"}
     for p in plan:
-        L.append(f"• الحساب {p['uid']}: الحالي {p['cur']} سجل · النسخة {p['bak']} سجل ⇒ {_act[p['action']]}")
+        L.append(f"• الحساب {p['uid']}: الحالي {ar_n(p['cur'], 'سجل')} · النسخة {ar_n(p['bak'], 'سجل')} ⇒ {_act[p['action']]}")
     if applied is None:
         if any(p["action"] == "restore" for p in plan):
             L.append("للتنفيذ: /backup restore confirm")
         else:
             L.append("✅ لا شيء يحتاج استرجاعاً")
     else:
-        L.append(f"✅ أُضيف {applied} سجل")
+        L.append(f"✅ أُضيف {ar_n(applied, 'سجل')}")
     L.append("ℹ️ لا يُستبدل سجل موجود أبداً، ومراكز المحفظة الافتراضية لا تُعدَّل آلياً.")
     return "\n".join(L)

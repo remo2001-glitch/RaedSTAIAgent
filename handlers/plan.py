@@ -5,6 +5,7 @@
 - Markdown آمن — لا أخطاء تنسيق
 """
 
+from core.ar_count import ar_n   # QQ2 (b98): صيغة العدّ العربية
 from core.thresholds import SIGNAL_DIRECTION_MIN_CONF
 from core.indicators import fmt_atr_pct as _fmt_atr_pct
 
@@ -3929,11 +3930,11 @@ async def cmd_performance(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _perf = tracker.compute_performance(setup_type=_setup_key)
                 if _perf["n_closed"] > 0:
                     _breakdown_lines.append(
-                        f"{_setup_label}: {_perf['n_closed']} صفقة | "
+                        f"{_setup_label}: {ar_n(_perf['n_closed'], 'صفقة')} | "
                         f"فوز {_perf['win_rate']}% | "
                         f"Expectancy {_perf['expectancy_pct']:+.2f}%"
                         if _perf["win_rate"] is not None else
-                        f"{_setup_label}: {_perf['n_closed']} صفقة (غير كافية للحساب)"
+                        f"{_setup_label}: {ar_n(_perf['n_closed'], 'صفقة')} (غير كافية للحساب)"
                     )
             if _breakdown_lines:
                 lines.append("")

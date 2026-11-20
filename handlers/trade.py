@@ -26,6 +26,7 @@ trade.py — أوامر /trade Spot Bot
     (لا إعادة محاولات عمياء قد تكرر أمراً حقيقياً).
   • الإغلاق/الإيقاف/الخطط أزرارها تعمل، والتخزين عبر state_manager.kv_*.
 """
+from core.ar_count import ar_n   # QQ2 (b98): صيغة العدّ العربية
 import asyncio
 import logging
 import time
@@ -720,7 +721,7 @@ async def cb_trade(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 fail += 1
         await query.edit_message_text(
-            f"🔴 أُغلقت {ok} صفقة" + (f" • تعذّر إغلاق {fail} (راجع /trades)" if fail else ""))
+            f"🔴 أُغلقت {ar_n(ok, 'صفقة')}" + (f" • تعذّر إغلاق {fail} (راجع /trades)" if fail else ""))
         return
 
     if data.startswith("trade_plan_month:"):
@@ -938,7 +939,7 @@ async def cmd_trade_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.effective_message.reply_text(f"📋 لا توجد صفقات في ({label})")
         return
 
-    lines = [f"📋 *سجل الصفقات — {label}* ({len(filtered)} صفقة)", "━━━━━━━━━━━━━━━━━━"]
+    lines = [f"📋 *سجل الصفقات — {label}* ({ar_n(len(filtered), 'صفقة')})", "━━━━━━━━━━━━━━━━━━"]
     for h in filtered[:20]:
         lines.append(f"• {h.get('symbol', '?')} @ {_fmt_price(float(h.get('price', 0) or 0))} "
                      f"| {h.get('source', '')} | {h.get('time', '')[:10]}")

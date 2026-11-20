@@ -11,6 +11,7 @@ core/auto_trader_b68.py — التداول الآلي الافتراضي بمن�
   • القياس: سجل منفصل autoledger_b68 — المراكز القديمة تبقى كما هي ولا تدخل القياس.
   • الرسوم والانزلاق: Spot 0.1% لكل جهة، Futures 0.05% لكل جهة، وانزلاق 0.1% عند الدخول والخروج.
 """
+from core.ar_count import ar_n   # QQ2 (b98): صيغة العدّ العربية
 import asyncio
 import json
 import logging
@@ -589,13 +590,84 @@ def _ledger_open(uid, sym, side, px, amt, extra):
                      "ts": time.time(), "ver": AUTO_LOGIC_VER})
 
 
-def _open_msg(sym, side, px, amt, extra, rr, ev_mult) -> str:
+_AR_DAYS_QQ1 = ("الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت", "الأحد")
+_AR_MONTHS_QQ1 = ("يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو", "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر")
+
+
+def _md_safe_qq1(t) -> str:
+    return str(t or "").replace("*", "").replace("_", " ").replace("`", "").replace("[", "(").replace("]", ")").strip()
+
+
+def _open_msg(sym, side, px, amt, extra, rr, ev_mult, now_ts: float = None) -> str:
+    """QQ1 (b98، رحال 2026-11-20): بطاقة فتح تفصيلية بنمط إشعار الإغلاق (الدفعة 97) — تُرسل فور الفتح
+    (قرار b68: القياس آلي دون موافقة مسبقة). عرض فقط: البيانات نفسها المحفوظة في سجل الفتح ولقطة الدخول."""
     from handlers.analysis import _fmt_price
-    return ("🤖 *صفقة آلية افتراضية* (منطق /signal المجمّد — b68)\n"
-            f"• {sym} {'🟢 شراء Spot' if side == 'long' else '🟢 شراء Futures 1x' if side == 'long_fut' else '🔴 Short Futures 1x'} عند {_fmt_price(px)} — ${amt:,.0f}\n"
-            f"• الوقف {_fmt_price(extra.get('stop_loss'))} | TP1 {_fmt_price(extra.get('tp1'))} (60%) | TP2 {_fmt_price(extra.get('tp2'))} (40%)\n"
-            f"• R/R المرجّح عند التنفيذ 1:{rr:.2f}" + (f" | سقف التعرض {ev_mult:.0%}" if ev_mult < 1 else "") + "\n"
-            "🎮 افتراضي — /autostats لنتائج القياس")
+    short = side == "short"
+    lev = 1
+    mkt = "Spot" if side == "long" else "Futures 1x"
+    head = "🔴 Short" if short else "🟢 Long"
+    L = [f"🤖 *صفقة آلية افتراضية* — {sym} {head} {mkt}",
+         f"• الدخول: {_fmt_price(px)} | الهامش: ${amt:,.2f}"]
+
+    def _lvl(name, v, frac):
+        try:
+            v = float(v or 0)
+            if v <= 0 or px <= 0:
+                return None
+            mv = (v / px - 1) * 100 * (-1 if short else 1)
+            usd = amt * lev * frac * mv / 100   # TP1 على 60% من المركز وTP2 على الباقي 40%
+            return f"• {name}: {_fmt_price(v)} ({mv:+.2f}% ⇒ {'+' if usd >= 0 else '-'}${abs(usd):,.2f} قبل الرسوم)"
+        except Exception:
+            return None
+    for ln in (_lvl("🛑 الوقف (المركز كاملاً)", extra.get("stop_loss"), 1.0),
+               _lvl("🎯 TP1 (يُغلق 60%)", extra.get("tp1"), 0.6),
+               _lvl("🎯 TP2 (الباقي 40%)", extra.get("tp2"), 0.4)):
+        if ln:
+            L.append(ln)
+    if extra.get("tp1"):
+        L.append(f"  ↪️ بعد TP1 يصبح الوقف = سعر TP1 {_fmt_price(extra.get('tp1'))} للباقي")
+    _rr = f"• R/R المرجّح عند التنفيذ: 1:{rr:.2f}"
+    try:
+        _cf = float(extra.get("conf_entry") or 0)
+        _cf = _cf * 100 if _cf <= 1 else _cf
+        if _cf > 0:
+            _rr += f" | {'ميل الهبوط' if short else 'الثقة'} {_cf:.0f}%"
+    except Exception:
+        pass
+    _nc = extra.get("e_short_flags") if short else extra.get("e_n_conf")
+    if _nc is not None:
+        _rr += f" | التأكيدات {_nc}/4"
+    L.append(_rr)
+    ctx = []
+    if extra.get("e_regime_desc"):
+        ctx.append(_md_safe_qq1(extra.get("e_regime_desc"))[:60])
+    if extra.get("e_rsi") is not None:
+        try:
+            ctx.append(f"RSI {float(extra['e_rsi']):.0f}")
+        except Exception:
+            pass
+    if extra.get("e_atr_pct") is not None:
+        try:
+            ctx.append(f"ATR {float(extra['e_atr_pct']):.1f}%")
+        except Exception:
+            pass
+    if extra.get("e_fear_greed") is not None:
+        ctx.append(f"F&G {extra.get('e_fear_greed')}")
+    if ctx:
+        L.append("• السوق عند الدخول: " + " · ".join(ctx))
+    if extra.get("e_decision"):
+        L.append("• سبب الدخول: " + _md_safe_qq1(extra.get("e_decision"))[:120])
+    if ev_mult < 1:
+        L.append(f"• سقف التعرض المطبّق: {ev_mult:.0%} (حدث اقتصادي قريب)")
+    try:
+        from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+        ex = _dt.fromtimestamp((now_ts or time.time()) + AUTO_HOLD_HOURS * 3600, _tz.utc) + _td(hours=3)
+        L.append(f"• ⏰ الخروج الزمني إن لم يُصب هدف أو وقف: {_AR_DAYS_QQ1[ex.weekday()]} {ex.day} "
+                 f"{_AR_MONTHS_QQ1[ex.month - 1]} {ex:%H:%M} (KSA) — بعد {int(AUTO_HOLD_HOURS // 24)} أيام")
+    except Exception:
+        pass
+    L.append("🎮 افتراضي — /autostats لنتائج القياس | /vfutures للمركز")
+    return "\n".join(L)
 
 
 async def _notify(send_fn, uid, text):
@@ -1003,7 +1075,7 @@ def format_auto_stats_b68(st: dict, open_rows: list = None) -> str:
         _pf = "∞" if st["pf"] == float("inf") else f"{st['pf']:.2f}"
         L.append(f"• عامل الربح: {_pf} | أقصى تراجع: ${st['dd']:,.2f} ({st['dd_pct']:.1f}%)")
         for sd, b in st["by_side"].items():
-            L.append(f"  ↳ {'Long' if sd == 'long' else 'Short Futures 1x'}: {b['n']} صفقة، "
+            L.append(f"  ↳ {'Long' if sd == 'long' else 'Short Futures 1x'}: {ar_n(b['n'], 'صفقة')}، "
                      f"ربح {b['w']}/{b['n']}، صافي {_usd_b81(b['pnl'])}")
     L += ["", "🎯 *شروط العبور إلى تجربة حقيقية صغيرة*"]
     for lbl, ok, val in st["criteria"]:

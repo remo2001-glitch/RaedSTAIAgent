@@ -13,6 +13,7 @@ weekly_review.py — نظام المراجعة الأسبوعية الذكية �
   - AgentReport:  تجميع وإرسال التقرير
 """
 
+from core.ar_count import ar_n   # QQ2 (b98): صيغة العدّ العربية
 import asyncio
 import json
 import logging
@@ -173,7 +174,7 @@ async def agent_okx_review(prev_x: Optional[List[str]] = None) -> Dict[str, Any]
                                   and i["instId"].split("-")[0] not in _real_x73)
                 result["x_list"] = x_stocks
                 result["findings"].append(
-                    f"📊 أسهم مُرمَّزة (X) في OKX Spot: {len(x_stocks)} أصل")
+                    f"📊 أسهم مُرمَّزة (X) في OKX Spot: {ar_n(len(x_stocks), 'أصل')}")
                 if prev_x:
                     new_x = set(x_stocks) - set(prev_x)
                     gone_x = set(prev_x) - set(x_stocks)

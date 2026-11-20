@@ -15,6 +15,7 @@
 - معالجة أخطاء send_fn بشكل صحيح
 """
 
+from core.ar_count import ar_n   # QQ2 (b98): صيغة العدّ العربية
 import asyncio
 import logging
 import time
@@ -314,7 +315,7 @@ class Scheduler:
                if self.scan_finished_ts >= self.scan_started_ts > 0 else
                (f"جارٍ منذ {(now - self.scan_started_ts) / 60:.1f} دقيقة" if self.scan_started_ts else "—"))
         L = ["🛰️ حالة المسح", "━━━━━━━━━━━━━━━━━━",
-             f"• نبضة المجدول: {beat}" + (f" | أُعيد تشغيلها {self.loop_restarts} مرة" if self.loop_restarts else ""),
+             f"• نبضة المجدول: {beat}" + (f" | أُعيد تشغيلها {ar_n(self.loop_restarts, 'مرة')}" if self.loop_restarts else ""),
              f"• آخر مسح: {self.scan_session or '—'} — {self.scan_status}",
              f"• بدأ: {_t(self.scan_started_ts)} | المدة: {dur}",
              f"• آخر مسح ناجح: {_t(self.scan_ok_ts)}",

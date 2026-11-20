@@ -17,6 +17,7 @@
 DriftMonitor — يعمل بجانبه (كلاهما يُستدعيان معاً عند إغلاق أي صفقة).
 """
 
+from core.ar_count import ar_n   # QQ2 (b98): صيغة العدّ العربية
 import time
 import uuid
 import json
@@ -386,7 +387,7 @@ class SignalTracker:
             return {
                 "n_closed": n, "win_rate": None, "expectancy_pct": None,
                 "avg_win_pct": None, "avg_loss_pct": None,
-                "note": f"عيّنة غير كافية ({n} صفقة مغلقة فقط — الحد الأدنى المُوصى به 100 لكل نوع إعداد)",
+                "note": f"عيّنة غير كافية ({ar_n(n, 'صفقة')} مغلقة فقط — الحد الأدنى المُوصى به 100 لكل نوع إعداد)",
             }
 
         wins   = [r.pnl_pct for r in closed if r.was_win]
@@ -450,7 +451,7 @@ class SignalTracker:
             return {
                 "n_evaluated": n, "entry_not_reached": entry_missed,
                 "inconclusive": inconclusive, "win_rate": None,
-                "note": f"عيّنة غير كافية ({n} إشارة مرفوضة مُقيَّمة فقط)",
+                "note": f"عيّنة غير كافية ({ar_n(n, 'إشارة')} مرفوضة مُقيَّمة فقط)",
             }
         wins = sum(1 for r in evaluated if r.hypothetical_outcome == "would_win")
         win_rate = wins / n
@@ -490,13 +491,13 @@ class SignalTracker:
             lines.append("")
             lines.append("🔬 *لو نُفِّذت الإشارات المرفوضة؟*")
             if rej["win_rate"] is not None:
-                lines.append(f"من {rej['n_evaluated']} إشارة مرفوضة مُقيَّمة: كانت لتربح {rej['win_rate']}% منها")
+                lines.append(f"من {ar_n(rej['n_evaluated'], 'إشارة')} مرفوضة مُقيَّمة: كانت لتربح {rej['win_rate']}% منها")
                 if rej["note"]:
                     lines.append(f"⚠️ {rej['note']}")
             else:
                 lines.append(rej["note"])
             if rej["entry_not_reached"] > 0:
-                lines.append(f"(+ {rej['entry_not_reached']} إشارة لم يصل السعر لدخولها إطلاقاً)")
+                lines.append(f"(+ {ar_n(rej['entry_not_reached'], 'إشارة')} لم يصل السعر لدخولها إطلاقاً)")
 
         return "\n".join(lines)
 
