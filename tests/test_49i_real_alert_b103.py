@@ -122,8 +122,9 @@ heads = [t.split("\n")[0] for _, t in SENT]
 chk("AC1d1 الدورة: فتح BTC كما كان (القرار لم يتغيّر)", sm["long"] == 1 and sm.get("opened_syms") == ["BTC"], sm)
 chk("AC1d2 تنبيه الحساب الحقيقي قبل إشعار فتح القياس", len(heads) >= 2 and heads[0].startswith("🔔 *فرصة للحساب الحقيقي* — BTC")
     and heads[1].startswith("🤖 *صفقة آلية افتراضية* — BTC"), heads)
-chk("AC1d3 فرصتان تقتربان (ETH R/R، SOL تأكيد Short) للمالك", any(h.startswith("⏳ *فرصة تقترب* — ETH 🟢 Long") for h in heads)
-    and any(h.startswith("⏳ *فرصة تقترب* — SOL 🔴 Short") for h in heads) and all(u == OWNER for u, _ in SENT), heads)
+_nm108 = [t for _, t in SENT if t.startswith("⏳ *فرص تقترب (2)*")]   # AJ2 (b108): رسالة واحدة مجمّعة
+chk("AC1d3 فرصتان تقتربان (ETH R/R، SOL تأكيد Short) للمالك في رسالة واحدة", len(_nm108) == 1
+    and "• *ETH* 🟢 Long" in _nm108[0] and "• *SOL* 🔴 Short" in _nm108[0] and all(u == OWNER for u, _ in SENT), heads)
 chk("AC1d4 صلاحية «حتى المسح القادم (09:00 KSA)»", "وحتى المسح القادم (09:00 KSA)" in SENT[0][1], SENT[0][1])
 SENT.clear()
 FSM.wallets.clear()

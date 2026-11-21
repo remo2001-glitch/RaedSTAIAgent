@@ -203,13 +203,30 @@ def opp_text_b103(o: dict, bal, uid: int, next_scan: str = "") -> str:
     if ln:
         L.append(ln)
     if o.get("why"):
-        L.append("• السبب: " + _md(o.get("why"))[:120])
+        from core.auto_trader_b68 import size_reason_ar_b108   # AH1 (b108)
+        L.append("• السبب: " + size_reason_ar_b108(_md(o.get("why")))[:120])
+    _mh108 = market_closed_line_b108(o.get("sym"))   # AK1 (b108)
+    if _mh108:
+        L.append(_mh108)
     L.append(_bal_line(bal, o.get("size_frac")))
     L.append(f"⏳ صالحة ما دام السعر بين {_fmt_price(lo)} و{_fmt_price(hi)} (±{VALID_PCT:.0f}%)"
              + (f" وحتى المسح القادم ({_md(next_scan)})" if next_scan else " وحتى المسح القادم"))
     L.append(_stats_line(uid))
     L.append("🔒 تنبيه فقط — لا تنفيذ آلي على حسابك الحقيقي")
     return "\n".join(L)
+
+
+def market_closed_line_b108(sym) -> str:
+    """AK1 (b108): سطر مختصر حين يكون سوق السهم/الأصل مغلقاً — من `_get_market_hours_warning` نفسها (بطاقة /signal)."""
+    try:
+        from handlers.analysis import _get_market_hours_warning
+        w = _get_market_hours_warning(str(sym or ""))
+        if not w:
+            return ""
+        head = w.split("\n")[0].replace("⏰", "").replace("*تنبيه:*", "").replace("*", "").strip()
+        return f"🕒 {head} — سيولة أقل واحتمال فجوة سعرية عند الافتتاح"
+    except Exception:
+        return ""
 
 
 def near_text_b103(n: dict, bal) -> str:
@@ -251,26 +268,55 @@ async def send_opp_b103(engine, send_fn, o: dict, next_scan: str = "") -> bool:
         return False
 
 
+def near_combined_text_b108(items: list, bal) -> str:
+    """AJ2 (b108): رسالة واحدة لكل «فرص تقترب» الدورة (كانت رسالة لكل أصل — 6 دفعة واحدة في مسح 17:09)."""
+    if len(items) == 1:
+        t = near_text_b103(items[0], bal)
+        _mh = market_closed_line_b108(items[0].get("sym"))
+        return t.replace("\n🔕", f"\n{_mh}\n🔕", 1) if _mh else t
+    from handlers.analysis import _fmt_price
+    L = [f"⏳ *فرص تقترب ({len(items)})* — ينقص كلاً منها شرط واحد", "━━━━━━━━━━━━━━━━━━"]
+    for n in items:
+        short = n.get("side") == "short"
+        sc = float(n.get("score") or 0)
+        L.append(f"• *{n['sym']}* {'🔴 Short' if short else '🟢 Long'} — {_fmt_price(n.get('px'))} | "
+                 f"{'ميل الهبوط' if short else 'الثقة'} {sc:.0%}")
+        L.append("  ↳ ينقصها: " + _md(n.get("missing"))[:120] + f" — /signal {n['sym']}")
+        _mh = market_closed_line_b108(n.get("sym"))
+        if _mh:
+            L.append("  " + _mh)
+    if bal is not None and float(bal.get("total") or 0) <= 0:
+        L.append(f"💱 رصيدك الحقيقي على {bal.get('name') or 'المنصة'} $0.00 — جهّز الإيداع إن أردت التنفيذ عند اكتمالها")
+    elif bal is None:
+        L.append("💱 الحساب الحقيقي غير مربوط — /live للربط")
+    L.append(f"🔕 لا يتكرر تنبيه الأصل نفسه قبل {int(NEAR_COOLDOWN_H)} ساعة | تنبيه فقط")
+    return "\n".join(L)
+
+
 async def send_near_b103(engine, send_fn, items: list) -> int:
     """(ب) يرسل للمالك وحده — مرة لكل أصل وجهة كل 24 ساعة؛ لا يُرسل لأصل أُرسلت له فرصة (أ) في الدورة نفسها."""
     uid = owner_uid()
     if not uid or not send_fn or not items:
         return 0
-    sent, bal, got_bal = 0, None, False
+    due = []
     for n in items:
         _k = f"near:{n['sym']}:{n['side']}"
         if not _cool_ok(_k, NEAR_COOLDOWN_H, mark=False):
             logger.info(f"AC1 b103 near {n['sym']} {n['side']}: محجوب — أُرسل خلال {NEAR_COOLDOWN_H:g} ساعة")
             continue
-        if not got_bal:
-            bal, got_bal = await real_balance_b103(engine, uid), True
-        try:
-            _r = await send_fn(near_text_b103(n, bal), user_id=uid, parse_mode="Markdown")
-            if _r is False:   # AI1 (b106)
-                raise RuntimeError("send_fn أعاد False")
-            _cool_mark(_k)
-            sent += 1
-            logger.info(f"AC1 b103 near {n['sym']} {n['side']}: أُرسل للمالك")
-        except Exception as e:
-            logger.warning(f"AC1 b103 near {n['sym']} {n['side']}: فشل الإرسال — {type(e).__name__}: {e}")
-    return sent
+        due.append(n)
+    if not due:
+        return 0
+    bal = await real_balance_b103(engine, uid)
+    _names = ", ".join(f"{n['sym']} {n['side']}" for n in due)
+    try:   # AJ2 (b108): رسالة واحدة مجمّعة
+        _r = await send_fn(near_combined_text_b108(due, bal), user_id=uid, parse_mode="Markdown")
+        if _r is False:   # AI1 (b106)
+            raise RuntimeError("send_fn أعاد False")
+        for n in due:
+            _cool_mark(f"near:{n['sym']}:{n['side']}")
+        logger.info(f"AC1 b103 near ({len(due)}): أُرسل للمالك — {_names}")
+        return len(due)
+    except Exception as e:
+        logger.warning(f"AC1 b103 near ({len(due)}): فشل الإرسال — {type(e).__name__}: {e} — {_names}")
+        return 0

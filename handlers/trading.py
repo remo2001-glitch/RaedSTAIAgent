@@ -2440,16 +2440,20 @@ async def cmd_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• إجمالي (نقد + فوري بالتكلفة + هامش Futures): ${vw.total_value:,.2f}",
         f"• مراكز فوري مفتوحة: {len(vw.positions)}",
     ]
-    _mtm103 = await _wallet_mtm_b103(context, vw)   # AB2 (b103): القيمة الحالية بالربح/الخسارة غير المحققة
-    if _mtm103 is not None:
-        _u103 = _mtm103 - float(vw.total_value)
-        lines.append(f"• إجمالي لو أُغلقت المراكز الآن: ${_mtm103:,.2f} ({'+' if _u103 >= 0 else '-'}${abs(_u103):,.2f} "
-                     f"بعد رسوم الإغلاق والانزلاق؛ رسوم الفتح محتسبة أصلاً — يطابق صافي /vfutures)")
     # batch70: مراكز Futures كانت خارج «مراكز مفتوحة» رغم دخول هامشها في الإجمالي
     if vw.futures:
         _n_auto70 = sum(1 for p in vw.futures.values() if p.get("logic_ver"))
         lines.append(f"• مراكز Futures مفتوحة: {len(vw.futures)} (هامش ${vw.futures_margin:,.2f})"
                      + (f" — منها {_n_auto70} قياس 🤖" if _n_auto70 else "") + " — /vfutures")
+    _mtm103 = await _wallet_mtm_b103(context, vw)   # AB2 (b103): القيمة الحالية بالربح/الخسارة غير المحققة
+    if _mtm103 is not None:
+        # AD1 (b108): بعد سطر Futures، والحساب صريحاً (كان النص يقول إنه يطابق صافي /vfutures والرقمان مختلفان ظاهرياً)
+        _u103 = _mtm103 - float(vw.total_value)
+        _fo108 = sum(float(p.get("fee_open", 0) or 0) for p in (vw.futures or {}).values())
+        _net108 = _u103 - _fo108
+        lines.append(f"• إجمالي لو أُغلقت المراكز الآن: ${_mtm103:,.2f} ({'+' if _u103 >= 0 else '-'}${abs(_u103):,.2f})"
+                     + (f" = صافي /vfutures {'+' if _net108 >= 0 else '-'}${abs(_net108):,.2f} + رسوم الفتح ${_fo108:,.2f} "
+                        f"المحتسبة أصلاً في الإجمالي" if _fo108 > 0 else " بعد رسوم الإغلاق والانزلاق"))
 
     # إجمالي PnL — batch70: من مجمّع الربح غير المقرّب (كان مجموع أرباح مقرّبة لكل صفقة فيفرق سنتات عن الإجمالي)
     sells = [t for t in vw.history if t.get("type") == "sell"]

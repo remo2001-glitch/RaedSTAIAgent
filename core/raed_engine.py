@@ -192,6 +192,11 @@ class RaedEngine:
                 self.scheduler.register_weekly(self._generate_weekly_report)
                 self.scheduler.register_monthly(self._generate_monthly_report)
                 self.scheduler.register_scan(self._run_4h_scan)
+                try:   # AJ2 (b108): «⏳ فرص تقترب» تُرسل بعد تقرير المسح لا قبله
+                    self._post_scan_near_b108 = True
+                    self.scheduler._post_scan_fns_b108 = [self._flush_near_b108]
+                except Exception:
+                    self._post_scan_near_b108 = False
                 self.scheduler.start()
                 logger.info("✅ Scheduler started")
             except Exception as _sch_err:
@@ -879,6 +884,14 @@ class RaedEngine:
     # ═══════════════════════════════════════════════════════════
     # التقارير التلقائية
     # ═══════════════════════════════════════════════════════════
+    async def _flush_near_b108(self):
+        """AJ2 (b108): يرسل «⏳ فرص تقترب» المؤجلة من دورة التداول الآلي بعد إرسال تقرير المسح."""
+        pend = getattr(self, "_near_pending_b108", None)
+        self._near_pending_b108 = None
+        if pend:
+            from core.real_alert_b103 import send_near_b103
+            await send_near_b103(self, pend[0], pend[1])
+
     async def _run_4h_scan(self, session: str = "", ksa_hour: int = 0) -> str:
         """
         المسح الرباعي الشامل — يعمل كل 4 ساعات:

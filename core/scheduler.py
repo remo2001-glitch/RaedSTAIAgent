@@ -302,6 +302,12 @@ class Scheduler:
             logger.error(f"Scan error ({session}): {e}")
         finally:
             self.scan_finished_ts = time.time()
+            # AJ2 (b108): «⏳ فرص تقترب» بعد التقرير — وحتى لو فشل التقرير/انتهت مهلته
+            for _pf108 in list(getattr(self, "_post_scan_fns_b108", []) or []):
+                try:
+                    await _pf108()
+                except Exception as _e108:
+                    logger.warning(f"post-scan: {_e108}")
 
     def status_text_ar(self) -> str:
         """batch71: /scanstatus (للمالك)."""

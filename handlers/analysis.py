@@ -532,13 +532,17 @@ def chart_missed_levels_b91(analysis: str, leg) -> str:
         return ""
     raw = leg.get("raw") or {}
     miss = []
+    # AE1 (b108): المقارنة بلا فاصلة الآلاف و$ — البند 2 يكتب «$83,721.4» فكان يُعدّ غائباً (/chart BTC 21 نوفمبر 07:54)
+    _flat108 = analysis.replace(",", "").replace("$", "").replace("٬", "")
     _nm95 = dict(_LEVEL_NAMES_B91, **{str(k): str(k) for k in (leg.get("ema") or ())})   # b95 (MM4): + خطوط EMA
     for k, nm in _nm95.items():
         v = leg.get(k)
         if not isinstance(v, (int, float)) or not v:
             continue
         txt = str(raw.get(k) or "").strip() or f"{v:g}"
-        if txt not in analysis and f"{v:g}" not in analysis:
+        _tf108 = txt.replace(",", "").replace("$", "")
+        if (txt not in analysis and f"{v:g}" not in analysis and _tf108 not in _flat108
+                and f"{v:g}" not in _flat108 and f"{v:.2f}" not in _flat108 and f"{v:.1f}" not in _flat108):
             miss.append(f"{nm} {txt}")
     return ("📌 مستويات ظاهرة على الشارت لم يذكرها التحليل: " + " · ".join(miss)) if miss else ""
 

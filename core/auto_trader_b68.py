@@ -98,6 +98,21 @@ def long_gate_b68(rec: dict, price: float):
     return True, "", rr
 
 
+def size_reason_ar_b108(label: str) -> str:
+    """AH1 (b108): وسم قرار الحجم بالعربية — «(NORMAL) — حجم 10–20%» ⇒ «حجم عادي (10–20% حسب /signal)»."""
+    import re as _re108
+    s = str(label or "").strip()
+    m = _re108.match(r"^[\[(]\s*(HIGH|NORMAL|LOW|WAIT)\s*[\])]\s*—?\s*(.*)$", s, _re108.I)
+    if not m:
+        return s
+    tag, rest = m.group(1).upper(), m.group(2).strip()
+    name = {"HIGH": "حجم مرتفع", "NORMAL": "حجم عادي", "LOW": "حجم منخفض", "WAIT": "انتظار"}[tag]
+    r = _re108.match(r"^حجم\s+([\d–\-]+%)\s*(.*)$", rest)
+    if r:
+        return f"{name} ({r.group(1)} حسب /signal)" + (f" {r.group(2)}" if r.group(2) else "")
+    return f"{name}" + (f" — {rest}" if rest else "")
+
+
 GATE_REV = "b105"   # AF4 (أ): البوابة تحترم حكم جودة البنية «انتظار — مراقبة فقط» — يُوسَم في لقطة الدخول
 
 
@@ -435,7 +450,10 @@ async def run_auto_cycle_b68(engine, send_fn=None, bot_data=None) -> dict:
         _nr = [n for n in summary.get("real_near") or [] if n["sym"] not in (summary.get("real_opp_syms") or [])]
         logger.info(f"AC1 b103 near: {len(_nr)} مرشح " + (", ".join(f"{n['sym']}:{n['side']}" for n in _nr) if _nr else "—"))
         if _nr:
-            summary["real_near_sent"] = await send_near_b103(engine, send_fn, _nr)
+            if getattr(engine, "_post_scan_near_b108", False):   # AJ2 (b108): يُرسل بعد تقرير المسح
+                engine._near_pending_b108 = (send_fn, _nr)
+            else:
+                summary["real_near_sent"] = await send_near_b103(engine, send_fn, _nr)
     except Exception as e:
         logger.warning(f"AC1 b103 near: {e}")
     logger.info(f"auto_b68 cycle: {summary}")
@@ -726,7 +744,7 @@ def _open_msg(sym, side, px, amt, extra, rr, ev_mult, now_ts: float = None) -> s
     if ctx:
         L.append("• السوق عند الدخول: " + " · ".join(ctx))
     if extra.get("e_decision"):
-        L.append("• سبب الدخول: " + _md_safe_qq1(extra.get("e_decision"))[:120])
+        L.append("• سبب الدخول: " + size_reason_ar_b108(_md_safe_qq1(extra.get("e_decision")))[:120])   # AH1 (b108)
     if ev_mult < 1:
         L.append(f"• سقف التعرض المطبّق: {ev_mult:.0%} (حدث اقتصادي قريب)")
     try:
