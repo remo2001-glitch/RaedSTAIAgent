@@ -12,6 +12,8 @@ core/auto_trader_b68.py — التداول الآلي الافتراضي بمن�
   • الرسوم والانزلاق: Spot 0.1% لكل جهة، Futures 0.05% لكل جهة، وانزلاق 0.1% عند الدخول والخروج.
 """
 from core.ar_count import ar_n   # QQ2 (b98): صيغة العدّ العربية
+from core.real_alert_b103 import (near_one_long_b103, near_one_short_b103,   # AC1 (b103): تنبيه الحساب الحقيقي
+                                  send_near_b103, send_opp_b103)
 import asyncio
 import json
 import logging
@@ -318,7 +320,17 @@ async def run_auto_cycle_b68(engine, send_fn=None, bot_data=None) -> dict:
             if not ok and _cf73 > 0.35:   # batch73 (H2): عرض فقط — أقرب الأصول للدخول وما ينقصها
                 _near_add_b73(summary, sym, "شراء", _cf73,
                               (_wait_reason_b77(rec, _cf73) if why == "انتظار" else why))
+            if not ok:   # AC1 (ب) b103: فرصة تقترب — شرط واحد ناقص (تنبيه للمالك فقط)
+                _real_near_add_b103(summary, sym, "long", _cf73, px, near_one_long_b103(rec, why, rr))
             if ok:
+                # AC1 (أ) b103: تنبيه «فرصة للحساب الحقيقي» للمالك — قبل فتح صفقة القياس الافتراضية
+                await _real_opp_b103(engine, send_fn, summary, {
+                    "sym": sym, "side": "long", "px": px, "rr": rr, "conf": _cf73,
+                    "sl": (min(float(rec["sl"]), px * (1 - 1.5 * float(rec.get("atr_pct") or 0) / 100))
+                           if float(rec.get("atr_pct") or 0) > 0 else float(rec["sl"])),
+                    "tp1": float(rec["tp1"]), "tp2": float(rec.get("tp2") or rec["tp1"]),
+                    "n_conf": rec.get("n_conf"), "why": rec.get("decision_label") or rec.get("size_rule") or "",
+                    "size_frac": AUTO_BASE_PCT * max(0.0, min(1.0, _long_factor(rec, tier))) * max(0.0, min(1.0, ev_mult))})
                 amt = size_usd_b68(vw.total_value, _long_factor(rec, tier), ev_mult)
                 amt = min(amt, vw.balance * 0.95)
                 if amt >= AUTO_MIN_USD:
@@ -372,7 +384,14 @@ async def run_auto_cycle_b68(engine, send_fn=None, bot_data=None) -> dict:
                 summary["waits"] += 1
                 _near_add_b73(summary, sym, "Short", 1.0 - _cf73, why2,
                               fails=(sh.get("fails_b86") if not sh.get("eligible") else None))   # batch73 (H2) + b91 (HH1)
+                _real_near_add_b103(summary, sym, "short", 1.0 - _cf73, px, near_one_short_b103(sh, why2, rr2))   # AC1 (ب)
                 continue
+            # AC1 (أ) b103: تنبيه «فرصة للحساب الحقيقي» للمالك — قبل فتح صفقة القياس الافتراضية
+            await _real_opp_b103(engine, send_fn, summary, {
+                "sym": sym, "side": "short", "px": px, "rr": rr2, "conf": float(sh.get("bear_conf") or 0),
+                "sl": float(sh["sl"]), "tp1": float(sh["tp1"]), "tp2": float(sh.get("tp2") or sh["tp1"]),
+                "n_conf": sh.get("n_flags"), "why": sh.get("reason") or "",
+                "size_frac": AUTO_BASE_PCT * max(0.0, min(1.0, float(sh.get("size_factor") or 0))) * max(0.0, min(1.0, ev_mult))})
             mg = size_usd_b68(vw.total_value, float(sh.get("size_factor") or 0), ev_mult)
             mg = min(mg, vw.balance * 0.95)
             if mg < AUTO_MIN_USD:
@@ -397,8 +416,43 @@ async def run_auto_cycle_b68(engine, send_fn=None, bot_data=None) -> dict:
                 summary.setdefault("opened_syms", []).append(sym)   # batch78 (P2)
                 _ledger_open(uid, sym, "short", epx, mg, extra)
                 await _notify(send_fn, uid, _open_msg(sym, "short", epx, mg, {**extra, "stop_loss": float(sh["sl"])}, rr2, ev_mult))
+    # AC1 (ب) b103: «فرصة تقترب» للمالك — بعد الدورة، دون الأصول التي وصلها تنبيه (أ) الآن
+    try:
+        _nr = [n for n in summary.get("real_near") or [] if n["sym"] not in (summary.get("real_opp_syms") or [])]
+        if _nr:
+            summary["real_near_sent"] = await send_near_b103(engine, send_fn, _nr)
+    except Exception as e:
+        logger.warning(f"AC1 b103 near: {e}")
     logger.info(f"auto_b68 cycle: {summary}")
     return summary
+
+
+def _real_near_add_b103(summary: dict, sym: str, side: str, score: float, px: float, missing: str) -> None:
+    """AC1 (ب) b103: يسجّل أصلاً ينقصه شرط واحد — مرة لكل أصل وجهة في الدورة. تنبيه فقط."""
+    if not missing:
+        return
+    try:
+        lst = summary.setdefault("real_near", [])
+        if not any(x["sym"] == sym and x["side"] == side for x in lst):
+            lst.append({"sym": sym, "side": side, "score": float(score), "px": float(px), "missing": missing})
+    except Exception:
+        pass
+
+
+async def _real_opp_b103(engine, send_fn, summary: dict, o: dict) -> None:
+    """AC1 (أ) b103: مرة لكل أصل في الدورة (لا لكل حساب قياس)."""
+    try:
+        done = summary.setdefault("real_opp_syms", [])
+        if o["sym"] in done:
+            return
+        done.append(o["sym"])
+        try:
+            _nx = engine.scheduler.next_scan_ar().replace("⏰ المسح القادم:", "").split("—")[0].strip()
+        except Exception:
+            _nx = ""
+        await send_opp_b103(engine, send_fn, o, _nx)
+    except Exception as e:
+        logger.warning(f"AC1 b103 opp: {e}")
 
 
 def _track_open_b68(engine, uid, sym, side, px, extra, conf_pct, n_conf) -> str:

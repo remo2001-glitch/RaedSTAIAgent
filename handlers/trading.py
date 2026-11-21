@@ -2370,6 +2370,53 @@ async def cmd_setportfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ════════════════════════════════════════════════════════════════
 # ══ /wallet ══════════════════════════════════════════════════════════════════
 
+async def _wallet_mtm_b103(context, vw):
+    """AB2 (b103): الإجمالي بالقيمة الحالية = الإجمالي بالتكلفة + غير المحقق للمراكز المفتوحة (Futures بعد رسوم الإغلاق
+    كما في /vfutures «الصافي لو أُغلق الآن» دون الانزلاق، والفوري بسعره الحالي). None ⇒ لا مراكز أو تعذّر سعر."""
+    try:
+        if not vw.futures and not vw.positions:
+            return None
+        engine = context.bot_data.get("raed_engine")
+        if not engine:
+            return None
+        unreal = 0.0
+        from core.virtual_wallet import VirtualWallet as _VW103
+        for k, p in (vw.futures or {}).items():
+            sym = _VW103.base_symbol(k, p)   # نفس تسعير /vfutures
+            pd = await engine.data_layer.get_price(sym)
+            px = float((pd or {}).get("price") or 0)
+            if px <= 0:
+                return None
+            _pxc = px * (0.999 if p.get("side") == "long" else 1.001)   # نفس انزلاق الإغلاق في /vfutures
+            unreal += vw.futures_pnl(k, _pxc) - float(p["qty"]) * _pxc * vw.FUT_FEE_RATE
+        for k, p in (vw.positions or {}).items():
+            sym = str(p.get("symbol") or k).split("@", 1)[0]
+            pd = await engine.data_layer.get_price(sym)
+            px = float((pd or {}).get("price") or 0)
+            if px <= 0:
+                return None
+            q = float(p.get("quantity") or 0)
+            cost = float(p.get("cost") or 0)
+            if q <= 0 or cost <= 0:
+                return None
+            unreal += q * px - cost
+        return float(vw.total_value) + unreal
+    except Exception:
+        return None
+
+
+def _loss_sl_usd_b103(p: dict, entry: float, sl: float, fee_rate: float) -> float:
+    """AB1 (b103): الخسارة عند الوقف بالدولار شاملة الرسوم — نفس معادلة بطاقة الفتح:
+    |الدخول − الوقف| × الكمية + رسوم الفتح + رسوم الإغلاق عند الوقف."""
+    try:
+        q = float(p.get("qty") or 0)
+        if q <= 0 or entry <= 0 or sl <= 0:
+            return 0.0
+        return abs(entry - sl) * q + float(p.get("fee_open", 0) or 0) + q * sl * float(fee_rate)
+    except Exception:
+        return 0.0
+
+
 async def cmd_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """T2: عرض المحفظتين — الافتراضية والحقيقية."""
     user_id = update.effective_user.id
@@ -2389,10 +2436,15 @@ async def cmd_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "",
         "🎮 *المحفظة الافتراضية*",
         f"• الرصيد النقدي: ${vw.balance:,.2f}",
-        f"• مُستثمر: ${vw.invested:,.2f}",
-        f"• إجمالي: ${vw.total_value:,.2f}",
+        f"• مُستثمر (فوري): ${vw.invested:,.2f}",   # AB2 (b103): البند للمراكز الفورية وحدها
+        f"• إجمالي (نقد + فوري بالتكلفة + هامش Futures): ${vw.total_value:,.2f}",
         f"• مراكز فوري مفتوحة: {len(vw.positions)}",
     ]
+    _mtm103 = await _wallet_mtm_b103(context, vw)   # AB2 (b103): القيمة الحالية بالربح/الخسارة غير المحققة
+    if _mtm103 is not None:
+        _u103 = _mtm103 - float(vw.total_value)
+        lines.append(f"• إجمالي لو أُغلقت المراكز الآن: ${_mtm103:,.2f} ({'+' if _u103 >= 0 else '-'}${abs(_u103):,.2f} "
+                     f"بعد رسوم الإغلاق والانزلاق؛ رسوم الفتح محتسبة أصلاً — يطابق صافي /vfutures)")
     # batch70: مراكز Futures كانت خارج «مراكز مفتوحة» رغم دخول هامشها في الإجمالي
     if vw.futures:
         _n_auto70 = sum(1 for p in vw.futures.values() if p.get("logic_ver"))
@@ -3514,7 +3566,7 @@ async def _open_virtual_futures_b58(user_id, symbol, side, price, amount, levera
         f"🛑 الوقف: {_fmt_price(sl)} ({'-' if is_long else '+'}{sl_pct:.1f}% — ≥1.5×ATR)",
         f"🎯 الهدف: {_fmt_price(tp)} ({'+' if is_long else '-'}{tp_pct:.1f}% — R/R 1:{tp_pct / sl_pct:.1f})",
         f"💥 سعر التصفية: {_liq_txt}",
-        f"⚖️ الخسارة عند الوقف ≈ ${_loss:,.2f} شاملة الرسوم ({_lp:.0f}% من الهامش)",
+        f"⚖️ الخسارة عند الوقف ≈ ${_loss:,.2f} شاملة الرسوم ({_lp:.1f}% من الهامش)",   # AB1 (b103): منزلة كـ /vfutures
         *([f"⚠️ الوقف يستهلك {_lp:.0f}% من الهامش — رافعة مرتفعة نسبةً إلى مسافة الوقف"] if _lp >= 30 else []),
         # batch59b (#735): الوقف قريب من التصفية (< نصف ATR) — الانزلاق عند الكسر قد يبلغ التصفية قبل تنفيذ الوقف
         *([f"⚠️ الوقف يبعد {abs(sl - float(pos['liq_price'])) / ep * 100:.1f}% فقط عن سعر التصفية (أقل من نصف ATR) — "
@@ -3624,7 +3676,13 @@ async def cmd_vfutures(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     lines.append(f"  🛑 عند الوقف (سعر TP1): الباقي يُغلق دون خسارة على الدخول{_rr_t}")
                 else:
                     # batch80 (R2): منزلة واحدة في الرقمين (كان «−8%» و«8.5%» للقيمة نفسها)
-                    lines.append(f"  🛑 عند الوقف: −{_loss_sl:.1f}% من الهامش (المسافة {_sl_d * 100:.1f}% × {lev_}x){_rr_t}")
+                    # AB1 (b103): الخسارة شاملة الرسوم كبطاقة الفتح (كانت «−28.8%» هنا و«29%» هناك للمركز نفسه)
+                    _usd_sl = _loss_sl_usd_b103(p_, _ep67, _sl67, vw.FUT_FEE_RATE)
+                    if _usd_sl > 0 and _mg67 > 0:
+                        lines.append(f"  🛑 عند الوقف: −{min(_usd_sl / _mg67 * 100, 100.0):.1f}% من الهامش (${_usd_sl:,.2f} شاملة الرسوم؛ "
+                                     f"المسافة {_sl_d * 100:.1f}% × {lev_}x){_rr_t}")
+                    else:
+                        lines.append(f"  🛑 عند الوقف: −{_loss_sl:.1f}% من الهامش (المسافة {_sl_d * 100:.1f}% × {lev_}x){_rr_t}")
         except Exception:
             pass
         lines.append(f"  {'📈' if net >= 0 else '📉'} الصافي لو أُغلق الآن: {'+' if net >= 0 else '-'}${abs(net):,.2f} "
