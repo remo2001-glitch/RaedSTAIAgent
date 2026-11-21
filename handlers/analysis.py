@@ -1967,6 +1967,7 @@ def _save_signal_decision_b58(user_id, symbol, mkttype, meta: dict, score: dict,
         "sl_pct": meta.get("sl_pct"), "tp1_pct": meta.get("tp_pct"), "tp2_pct": meta.get("tp2_pct"),
         "support_gap_pct": meta.get("support_gap_pct"),
         "regime_desc": str(meta.get("regime_desc", ""))[:60],
+        "bear_confirmed": bool(meta.get("bear_confirmed_b104")),   # AF1 (b104): لتنبيه «فرصة تقترب» — تخزين فقط
         "regime_bucket": ("هابط" if "هابط" in str(meta.get("regime_desc", "")) else "صاعد" if "صاعد" in str(meta.get("regime_desc", ""))
                           else "جانبي" if str(meta.get("regime_desc", "")) else ""),
     }
@@ -1995,14 +1996,17 @@ _SIGFULL_MAX_B82 = 120
 
 def deep_drop_line_b86(pve: float) -> str:
     """batch86 (BB1-ب): هبوط حقيقي أعمق من ~23% تحت EMA50 — كان يُعرض «بيانات غير موثوقة» والبيانات سليمة."""
-    return (f"⚠️ هبوط حاد {'−' if pve < 0 else '+'}{abs(pve):.1f}% تحت EMA50 — الثقة مقيّدة ≤ 49% "
-            f"والمستويات محسوبة على آخر 30 يوماً")
+    # AF3 (أ) b104 (رحال 2026-11-21): النص يطابق ما يحدث فعلاً — الحكم يُقيَّد «انتظار» (signal_scorer)، وسقف 49%
+    # على الثقة الأساسية قبل رفع التأكيدات (ETH 08:41: «مقيّدة ≤ 49%» والبطاقة «الثقة 58%»)، وFibonacci بنافذته
+    # المعتادة 60 يوماً (إعادة الحساب على 30 يوماً كان يُكتب فوقها). عرض فقط — المنطق كما هو.
+    return (f"⚠️ هبوط حاد {'−' if pve < 0 else '+'}{abs(pve):.1f}% تحت EMA50 — الحكم «انتظار» كحد أقصى؛ "
+            f"الثقة الأساسية ≤ 49% قبل رفع التأكيدات")
 
 
 def deep_drop_block_b86(pve: float, atr: float, rsi: float) -> str:
     return ("\n\n⚠️ *هبوط حاد تحت EMA50*\n"
-            f"• السعر {'−' if pve < 0 else '+'}{abs(pve):.1f}% تحت EMA50 — حماية تلقائية: الثقة ≤ 49%، "
-            "الحكم «انتظار» كحد أقصى، Fibonacci على آخر 30 يوماً\n"
+            f"• السعر {'−' if pve < 0 else '+'}{abs(pve):.1f}% تحت EMA50 — حماية تلقائية: الحكم «انتظار» كحد أقصى، "
+            "الثقة الأساسية ≤ 49% قبل رفع التأكيدات، Fibonacci على نافذته المعتادة (آخر 60 يوماً)\n"
             f"• ATR={atr:.1f}% | RSI={rsi:.0f}")
 
 
@@ -2119,6 +2123,9 @@ def signal_card_b82(d: dict) -> str:
                 _w = _w.replace("الاتجاه غير مؤكد، انتظر وضوح الجهة", "اتجاه هابط قائم، لا شراء")
             if _w and "حافة" not in _w and "R/R" not in _w and not _w.startswith("حكم /signal"):
                 why_l += f"؛ {_w}"
+            # AF2 (b104): الهبوط القائم يُذكر في «لماذا؟» كما في «ما الذي يغيّر الحكم؟» (ETH 08:41 كان R/R وحده)
+            if d.get("bear_confirmed") and "اتجاه هابط قائم" not in why_l:
+                why_l += "؛ اتجاه هابط قائم، لا شراء"
         else:
             why_l = "⏳ " + _wr(rec, conf / 100.0)
             if d.get("bear_confirmed"):
@@ -6917,6 +6924,10 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _score_result = evaluate_signal(_si)
                 # batch58 (#682): سجل قرار /signal المعروض — /trade ينفّذ هذا القرار نفسه لا منطقاً مستقلاً
                 try:
+                    try:   # AF1 (b104): الهبوط القائم مع القرار المحفوظ (نفس مصدر «ما الذي يغيّر الحكم؟») — تخزين فقط
+                        _sm_sig["bear_confirmed_b104"] = bool(_bear_confirmed_b56(regime)[0])
+                    except Exception:
+                        pass
                     _rec82 = _save_signal_decision_b58(user_id, symbol, _mkt_arg_sig, _sm_sig, _score_result,
                                               auto=bool(context.user_data.get("_headless_b68")))
                 except Exception as _sd58:
@@ -8775,7 +8786,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 decision_ctx=_llm_decision_ctx(_sig_a, locals().get("regime_obj")),
                 facts_ctx=_llm_facts_ctx(_sig_a) + _llm_levels_ctx_b61(fib_a) + _llm_event_ctx_b62(engine) + (
                     ("؛ تحذير أساسي: بيانات غير موثوقة بعد انهيار حاد — اذكر ذلك في أول جملة" if _deep86a is None else
-                     f"؛ تحذير أساسي: هبوط حاد {_deep86a:.1f}% تحت EMA50 — الثقة مقيّدة ≤ 49% والحكم انتظار؛ اذكر ذلك في أول جملة")
+                     f"؛ تحذير أساسي: هبوط حاد {_deep86a:.1f}% تحت EMA50 — الحكم «انتظار» كحد أقصى؛ اذكر ذلك في أول جملة")
                     if _data_corrupted_an else ""))
             if not analysis or len(analysis.strip()) < 20:
                 raise ValueError("تحليل فارغ")

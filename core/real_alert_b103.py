@@ -96,8 +96,14 @@ def near_one_long_b103(rec: dict, why: str, rr_now: float) -> str:
         m = re.search(r"R/R = 1:([\d.]+)", vr)
         rr = float(m.group(1)) if m else float(r.get("rr") or 0)
         conf = float(r.get("confidence") or 0)
+        # AF1 (b104): «شرط واحد» = قائمة «ما الذي يغيّر الحكم؟» في بطاقة /signal لا ينقص فيها إلا R/R:
+        # لا هبوط قائم، وجهة شراء مؤكدة (ثقة ≥ 65%)، وتأكيدات شراء ≥ 2/4 (كان يُفحص R/R والثقة فقط)
+        try:
+            n_conf = int(r.get("n_conf") or 0)
+        except (TypeError, ValueError):
+            n_conf = 0
         if (str(r.get("direction", "")).lower() in ("long", "bullish", "buy") and conf >= NEAR_CONF_MIN
-                and NEAR_RR_MIN <= rr < 1.0):
+                and not r.get("bear_confirmed") and n_conf >= 2 and NEAR_RR_MIN <= rr < 1.0):
             return f"R/R المرجّح 1:{rr_fmt_b79(rr)} (المطلوب ≥ 1:1)"
     except Exception:
         pass

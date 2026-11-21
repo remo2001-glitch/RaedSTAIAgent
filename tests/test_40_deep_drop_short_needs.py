@@ -3,9 +3,9 @@ from _util import chk, src
 import handlers.analysis as A
 from core.short_eval_b68 import evaluate_short_b68 as ev
 
-chk("BB1a سطر الهبوط الحاد", A.deep_drop_line_b86(-24.6) == "⚠️ هبوط حاد −24.6% تحت EMA50 — الثقة مقيّدة ≤ 49% والمستويات محسوبة على آخر 30 يوماً")
+chk("BB1a سطر الهبوط الحاد", A.deep_drop_line_b86(-24.6) == "⚠️ هبوط حاد −24.6% تحت EMA50 — الحكم «انتظار» كحد أقصى؛ الثقة الأساسية ≤ 49% قبل رفع التأكيدات")
 b = A.deep_drop_block_b86(-24.6, 6.8, 20)
-chk("BB1b كتلة التفاصيل تذكر الحماية", "⚠️ *هبوط حاد تحت EMA50*" in b and "الثقة ≤ 49%" in b and "«انتظار» كحد أقصى" in b and "RSI=20" in b)
+chk("BB1b كتلة التفاصيل تذكر الحماية", "⚠️ *هبوط حاد تحت EMA50*" in b and "الثقة الأساسية ≤ 49% قبل رفع التأكيدات" in b and "«انتظار» كحد أقصى" in b and "RSI=20" in b)
 s = src("handlers/analysis.py")
 chk("BB1c فقط حين يكون السبب الوحيد EMA50 من شموع كاملة", "_ema50_sig_corrupted and len(candles or []) >= 50" in s
     and "not (atr_pct > 25 or rsi < 5 or _pve50_chk < -50)" in s and "not (_atr_an > 25 or rsi < 5 or _pve50_an < -50)" in s)

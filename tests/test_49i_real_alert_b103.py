@@ -32,7 +32,7 @@ AG.is_allowed = lambda u: True
 # ── (ب) شرط واحد ناقص ─────────────────────────────────────────────
 L1 = RA.near_one_long_b103
 chk("AC1b1 R/R عند السعر الحالي 0.95 ⇒ فرصة تقترب", "1:0.95" in L1({}, "R/R عند السعر الحالي 1:0.95 < 1", 0.953))
-eth = {"verdict": "AUTO-FAIL", "verdict_reason": "G3 — R/R = 1:0.96", "direction": "long", "confidence": 0.70}
+eth = {"verdict": "AUTO-FAIL", "verdict_reason": "G3 — R/R = 1:0.96", "direction": "long", "confidence": 0.70, "n_conf": 2}
 chk("AC1b2 حالة ETH 05:09 (AUTO-FAIL R/R 0.96 وثقة 70%) ⇒ شرط واحد", L1(eth, "x", 0) == "R/R المرجّح 1:0.96 (المطلوب ≥ 1:1)", L1(eth, "x", 0))
 chk("AC1b3 الجهة غير مؤكدة (ثقة 60%) ⇒ ليست شرطاً واحداً", L1({**eth, "confidence": 0.60}, "x", 0) == "")
 chk("AC1b4 R/R بعيد (0.80) ⇒ لا", L1({**eth, "verdict_reason": "G3 — R/R = 1:0.80"}, "x", 0) == "" and L1({}, "R/R عند السعر الحالي 1:0.8 < 1", 0.8) == "")
@@ -88,7 +88,7 @@ chk("AC1c3 بعد 24 ساعة يعود", len(SENT) == 1)
 import handlers.analysis as A
 REC = {"BTC": {"verdict": "ENTER", "direction": "long", "confidence": 0.72, "size_pct": 20, "sl": 57000.0, "tp1": 63500.0,
                "tp2": 66000.0, "atr_pct": 2.0, "n_conf": 2, "decision_label": "دخول شراء", "regime_bucket": "هابط"},
-       "ETH": {"verdict": "AUTO-FAIL", "verdict_reason": "G3 — R/R = 1:0.96", "direction": "long", "confidence": 0.70,
+       "ETH": {"verdict": "AUTO-FAIL", "verdict_reason": "G3 — R/R = 1:0.96", "direction": "long", "confidence": 0.70, "n_conf": 2,
                "sl": 1450.0, "tp1": 1700.0, "tp2": 1760.0},
        "SOL": {"verdict": "WAIT", "wait": True, "confidence": 0.20,
                "short": {"eligible": False, "fails_b86": ["تأكيدات Short 1/4 (الحد الأدنى 2)"]}}}
