@@ -36,7 +36,8 @@ STABLES = {"USDT", "USDC", "BUSD", "DAI", "TUSD", "USDP", "FDUSD", "USDD", "GUSD
            "MIM", "ALUSD", "SUSD", "PYUSD", "USDE", "USD1", "RLUSD", "EURC", "USDS", "USDTB", "BUIDL", "USYC",
            # batch68c: أصول مغلّفة/مرهونة تكرّر BTC/ETH (ولا سوق فوري لها على OKX) + رموز منصات بلا سيولة OKX كافية
            "WBTC", "WETH", "STETH", "WSTETH", "WEETH", "CBBTC", "RETH", "WBETH", "METH", "LBTC", "SOLVBTC", "BSC-USD",
-           "JITOSOL", "MSOL", "LEO", "FIGR_HELOC", "WBT"}
+           "JITOSOL", "MSOL", "LEO", "FIGR_HELOC", "WBT",
+           "USDG"}   # AG2 (b105): Global Dollar عملة مستقرة — كانت تظهر في «لا عقد دائم» (مسح 21 نوفمبر 09:09)
 # معايير العبور إلى الحقيقي (المتفق عليها 2026-11-06)
 CRIT_MIN_TRADES = 50
 CRIT_MAX_DD_PCT = 10.0
@@ -76,6 +77,8 @@ def long_gate_b68(rec: dict, price: float):
         return False, "لا قرار /signal", 0.0
     if str(rec.get("verdict", "")).upper() == "AUTO-FAIL":
         return False, autofail_reason_b79(rec), 0.0
+    if str(rec.get("verdict", "")).upper() == "WATCH ONLY":   # AF4 (أ) b105 (رحال 2026-11-21 09:12)
+        return False, watch_reason_b105(rec), 0.0
     if rec.get("wait") or float(rec.get("size_pct") or 0) <= 0:
         return False, "انتظار", 0.0
     if str(rec.get("direction", "")).lower() not in ("long", "bullish", "buy"):
@@ -93,6 +96,15 @@ def long_gate_b68(rec: dict, price: float):
     if rr < 1.0:
         return False, f"R/R عند السعر الحالي 1:{rr:.2f} < 1", rr
     return True, "", rr
+
+
+GATE_REV = "b105"   # AF4 (أ): البوابة تحترم حكم جودة البنية «انتظار — مراقبة فقط» — يُوسَم في لقطة الدخول
+
+
+def watch_reason_b105(rec: dict) -> str:
+    """AF4 (أ) b105: سبب «انتظار — مراقبة فقط» من تقييم البنية (هبوط حاد، ثقة دون الحد، بنية ضعيفة…). عرض فقط."""
+    w = str((rec or {}).get("watch_reason") or "").replace("*", "").strip()
+    return "جودة البنية «انتظار — مراقبة فقط»" + (f": {w}" if w else "")
 
 
 def short_gate_b68(sh: dict, price: float):
@@ -324,9 +336,10 @@ async def run_auto_cycle_b68(engine, send_fn=None, bot_data=None) -> dict:
                 _real_near_add_b103(summary, sym, "long", _cf73, px, near_one_long_b103(rec, why, rr))
             if ok:
                 # AC1 (أ) b103: تنبيه «فرصة للحساب الحقيقي» للمالك — قبل فتح صفقة القياس الافتراضية
+                _epx105 = px * (1 + AUTO_SLIP)   # AG1 (b105): نفس سعر تنفيذ القياس ووقفه (كان من السعر قبل الانزلاق)
                 await _real_opp_b103(engine, send_fn, summary, {
-                    "sym": sym, "side": "long", "px": px, "rr": rr, "conf": _cf73,
-                    "sl": (min(float(rec["sl"]), px * (1 - 1.5 * float(rec.get("atr_pct") or 0) / 100))
+                    "sym": sym, "side": "long", "px": _epx105, "rr": rr, "conf": _cf73,
+                    "sl": (min(float(rec["sl"]), _epx105 * (1 - 1.5 * float(rec.get("atr_pct") or 0) / 100))
                            if float(rec.get("atr_pct") or 0) > 0 else float(rec["sl"])),
                     "tp1": float(rec["tp1"]), "tp2": float(rec.get("tp2") or rec["tp1"]),
                     "n_conf": rec.get("n_conf"), "why": rec.get("decision_label") or rec.get("size_rule") or "",
@@ -388,7 +401,7 @@ async def run_auto_cycle_b68(engine, send_fn=None, bot_data=None) -> dict:
                 continue
             # AC1 (أ) b103: تنبيه «فرصة للحساب الحقيقي» للمالك — قبل فتح صفقة القياس الافتراضية
             await _real_opp_b103(engine, send_fn, summary, {
-                "sym": sym, "side": "short", "px": px, "rr": rr2, "conf": float(sh.get("bear_conf") or 0),
+                "sym": sym, "side": "short", "px": px * (1 - AUTO_SLIP), "rr": rr2,   # AG1 (b105): سعر تنفيذ القياس "conf": float(sh.get("bear_conf") or 0),
                 "sl": float(sh["sl"]), "tp1": float(sh["tp1"]), "tp2": float(sh.get("tp2") or sh["tp1"]),
                 "n_conf": sh.get("n_flags"), "why": sh.get("reason") or "",
                 "size_frac": AUTO_BASE_PCT * max(0.0, min(1.0, float(sh.get("size_factor") or 0))) * max(0.0, min(1.0, ev_mult))})
@@ -632,6 +645,7 @@ def entry_snapshot_b80(rec: dict, ev_mult: float) -> dict:
     out = {f"e_{k}": r.get(k) for k in keys if r.get(k) not in (None, "")}
     out["e_decision"] = str(r.get("decision_label") or r.get("size_rule") or "")[:120]
     out["e_ev_mult"] = float(ev_mult or 1)
+    out["e_gate_rev"] = GATE_REV   # AF4 (b105): الصفقات قبله بلا هذا الوسم (BTC 21 نوفمبر 09:04 فُتحت قبل الإصلاح)
     return out
 
 

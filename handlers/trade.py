@@ -216,6 +216,9 @@ def _signal_gate_b58(rec: dict, base: str, price: float, now: float = None) -> s
     if str(rec.get("verdict", "")).upper() == "AUTO-FAIL":
         _why60 = str(rec.get('verdict_reason', '')).replace('*', '').replace("❌", "").replace("AUTO-FAIL |", "").strip()
         return f"⛔ *{base}* — لا تنفيذ (AUTO-FAIL): {_why60 or 'تقييم /signal مرفوض'}" + _next60
+    if str(rec.get("verdict", "")).upper() == "WATCH ONLY":   # AF4 (أ) b105: نفس بوابة التداول الآلي
+        from core.auto_trader_b68 import watch_reason_b105 as _wr105
+        return f"⏳ *{base}* — لا تنفيذ: {_wr105(rec)}" + _next60
     if rec.get("wait") or float(rec.get("size_pct") or 0) <= 0:
         return (f"⏳ *{base}* — لا تنفيذ: قرار /signal «انتظار» (الحجم {rec.get('size_rule') or '0%'})" + _next60)
     if str(rec.get("direction", "")).lower() not in ("bullish", "long", "buy"):

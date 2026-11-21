@@ -173,7 +173,7 @@ def opp_text_b103(o: dict, bal, uid: int, next_scan: str = "") -> str:
     L = [f"🔔 *فرصة للحساب الحقيقي* — {o['sym']} {'🔴 Short' if short else '🟢 Long'} (Futures)",
          "━━━━━━━━━━━━━━━━━━",
          "حكم /signal الكامل مستوفى الآن — نفس الإشارة التي تفتح صفقة القياس الافتراضية",
-         f"• الدخول: {_fmt_price(px)} (السعر الحالي)",
+         f"• الدخول: {_fmt_price(px)} (السعر الحالي + انزلاق 0.1% — نفس دخول صفقة القياس)",   # AG1 (b105)
          f"• 🛑 الوقف: {_fmt_price(o.get('sl'))} ({_pct(o.get('sl'))})",
          f"• 🎯 TP1 (60%): {_fmt_price(o.get('tp1'))} ({_pct(o.get('tp1'))}) ← TP2 (40%): {_fmt_price(o.get('tp2'))} ({_pct(o.get('tp2'))})"]
     try:

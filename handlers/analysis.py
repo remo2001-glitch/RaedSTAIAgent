@@ -1936,6 +1936,23 @@ def _is_us_listed_symbol(sym: str) -> bool:
 SIGNAL_DECISION_TTL_B58 = 1800   # /trade يقبل قرار /signal خلال 30 دقيقة فقط
 
 
+def _watch_reason_b105(score: dict) -> str:
+    """AF4 (أ) b105: سبب حكم البنية «انتظار — مراقبة فقط»: أول قيد «مُقيَّد بحالة «انتظار»» أو الدرجة دون 55."""
+    try:
+        sc = score or {}
+        if str(sc.get("verdict", "")).upper() != "WATCH ONLY":
+            return ""
+        import re as _re105
+        for r in sc.get("reasons") or []:
+            r = str(r)
+            if "مُقيَّد بحالة «انتظار»" in r:
+                r = _re105.sub(r"^(هـ|ز2|[أبجدوزحطس])\s*:?\s+", "", r)
+                return r.split(" — الحكم مُقيَّد")[0].strip()[:110]
+        return f"درجة البنية {int(sc.get('score') or 0)}/100 دون 55"
+    except Exception:
+        return ""
+
+
 def _save_signal_decision_b58(user_id, symbol, mkttype, meta: dict, score: dict, auto: bool = False, save: bool = True) -> dict:
     """batch58 (#682–#684): يحفظ قرار /signal المعروض للمستخدم (الحكم، الحجم، الدخول/الوقف/الأهداف)
     ليستخدمه /trade كما هو. عرض/تخزين فقط — لا يغيّر /signal."""
@@ -1968,6 +1985,7 @@ def _save_signal_decision_b58(user_id, symbol, mkttype, meta: dict, score: dict,
         "support_gap_pct": meta.get("support_gap_pct"),
         "regime_desc": str(meta.get("regime_desc", ""))[:60],
         "bear_confirmed": bool(meta.get("bear_confirmed_b104")),   # AF1 (b104): لتنبيه «فرصة تقترب» — تخزين فقط
+        "watch_reason": _watch_reason_b105(score),   # AF4 (b105): سبب «انتظار — مراقبة فقط»
         "regime_bucket": ("هابط" if "هابط" in str(meta.get("regime_desc", "")) else "صاعد" if "صاعد" in str(meta.get("regime_desc", ""))
                           else "جانبي" if str(meta.get("regime_desc", "")) else ""),
     }
@@ -2092,7 +2110,10 @@ def signal_card_b82(d: dict) -> str:
     wait = bool(rec.get("wait"))
     sh = m.get("short_b68") if isinstance(m.get("short_b68"), dict) else None
     fut = bool(d.get("futures"))
-    long_ok = verdict != "AUTO-FAIL" and not wait and size_pct > 0 and direction == "long" and float(m.get("entry_agg") or 0) > 0
+    # AF4 (أ) b105: حكم البنية «انتظار — مراقبة فقط» يمنع «دخول شراء» (BTC 09:10: «دخول شراء» + «انتظار كحد أقصى» + «مراقبة فقط»)
+    _watch105 = verdict == "WATCH ONLY"
+    long_ok = (verdict != "AUTO-FAIL" and not _watch105 and not wait and size_pct > 0 and direction == "long"
+               and float(m.get("entry_agg") or 0) > 0)
     short_ok = bool(sh and sh.get("eligible"))
     L = [x for x in (d.get("pre_lines") or []) if x]
     L.append(f"{d.get('title') or '📡'} *{sym}* — {fp(float(d.get('price') or 0))}{d.get('price_suffix') or ''}{d.get('mkt_tag') or ''}")
@@ -2126,6 +2147,12 @@ def signal_card_b82(d: dict) -> str:
             # AF2 (b104): الهبوط القائم يُذكر في «لماذا؟» كما في «ما الذي يغيّر الحكم؟» (ETH 08:41 كان R/R وحده)
             if d.get("bear_confirmed") and "اتجاه هابط قائم" not in why_l:
                 why_l += "؛ اتجاه هابط قائم، لا شراء"
+        elif _watch105 and not wait and size_pct > 0 and direction == "long":
+            # AF4 (b105): كان سيُعرض «دخول شراء» — السبب الفعلي الآن من تقييم البنية
+            from core.auto_trader_b68 import watch_reason_b105 as _wr105
+            why_l = "⏳ " + _wr105(dict(rec, watch_reason=rec.get("watch_reason") or _watch_reason_b105(sc)))
+            if d.get("bear_confirmed"):
+                why_l += "؛ اتجاه هابط قائم"
         else:
             why_l = "⏳ " + _wr(rec, conf / 100.0)
             if d.get("bear_confirmed"):

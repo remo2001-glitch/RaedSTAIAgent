@@ -911,6 +911,11 @@ class RaedEngine:
             # استبعاد العملات المستقرة
             STABLECOINS = {"USDT","USDC","BUSD","DAI","TUSD","USDP","FDUSD",
                             "USDD","GUSD","LUSD","FRAX","MIM","ALUSD","SUSD"}
+            try:   # AG2 (b105): قائمة واحدة مع التداول الآلي (USDG وPYUSD وUSDE… كانت تُحتسب عملات في المسح السريع)
+                from core.auto_trader_b68 import STABLES as _ST105
+                STABLECOINS = STABLECOINS | set(_ST105)
+            except Exception:
+                pass
             top_coins = [
                 c for c in top_coins
                 if (c.get("symbol") or "").upper() not in STABLECOINS
