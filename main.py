@@ -482,8 +482,8 @@ async def post_init(app: Application):
         if not message:
             return
         if target:
-            await _send_one(int(target), message, parse_mode, reply_markup)
-            return
+            # AI1 (b106): نتيجة الإرسال الفردي تُعاد (True/False) — كانت تُهمل فلا يعرف المرسِل أنه فشل
+            return await _send_one(int(target), message, parse_mode, reply_markup)
         from core.state_manager import state_manager as _sm_bc
         # المستخدمون المستهدفون: autotrade مفعّل أو مدفوع
         target_ids = set(_sm_bc.get_autotrade_users())

@@ -36,6 +36,14 @@ def _md(t) -> str:
     return str(t or "").replace("*", "").replace("_", " ").replace("`", "").replace("[", "(").replace("]", ")").strip()
 
 
+def _cool_mark(key: str, now: float = None) -> None:
+    """AI1 (b106): يُسجَّل الإرسال بعد نجاحه فقط (كان يُسجَّل قبله ⇒ فشل واحد يحجب التنبيه 24 ساعة بصمت)."""
+    try:
+        _sm().kv_set(f"realalert_b103:{key}", f"{(now or time.time()):.0f}")
+    except Exception:
+        pass
+
+
 def _cool_ok(key: str, hours: float, now: float = None, mark: bool = True) -> bool:
     """True إن لم يُرسل التنبيه نفسه خلال المدة؛ ويسجّل الإرسال."""
     now = now or time.time()
@@ -221,15 +229,20 @@ async def send_opp_b103(engine, send_fn, o: dict, next_scan: str = "") -> bool:
     uid = owner_uid()
     if not uid or not send_fn:
         return False
-    if not _cool_ok(f"opp:{o['sym']}:{o['side']}", OPP_COOLDOWN_H):
+    _k = f"opp:{o['sym']}:{o['side']}"
+    if not _cool_ok(_k, OPP_COOLDOWN_H, mark=False):
+        logger.info(f"AC1 b103 opp {o['sym']} {o['side']}: محجوب — أُرسل خلال {OPP_COOLDOWN_H:g} ساعة")
         return False
     bal = await real_balance_b103(engine, uid)
     try:
-        await send_fn(opp_text_b103(o, bal, uid, next_scan), user_id=uid, parse_mode="Markdown")
-        logger.info(f"AC1 b103: فرصة حقيقية {o['sym']} {o['side']} ⇒ المالك")
+        _r = await send_fn(opp_text_b103(o, bal, uid, next_scan), user_id=uid, parse_mode="Markdown")
+        if _r is False:   # AI1 (b106): _send_one فشل (سُجّل «send to …» في السجل) ⇒ لا تسجيل إرسال
+            raise RuntimeError("send_fn أعاد False")
+        _cool_mark(_k)
+        logger.info(f"AC1 b103 opp {o['sym']} {o['side']}: أُرسل للمالك")
         return True
     except Exception as e:
-        logger.warning(f"AC1 b103 opp send: {e}")
+        logger.warning(f"AC1 b103 opp {o['sym']} {o['side']}: فشل الإرسال — {type(e).__name__}: {e}")
         return False
 
 
@@ -240,13 +253,19 @@ async def send_near_b103(engine, send_fn, items: list) -> int:
         return 0
     sent, bal, got_bal = 0, None, False
     for n in items:
-        if not _cool_ok(f"near:{n['sym']}:{n['side']}", NEAR_COOLDOWN_H):
+        _k = f"near:{n['sym']}:{n['side']}"
+        if not _cool_ok(_k, NEAR_COOLDOWN_H, mark=False):
+            logger.info(f"AC1 b103 near {n['sym']} {n['side']}: محجوب — أُرسل خلال {NEAR_COOLDOWN_H:g} ساعة")
             continue
         if not got_bal:
             bal, got_bal = await real_balance_b103(engine, uid), True
         try:
-            await send_fn(near_text_b103(n, bal), user_id=uid, parse_mode="Markdown")
+            _r = await send_fn(near_text_b103(n, bal), user_id=uid, parse_mode="Markdown")
+            if _r is False:   # AI1 (b106)
+                raise RuntimeError("send_fn أعاد False")
+            _cool_mark(_k)
             sent += 1
+            logger.info(f"AC1 b103 near {n['sym']} {n['side']}: أُرسل للمالك")
         except Exception as e:
-            logger.warning(f"AC1 b103 near send: {e}")
+            logger.warning(f"AC1 b103 near {n['sym']} {n['side']}: فشل الإرسال — {type(e).__name__}: {e}")
     return sent

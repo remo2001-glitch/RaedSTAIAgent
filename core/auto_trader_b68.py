@@ -401,7 +401,8 @@ async def run_auto_cycle_b68(engine, send_fn=None, bot_data=None) -> dict:
                 continue
             # AC1 (أ) b103: تنبيه «فرصة للحساب الحقيقي» للمالك — قبل فتح صفقة القياس الافتراضية
             await _real_opp_b103(engine, send_fn, summary, {
-                "sym": sym, "side": "short", "px": px * (1 - AUTO_SLIP), "rr": rr2,   # AG1 (b105): سعر تنفيذ القياس "conf": float(sh.get("bear_conf") or 0),
+                "sym": sym, "side": "short", "px": px * (1 - AUTO_SLIP), "rr": rr2,   # AG1 (b105): سعر تنفيذ القياس
+                "conf": float(sh.get("bear_conf") or 0),   # AI1 (b106): كان مُعلَّقاً خطأً في b105
                 "sl": float(sh["sl"]), "tp1": float(sh["tp1"]), "tp2": float(sh.get("tp2") or sh["tp1"]),
                 "n_conf": sh.get("n_flags"), "why": sh.get("reason") or "",
                 "size_frac": AUTO_BASE_PCT * max(0.0, min(1.0, float(sh.get("size_factor") or 0))) * max(0.0, min(1.0, ev_mult))})
@@ -432,6 +433,7 @@ async def run_auto_cycle_b68(engine, send_fn=None, bot_data=None) -> dict:
     # AC1 (ب) b103: «فرصة تقترب» للمالك — بعد الدورة، دون الأصول التي وصلها تنبيه (أ) الآن
     try:
         _nr = [n for n in summary.get("real_near") or [] if n["sym"] not in (summary.get("real_opp_syms") or [])]
+        logger.info(f"AC1 b103 near: {len(_nr)} مرشح " + (", ".join(f"{n['sym']}:{n['side']}" for n in _nr) if _nr else "—"))
         if _nr:
             summary["real_near_sent"] = await send_near_b103(engine, send_fn, _nr)
     except Exception as e:
