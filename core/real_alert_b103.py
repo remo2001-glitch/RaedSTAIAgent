@@ -133,6 +133,11 @@ def near_one_short_b103(sh: dict, why: str, rr_now: float) -> str:
                 m = __import__("re").search(r"1:([\d.]+)", fl[0])
                 if m and float(m.group(1)) < NEAR_RR_MIN:
                     return ""
+            # AJ1 (b107، رحال 2026-11-21 17:12): نقص التأكيدات «قريب» فقط إن كان الناقص تأكيداً واحداً
+            # (1/4 والحد 2) — 0/4 يحتاج تأكيدين (LINK/XLM/CC/AVAX 17:09 كانت تُعدّ «شرطاً واحداً»)
+            mc = __import__("re").search(r"تأكيدات Short (\d+)/\d+ \(الحد الأدنى (\d+)\)", fl[0])
+            if mc and int(mc.group(2)) - int(mc.group(1)) > 1:
+                return ""
             return fl[0]
     except Exception:
         pass
